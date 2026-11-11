@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "449427316381",
+    "project_id": "ew-bible-app",
+    "storage_bucket": "ew-bible-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:449427316381:android:e81039a5e193b74bd47e74",
+        "android_client_info": {
+          "package_name": "com.ewbible.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "449427316381-tqtci4os3eqilpvj8ubmvm72ocjp2ff4.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBt1NaHkfE5MNiTAGo4Kt-5051sTxzgjYI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "449427316381-tqtci4os3eqilpvj8ubmvm72ocjp2ff4.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
