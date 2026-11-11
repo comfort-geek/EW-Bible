@@ -1,0 +1,5 @@
+EW-Bible/
+  app/
+    src/
+      main/
+        AndroidManifest.xml   <-- create this file here
