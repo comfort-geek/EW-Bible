@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     alias(libs.plugins.google.services)
 }
@@ -43,4 +44,13 @@ dependencies {
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services.auth)
     implementation(libs.googleid)
+
+    // --- ADDED FOR YOUR HOME SCREEN ---
+    // Fix 1: Icons for ☰ Menu and ⋮ Settings
+    implementation(libs.androidx.material.icons.extended)
+
+    // Fix 2: Firebase Auth for Login to Sync Data / Welcome Gmail Name
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.firestore)
 }
