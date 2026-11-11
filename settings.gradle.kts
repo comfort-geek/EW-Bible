@@ -11,7 +11,6 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
     }
-    // DO NOT put versionCatalogs here - Gradle loads gradle/libs.versions.toml automatically
 }
 rootProject.name = "EW Bible"
 include(":app")
