@@ -11,7 +11,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 
 class AppPreferences(private val context: Context) {
     companion object {
-        val LAST_MODE = stringPreferencesKey("last_mode") // World English Bible or Commentary
+        val LAST_MODE = stringPreferencesKey("last_mode")
         val LAST_BOOK = stringPreferencesKey("last_book")
         val LAST_CHAPTER = intPreferencesKey("last_chapter")
         val LAST_VERSE = intPreferencesKey("last_verse")
@@ -19,12 +19,10 @@ class AppPreferences(private val context: Context) {
         val FONT_SIZE = floatPreferencesKey("font_size")
         val USER_NAME = stringPreferencesKey("user_name")
         val USER_EMAIL = stringPreferencesKey("user_email")
-        // --- ADDED FOR OPTION 2 - Exact Scrolling ---
         val LAST_SCROLL_INDEX = intPreferencesKey("last_scroll_index")
         val LAST_SCROLL_OFFSET = intPreferencesKey("last_scroll_offset")
     }
 
-    // Read - where did we stop last time?
     val lastMode: Flow<String> = context.dataStore.data.map { it[LAST_MODE] ?: "World English Bible" }
     val lastBook: Flow<String> = context.dataStore.data.map { it[LAST_BOOK] ?: "Genesis" }
     val lastChapter: Flow<Int> = context.dataStore.data.map { it[LAST_CHAPTER] ?: 1 }
@@ -33,12 +31,9 @@ class AppPreferences(private val context: Context) {
     val fontSize: Flow<Float> = context.dataStore.data.map { it[FONT_SIZE] ?: 16f }
     val userName: Flow<String> = context.dataStore.data.map { it[USER_NAME] ?: "Guest" }
     val userEmail: Flow<String> = context.dataStore.data.map { it[USER_EMAIL] ?: "" }
-
-    // --- ADDED - Exact Scroll Position ---
     val lastScrollIndex: Flow<Int> = context.dataStore.data.map { it[LAST_SCROLL_INDEX] ?: 0 }
     val lastScrollOffset: Flow<Int> = context.dataStore.data.map { it[LAST_SCROLL_OFFSET] ?: 0 }
 
-    // Save - call this every time user changes book/chapter/verse
     suspend fun saveReading(mode: String, book: String, chapter: Int, verse: Int) {
         context.dataStore.edit { prefs ->
             prefs[LAST_MODE] = mode
@@ -47,30 +42,24 @@ class AppPreferences(private val context: Context) {
             prefs[LAST_VERSE] = verse
         }
     }
-
     suspend fun saveSettings(darkMode: Boolean, fontSize: Float) {
         context.dataStore.edit { prefs ->
             prefs[IS_DARK_MODE] = darkMode
             prefs[FONT_SIZE] = fontSize
         }
     }
-
     suspend fun saveUser(name: String, email: String) {
         context.dataStore.edit { prefs ->
             prefs[USER_NAME] = name
             prefs[USER_EMAIL] = email
         }
     }
-
-    // --- ADDED - Save Exact Scroll ---
     suspend fun saveScroll(index: Int, offset: Int) {
         context.dataStore.edit { prefs ->
             prefs[LAST_SCROLL_INDEX] = index
             prefs[LAST_SCROLL_OFFSET] = offset
         }
     }
-
-    // --- ADDED - Clear on Logout ---
     suspend fun clearUser() {
         context.dataStore.edit { prefs ->
             prefs[USER_NAME] = "Guest"
