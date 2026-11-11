@@ -19,6 +19,9 @@ class AppPreferences(private val context: Context) {
         val FONT_SIZE = floatPreferencesKey("font_size")
         val USER_NAME = stringPreferencesKey("user_name")
         val USER_EMAIL = stringPreferencesKey("user_email")
+        // --- ADDED FOR OPTION 2 - Exact Scrolling ---
+        val LAST_SCROLL_INDEX = intPreferencesKey("last_scroll_index")
+        val LAST_SCROLL_OFFSET = intPreferencesKey("last_scroll_offset")
     }
 
     // Read - where did we stop last time?
@@ -29,6 +32,11 @@ class AppPreferences(private val context: Context) {
     val isDarkMode: Flow<Boolean> = context.dataStore.data.map { it[IS_DARK_MODE] ?: true }
     val fontSize: Flow<Float> = context.dataStore.data.map { it[FONT_SIZE] ?: 16f }
     val userName: Flow<String> = context.dataStore.data.map { it[USER_NAME] ?: "Guest" }
+    val userEmail: Flow<String> = context.dataStore.data.map { it[USER_EMAIL] ?: "" }
+
+    // --- ADDED - Exact Scroll Position ---
+    val lastScrollIndex: Flow<Int> = context.dataStore.data.map { it[LAST_SCROLL_INDEX] ?: 0 }
+    val lastScrollOffset: Flow<Int> = context.dataStore.data.map { it[LAST_SCROLL_OFFSET] ?: 0 }
 
     // Save - call this every time user changes book/chapter/verse
     suspend fun saveReading(mode: String, book: String, chapter: Int, verse: Int) {
@@ -51,6 +59,22 @@ class AppPreferences(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[USER_NAME] = name
             prefs[USER_EMAIL] = email
+        }
+    }
+
+    // --- ADDED - Save Exact Scroll ---
+    suspend fun saveScroll(index: Int, offset: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[LAST_SCROLL_INDEX] = index
+            prefs[LAST_SCROLL_OFFSET] = offset
+        }
+    }
+
+    // --- ADDED - Clear on Logout ---
+    suspend fun clearUser() {
+        context.dataStore.edit { prefs ->
+            prefs[USER_NAME] = "Guest"
+            prefs[USER_EMAIL] = ""
         }
     }
 }
