@@ -11,11 +11,7 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
     }
-    versionCatalogs {
-        create("libs") {
-            from(files("gradle/libs.versions.toml"))
-        }
-    }
+    // DO NOT put versionCatalogs here - Gradle loads gradle/libs.versions.toml automatically
 }
-rootProject.name = "EWBible"
+rootProject.name = "EW Bible"
 include(":app")
