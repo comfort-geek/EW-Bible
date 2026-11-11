@@ -19,6 +19,17 @@ data class CloudHighlight(
     val color: String = ""
 )
 
+// --- NEW: READING PROGRESS ---
+data class CloudProgress(
+    val mode: String = "World English Bible",
+    val book: String = "Genesis",
+    val chapter: Int = 1,
+    val verse: Int = 1,
+    val scrollIndex: Int = 0,
+    val scrollOffset: Int = 0,
+    val updatedAt: Long = 0
+)
+
 class SyncManager {
     private val auth = FirebaseAuth.getInstance()
     private val db = FirebaseFirestore.getInstance()
@@ -40,6 +51,14 @@ class SyncManager {
         val snap = db.collection("users").document(uid)
             .collection("notes").get().await()
         return snap.toObjects(CloudNote::class.java)
+    }
+
+    suspend fun deleteNote(bookId: Int, chapter: Int, verse: Int) {
+        val uid = userId() ?: return
+        db.collection("users").document(uid)
+            .collection("notes")
+            .document("${bookId}_${chapter}_${verse}")
+            .delete().await()
     }
 
     // --- HIGHLIGHTS ---
@@ -65,5 +84,21 @@ class SyncManager {
         val snap = db.collection("users").document(uid)
             .collection("highlights").get().await()
         return snap.toObjects(CloudHighlight::class.java)
+    }
+
+    // --- READING PROGRESS ---
+    suspend fun uploadProgress(mode: String, book: String, chapter: Int, verse: Int, scrollIndex: Int, scrollOffset: Int) {
+        val uid = userId() ?: return
+        val p = CloudProgress(mode, book, chapter, verse, scrollIndex, scrollOffset, System.currentTimeMillis())
+        db.collection("users").document(uid)
+            .collection("progress").document("lastReading")
+            .set(p).await()
+    }
+
+    suspend fun getProgress(): CloudProgress? {
+        val uid = userId() ?: return null
+        val snap = db.collection("users").document(uid)
+            .collection("progress").document("lastReading").get().await()
+        return snap.toObject(CloudProgress::class.java)
     }
 }
