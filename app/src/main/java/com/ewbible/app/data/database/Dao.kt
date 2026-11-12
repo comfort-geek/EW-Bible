@@ -23,6 +23,9 @@ interface BibleDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveHighlight(h: HighlightEntity)
 
+    @Query("DELETE FROM highlights WHERE book_id = :bookId AND chapter = :chapter AND verse = :verse")
+    suspend fun deleteHighlight(bookId: Int, chapter: Int, verse: Int)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveNote(n: NoteEntity)
 
