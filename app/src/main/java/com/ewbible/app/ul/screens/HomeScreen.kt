@@ -1,4 +1,4 @@
-package com.ewbible.app
+package com.ewbible.app.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -301,7 +301,7 @@ fun HomeScreen() {
                             ) {
                                 Column(modifier = Modifier.padding(16.dp)) {
                                     Text(
-                                        "CHAPTER SUMMARY - $selectedBook $selectedChapter",
+                                        "📖 CHAPTER SUMMARY - $selectedBook $selectedChapter",
                                         color = goldColor,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold
@@ -647,7 +647,7 @@ fun HomeScreen() {
                                     ) {
                                         Column(modifier = Modifier.padding(16.dp)) {
                                             Text(
-                                                "CHAPTER SUMMARY - $selectedBook $selectedChapter",
+                                                "📖 CHAPTER SUMMARY - $selectedBook $selectedChapter",
                                                 color = goldColor,
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Bold
