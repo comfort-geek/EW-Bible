@@ -1,5 +1,4 @@
 package com.ewbible.app.data.database
-package com.ewbible.app.data.database
 
 import androidx.room.*
 
@@ -45,8 +44,11 @@ data class CommentaryEntity(
 @Entity(tableName = "notes")
 data class NoteEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    val bookId: Int, val chapter: Int, val verse: Int,
-    val noteText: String, val timestamp: Long
+    @ColumnInfo(name = "book_id") val bookId: Int,
+    val chapter: Int,
+    val verse: Int,
+    @ColumnInfo(name = "note_text") val noteText: String,
+    val timestamp: Long
 )
 
 @Entity(tableName = "highlights", primaryKeys = ["book_id", "chapter", "verse"])
