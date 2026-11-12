@@ -1,10 +1,12 @@
 package com.ewbible.app.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.auth.GoogleAuth
@@ -40,7 +43,6 @@ fun HomeScreen() {
     val syncManager = remember { SyncManager() }
     val scope = rememberCoroutineScope()
 
-    // --- LOAD SAVED MEMORY ---
     val savedMode by prefs.lastMode.collectAsState(initial = "World English Bible")
     val savedBook by prefs.lastBook.collectAsState(initial = "Genesis")
     val savedChapter by prefs.lastChapter.collectAsState(initial = 1)
@@ -56,8 +58,13 @@ fun HomeScreen() {
     var selectedChapter by remember { mutableStateOf(1) }
     var selectedVerse by remember { mutableStateOf<Int?>(null) }
     var isFirstLoad by remember { mutableStateOf(true) }
+    var isFullScreen by remember { mutableStateOf(false) }
 
-    // Load memory ONCE when app opens
+    // Android Back button - exit full screen first
+    BackHandler(enabled = isFullScreen) {
+        isFullScreen = false
+    }
+
     LaunchedEffect(savedMode, savedBook, savedChapter) {
         if (isFirstLoad) {
             currentMode = savedMode
@@ -68,22 +75,21 @@ fun HomeScreen() {
         }
     }
 
-    // --- REAL DB DATA ---
     val booksList by db.bibleDao().getAllBooks().collectAsState(initial = emptyList())
     val currentBookId = booksList.find { it.name == selectedBook }?.id ?: 1
     val versesList by db.bibleDao().getVerses(currentBookId, selectedChapter).collectAsState(initial = emptyList())
 
-    // Summary - ONLY in WEB
     var summary by remember(selectedBook, selectedChapter) { mutableStateOf<SummaryEntity?>(null) }
     LaunchedEffect(selectedBook, selectedChapter, currentBookId) {
-        summary = db.bibleDao().getSummary(currentBookId, selectedChapter)
+        try { summary = db.bibleDao().getSummary(currentBookId, selectedChapter) } catch (e: Exception) { summary = null }
     }
-    // Commentary - ONLY in Commentary mode
     var commentaryHtml by remember(selectedBook, selectedChapter) { mutableStateOf("") }
     LaunchedEffect(selectedBook, selectedChapter, currentBookId, currentMode) {
-        if (currentMode == "Commentary") {
-            commentaryHtml = db.bibleDao().getCommentary(currentBookId, selectedChapter)?.getHtml() ?: ""
-        }
+        try {
+            if (currentMode == "Endurance" || currentMode == "Commentary") {
+                commentaryHtml = db.bibleDao().getCommentary(currentBookId, selectedChapter)?.getHtml() ?: ""
+            }
+        } catch (e: Exception) { commentaryHtml = "" }
     }
 
     val leftDrawerState = rememberDrawerState(DrawerValue.Closed)
@@ -103,25 +109,25 @@ fun HomeScreen() {
     val highlightColors = listOf(Color.Yellow, Color.Green, Color(0xFFFFB6C1), Color.Cyan, Color(0xFFFFA500))
     var syncStatus by remember { mutableStateOf("") }
 
-    // Sync loaded prefs to UI state + login state
     LaunchedEffect(savedDark, savedFont, savedName) {
         if (isFirstLoad) { isDarkMode = savedDark; fontSize = savedFont }
         isLoggedIn = savedName != "Guest"
     }
 
-    // Load highlights for current chapter from LOCAL Room
     val dbHighlights by db.bibleDao().getHighlights(currentBookId, selectedChapter).collectAsState(initial = emptyList())
     LaunchedEffect(dbHighlights) {
-        val map = dbHighlights.associate { it.verse to Color(it.color.toLongOrNull() ?: 0xFFFFFF00) }
-        // Only overwrite if we have local data, to avoid wiping cloud download
-        if (dbHighlights.isNotEmpty()) highlightedVerses = map
+        try {
+            val map = dbHighlights.associate { it.verse to Color(runCatching { it.color.toLong() }.getOrDefault(0xFFFFFF00) ) }
+            if (dbHighlights.isNotEmpty()) highlightedVerses = map
+        } catch (e: Exception) { }
     }
 
-    val bgColor = if (isDarkMode) Color(0xFF121212) else Color.White
-    val textColor = if (isDarkMode) Color.White else Color.Black
-    val cardColor = if (isDarkMode) Color(0xFF2A2A2A) else Color(0xFFF0F0F0)
+    // DIM ERGONOMIC COLORS - NOT PURE BLACK
+    val bgColor = if (isDarkMode) Color(0xFF1E1E22) else Color(0xFFFDF8EF)
+    val textColor = if (isDarkMode) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
+    val cardColor = if (isDarkMode) Color(0xFF2A2A30) else Color(0xFFF0EAD9)
+    val goldColor = Color(0xFFC9A227)
 
-    // --- EXACT SCROLLING ---
     val listState = rememberLazyListState()
     var scrollRestored by remember { mutableStateOf(false) }
 
@@ -132,24 +138,24 @@ fun HomeScreen() {
         }
     }
 
-    // Save scroll + reading LOCALLY + TO CLOUD - debounced
     LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) {
         kotlinx.coroutines.delay(500)
         scope.launch {
-            val verseNum = listState.firstVisibleItemIndex + 1
-            prefs.saveScroll(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
-            prefs.saveReading(currentMode, selectedBook, selectedChapter, verseNum)
-            // CLOUD: Reading Progress
-            if (isLoggedIn) {
-                try {
-                    syncManager.uploadProgress(currentMode, selectedBook, selectedChapter, verseNum, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
-                    syncStatus = "Synced ✅"
-                } catch (e: Exception) { syncStatus = "" }
-            }
+            try {
+                val verseNum = listState.firstVisibleItemIndex + 1
+                prefs.saveScroll(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+                prefs.saveReading(currentMode, selectedBook, selectedChapter, verseNum)
+                if (isLoggedIn) {
+                    try {
+                        syncManager.uploadProgress(currentMode, selectedBook, selectedChapter, verseNum, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+                        syncStatus = "Synced ✅"
+                    } catch (e: Exception) { syncStatus = "" }
+                }
+            } catch (e: Exception) {}
         }
     }
     LaunchedEffect(isDarkMode, fontSize) {
-        prefs.saveSettings(isDarkMode, fontSize)
+        try { prefs.saveSettings(isDarkMode, fontSize) } catch (e: Exception) {}
     }
 
     fun openReading(mode: String, book: String, chapter: Int) {
@@ -159,23 +165,22 @@ fun HomeScreen() {
         selectedVerse = 1
         scrollRestored = true
         scope.launch {
-            prefs.saveReading(mode, book, chapter, 1)
-            prefs.saveScroll(0, 0)
-            if (isLoggedIn) syncManager.uploadProgress(mode, book, chapter, 1, 0, 0)
-            listState.scrollToItem(0, 0)
-            leftDrawerState.close()
+            try {
+                prefs.saveReading(mode, book, chapter, 1)
+                prefs.saveScroll(0, 0)
+                if (isLoggedIn) syncManager.uploadProgress(mode, book, chapter, 1, 0, 0)
+                listState.scrollToItem(0, 0)
+                leftDrawerState.close()
+            } catch (e: Exception) {}
         }
     }
 
-    // Helper: Download all cloud data after login
     fun downloadCloudData() {
         scope.launch {
             syncStatus = "Syncing..."
             try {
-                // 1. Progress - if cloud is newer, jump to it
                 val cloudProgress = syncManager.getProgress()
                 if (cloudProgress != null) {
-                    // Only use cloud progress if local is Genesis 1 (fresh install)
                     if (selectedBook == "Genesis" && selectedChapter == 1 && savedScrollIndex == 0) {
                         currentMode = cloudProgress.mode
                         selectedBook = cloudProgress.book
@@ -185,15 +190,13 @@ fun HomeScreen() {
                         prefs.saveScroll(cloudProgress.scrollIndex, cloudProgress.scrollOffset)
                     }
                 }
-                // 2. Highlights
                 val cloudHighlights = syncManager.getHighlights()
                 cloudHighlights.forEach { hl ->
-                    db.bibleDao().saveHighlight(HighlightEntity(hl.bookId, hl.chapter, hl.verse, hl.color))
+                    try { db.bibleDao().saveHighlight(HighlightEntity(hl.bookId, hl.chapter, hl.verse, hl.color)) } catch (e: Exception) {}
                 }
-                // 3. Notes
                 val cloudNotes = syncManager.getNotes()
                 cloudNotes.forEach { n ->
-                    db.bibleDao().saveNote(NoteEntity(bookId = n.bookId, chapter = n.chapter, verse = n.verse, noteText = n.noteText, timestamp = n.timestamp))
+                    try { db.bibleDao().saveNote(NoteEntity(bookId = n.bookId, chapter = n.chapter, verse = n.verse, noteText = n.noteText, timestamp = n.timestamp)) } catch (e: Exception) {}
                 }
                 syncStatus = "Synced ✅"
             } catch (e: Exception) { syncStatus = "Sync failed" }
@@ -201,13 +204,90 @@ fun HomeScreen() {
     }
 
     Box(modifier = Modifier.fillMaxSize().background(bgColor)) {
+
+        // ================= FULL SCREEN MODE =================
+        // ONLY the tab content, NO other words, NO top bar, NO tabs
+        if (isFullScreen) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize().background(bgColor).padding(horizontal = 20.dp, vertical = 16.dp)
+            ) {
+                if (currentMode == "World English Bible") {
+                    summary?.let { s ->
+                        item(key = "summary-full-$selectedBook-$selectedChapter") {
+                            Card(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFF5EEDD))) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text("📖 CHAPTER SUMMARY - $selectedBook $selectedChapter", color = goldColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(s.summary, color = Color.Black, fontSize = fontSize.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text("What Happened", color = goldColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                    Text(s.whatHappened, color = Color.Black, fontSize = fontSize.sp)
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text("Application For You", color = goldColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                    Text(s.application, color = Color.Black, fontSize = fontSize.sp)
+                                }
+                            }
+                        }
+                    }
+                    if (versesList.isEmpty()) {
+                        item { Text("Loading World English Bible...", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(vertical = 20.dp)) }
+                    }
+                    itemsIndexed(versesList, key = { _, v -> "full-$selectedBook-$selectedChapter-${v.verse}-WEB" }) { _, verse ->
+                        val hl = highlightedVerses[verse.verse]
+                        Row(modifier = Modifier.fillMaxWidth().background(hl ?: Color.Transparent, RoundedCornerShape(8.dp)).combinedClickable(
+                            onClick = { selectedVerse = verse.verse },
+                            onLongClick = { selectedVerse = verse.verse; showHighlightColors = true }
+                        ).padding(vertical = 10.dp, horizontal = 8.dp)) {
+                            Text(text = "${verse.verse}  ", color = goldColor, fontWeight = FontWeight.Bold, fontSize = fontSize.sp)
+                            Text(text = verse.text, color = textColor, fontSize = fontSize.sp)
+                        }
+                    }
+                } else {
+                    item(key = "commentary-full-$selectedBook-$selectedChapter") {
+                        if (commentaryHtml.isEmpty()) Text("Loading Endurance...", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(vertical = 20.dp))
+                        else Text(text = commentaryHtml, color = textColor, fontSize = fontSize.sp, modifier = Modifier.padding(vertical = 10.dp))
+                    }
+                }
+            }
+            // Highlight popup still works in full screen
+            if (showHighlightColors) {
+                Box(modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp)) {
+                    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cardColor)) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("Highlight Verse $selectedVerse - Choose Color", fontWeight = FontWeight.Bold, color = textColor)
+                            Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                                highlightColors.forEach { c ->
+                                    Button(onClick = {
+                                        selectedVerse?.let { v ->
+                                            highlightedVerses = highlightedVerses + (v to c)
+                                            scope.launch {
+                                                try {
+                                                    db.bibleDao().saveHighlight(HighlightEntity(bookId = currentBookId, chapter = selectedChapter, verse = v, color = c.value.toString()))
+                                                    if (isLoggedIn) syncManager.uploadHighlight(currentBookId, selectedChapter, v, c.value.toString())
+                                                } catch (e: Exception) {}
+                                            }
+                                        }
+                                        showHighlightColors = false
+                                    }, modifier = Modifier.size(40.dp), colors = ButtonDefaults.buttonColors(containerColor = c)) {}
+                                }
+                            }
+                            TextButton(onClick = { showHighlightColors = false }) { Text("Close") }
+                        }
+                    }
+                }
+            }
+            return@Box
+        }
+
+        // ================= NORMAL HOME MODE =================
         ModalNavigationDrawer(
             drawerState = leftDrawerState,
             drawerContent = {
                 ModalDrawerSheet {
                     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
                         Text(text = currentMode, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        Text(text = "Grow in the Word of God, every day.", color = Color(0xFFC9A227), fontSize = 12.sp)
+                        Text(text = "Grow in the Word of God, every day.", color = goldColor, fontSize = 12.sp)
                         if (syncStatus.isNotEmpty()) Text(text = syncStatus, color = Color.Gray, fontSize = 11.sp)
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(text = when (readingLevel) {
@@ -220,7 +300,7 @@ fun HomeScreen() {
                             when (readingLevel) {
                                 ReadingLevel.BOOKS -> {
                                     itemsIndexed(booksList) { _, book ->
-                                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).clickable { selectedBook = book.name; readingLevel = ReadingLevel.CHAPTERS }) {
                                             Text(text = book.name, fontSize = 16.sp, modifier = Modifier.weight(1f))
                                             Text(text = ">", color = Color.Gray)
                                         }
@@ -229,7 +309,7 @@ fun HomeScreen() {
                                 }
                                 ReadingLevel.CHAPTERS -> {
                                     itemsIndexed((1..50).toList()) { _, ch ->
-                                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).clickable { openReading(currentMode, selectedBook, ch); readingLevel = ReadingLevel.VERSES }) {
                                             Text(text = "Chapter $ch", fontSize = 16.sp, modifier = Modifier.weight(1f))
                                             Text(text = ">", color = Color.Gray)
                                         }
@@ -264,18 +344,18 @@ fun HomeScreen() {
                     TopAppBar(
                         title = {
                             Column {
-                                Text("EW Bible", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                Text("Grow in the Word of God, every day.", color = Color(0xFFC9A227), fontSize = 11.sp)
+                                Text("EW Bible", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = textColor)
+                                Text("Grow in the Word of God, every day.", color = goldColor, fontSize = 11.sp)
                             }
                         },
                         navigationIcon = {
                             IconButton(onClick = { scope.launch { if (leftDrawerState.isClosed) leftDrawerState.open() else leftDrawerState.close() } }) {
-                                Icon(Icons.Default.Menu, contentDescription = "Menu")
+                                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = textColor)
                             }
                         },
                         actions = {
                             IconButton(onClick = { showRightDrawer = !showRightDrawer }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "Settings")
+                                Icon(Icons.Default.MoreVert, contentDescription = "Settings", tint = textColor)
                             }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(containerColor = bgColor, titleContentColor = textColor)
@@ -284,40 +364,65 @@ fun HomeScreen() {
                 containerColor = bgColor
             ) { padding ->
                 Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-                    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Column {
-                            Text(text = currentMode, color = Color(0xFFC9A227), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            Text(text = "$selectedBook $selectedChapter", color = textColor, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Text(text = if (isLoggedIn) syncStatus.ifEmpty { "Continuing where you left off" } else "Continuing where you left off", color = Color.Gray, fontSize = 11.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // TEXT ONLY TABS - NO BUTTON SHAPE, JUST CLICKS - GOES FULL SCREEN
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        Text(
+                            text = "Bible",
+                            color = if (currentMode == "World English Bible") goldColor else textColor,
+                            fontSize = 15.sp,
+                            fontWeight = if (currentMode == "World English Bible") FontWeight.Bold else FontWeight.Normal,
+                            modifier = Modifier.weight(1f).clickable { openReading("World English Bible", selectedBook, selectedChapter); isFullScreen = true }.padding(vertical = 8.dp),
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = "Endurance",
+                            color = if (currentMode == "Endurance") goldColor else textColor,
+                            fontSize = 15.sp,
+                            fontWeight = if (currentMode == "Endurance") FontWeight.Bold else FontWeight.Normal,
+                            modifier = Modifier.weight(1f).clickable { openReading("Endurance", selectedBook, selectedChapter); isFullScreen = true }.padding(vertical = 8.dp),
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = "Search",
+                            color = textColor,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Normal,
+                            modifier = Modifier.weight(1f).clickable { showSearch = true }.padding(vertical = 8.dp),
+                            textAlign = TextAlign.Center
+                        )
                     }
-                    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { openReading("World English Bible", selectedBook, selectedChapter) }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if (currentMode == "World English Bible") Color(0xFFC9A227) else cardColor)) {
-                            Text("World English Bible", color = if (currentMode == "World English Bible") Color.Black else textColor, fontSize = 11.sp)
-                        }
-                        Button(onClick = { openReading("Commentary", selectedBook, selectedChapter) }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if (currentMode == "Commentary") Color(0xFFC9A227) else cardColor)) {
-                            Text("Commentary", color = if (currentMode == "Commentary") Color.Black else textColor, fontSize = 11.sp)
-                        }
-                        Button(onClick = { showSearch = true }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = cardColor)) {
-                            Text("Search", color = textColor, fontSize = 11.sp)
-                        }
+
+                    // GENESIS 1 BELOW TABS - FROM WEB .DB ONLY
+                    if (currentMode == "World English Bible") {
+                        Text(
+                            text = "$selectedBook $selectedChapter",
+                            color = textColor,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                        )
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Spacer(modifier = Modifier.height(4.dp))
                     LazyColumn(state = listState, modifier = Modifier.weight(1f).padding(horizontal = 20.dp)) {
-                        // SUMMARY - ONLY IN WEB
                         if (currentMode == "World English Bible") {
                             summary?.let { s ->
                                 item(key = "summary-$selectedBook-$selectedChapter") {
                                     Card(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFF5EEDD))) {
                                         Column(modifier = Modifier.padding(16.dp)) {
-                                            Text("📖 CHAPTER SUMMARY - $selectedBook $selectedChapter", color = Color(0xFFC9A227), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                            Text("📖 CHAPTER SUMMARY - $selectedBook $selectedChapter", color = goldColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Text(s.summary, color = Color.Black, fontSize = fontSize.sp, fontWeight = FontWeight.Bold)
                                             Spacer(modifier = Modifier.height(12.dp))
-                                            Text("What Happened", color = Color(0xFFC9A227), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                            Text("What Happened", color = goldColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                                             Text(s.whatHappened, color = Color.Black, fontSize = fontSize.sp)
                                             Spacer(modifier = Modifier.height(12.dp))
-                                            Text("Application For You", color = Color(0xFFC9A227), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                            Text("Application For You", color = goldColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                                             Text(s.application, color = Color.Black, fontSize = fontSize.sp)
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Text("Scroll down to start reading ↓", color = Color.Gray, fontSize = 12.sp)
@@ -325,39 +430,40 @@ fun HomeScreen() {
                                     }
                                 }
                             }
-                        }
-                        // VERSES - REAL DB
-                        if (currentMode == "World English Bible") {
+                            if (versesList.isEmpty()) {
+                                item { Text("Loading World English Bible...", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(vertical = 20.dp)) }
+                            }
                             itemsIndexed(versesList, key = { _, v -> "$selectedBook-$selectedChapter-${v.verse}-WEB" }) { _, verse ->
                                 val hl = highlightedVerses[verse.verse]
                                 Row(modifier = Modifier.fillMaxWidth().background(hl ?: Color.Transparent, RoundedCornerShape(8.dp)).combinedClickable(
-                                    onClick = { selectedVerse = verse.verse; scope.launch { prefs.saveReading(currentMode, selectedBook, selectedChapter, verse.verse); if (isLoggedIn) syncManager.uploadProgress(currentMode, selectedBook, selectedChapter, verse.verse, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) } },
+                                    onClick = { selectedVerse = verse.verse; scope.launch { try { prefs.saveReading(currentMode, selectedBook, selectedChapter, verse.verse); if (isLoggedIn) syncManager.uploadProgress(currentMode, selectedBook, selectedChapter, verse.verse, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) } catch (e: Exception) {} } },
                                     onLongClick = { selectedVerse = verse.verse; showHighlightColors = true }
                                 ).padding(vertical = 10.dp, horizontal = 8.dp)) {
-                                    Text(text = "${verse.verse}  ", color = Color(0xFFC9A227), fontWeight = FontWeight.Bold, fontSize = fontSize.sp)
+                                    Text(text = "${verse.verse}  ", color = goldColor, fontWeight = FontWeight.Bold, fontSize = fontSize.sp)
                                     Text(text = verse.text, color = textColor, fontSize = fontSize.sp)
                                 }
                             }
                         } else {
                             item(key = "commentary-$selectedBook-$selectedChapter") {
-                                Text(text = commentaryHtml, color = textColor, fontSize = fontSize.sp, modifier = Modifier.padding(vertical = 10.dp))
+                                if (commentaryHtml.isEmpty()) Text("Loading Endurance...", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(vertical = 20.dp))
+                                else Text(text = commentaryHtml, color = textColor, fontSize = fontSize.sp, modifier = Modifier.padding(vertical = 10.dp))
                             }
                         }
                     }
                     if (showHighlightColors) {
                         Card(modifier = Modifier.fillMaxWidth().padding(16.dp), colors = CardDefaults.cardColors(containerColor = cardColor)) {
                             Column(modifier = Modifier.padding(12.dp)) {
-                                Text("Highlight Verse $selectedVerse - Choose Color", fontWeight = FontWeight.Bold)
+                                Text("Highlight Verse $selectedVerse - Choose Color", fontWeight = FontWeight.Bold, color = textColor)
                                 Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                                     highlightColors.forEach { c ->
                                         Button(onClick = {
                                             selectedVerse?.let { v ->
                                                 highlightedVerses = highlightedVerses + (v to c)
                                                 scope.launch {
-                                                    // 1. Local Room
-                                                    db.bibleDao().saveHighlight(HighlightEntity(bookId = currentBookId, chapter = selectedChapter, verse = v, color = c.value.toString()))
-                                                    // 2. CLOUD
-                                                    if (isLoggedIn) syncManager.uploadHighlight(currentBookId, selectedChapter, v, c.value.toString())
+                                                    try {
+                                                        db.bibleDao().saveHighlight(HighlightEntity(bookId = currentBookId, chapter = selectedChapter, verse = v, color = c.value.toString()))
+                                                        if (isLoggedIn) syncManager.uploadHighlight(currentBookId, selectedChapter, v, c.value.toString())
+                                                    } catch (e: Exception) {}
                                                 }
                                             }
                                             showHighlightColors = false
@@ -367,10 +473,7 @@ fun HomeScreen() {
                                 TextButton(onClick = {
                                     selectedVerse?.let { v ->
                                         highlightedVerses = highlightedVerses - v
-                                        scope.launch {
-                                            // Local delete is via REPLACE - save empty not needed, we just remove from cloud
-                                            if (isLoggedIn) syncManager.deleteHighlight(currentBookId, selectedChapter, v)
-                                        }
+                                        scope.launch { try { if (isLoggedIn) syncManager.deleteHighlight(currentBookId, selectedChapter, v) } catch (e: Exception) {} }
                                     }
                                     showHighlightColors = false
                                 }) { Text("Remove Highlight") }
@@ -381,55 +484,57 @@ fun HomeScreen() {
             }
         }
 
-        AnimatedVisibility(visible = showRightDrawer, enter = slideInHorizontally { it }, exit = slideOutHorizontally { it }, modifier = Modifier.align(Alignment.TopEnd)) {
-            Card(modifier = Modifier.fillMaxHeight().width(300.dp), shape = RoundedCornerShape(0.dp), colors = CardDefaults.cardColors(containerColor = if (isDarkMode) Color(0xFF1E1E1E) else Color.White)) {
+        AnimatedVisibility(visible = showRightDrawer && !isFullScreen, enter = slideInHorizontally { it }, exit = slideOutHorizontally { it }, modifier = Modifier.align(Alignment.TopEnd)) {
+            Card(modifier = Modifier.fillMaxHeight().width(300.dp), shape = RoundedCornerShape(0.dp), colors = CardDefaults.cardColors(containerColor = if (isDarkMode) Color(0xFF2A2A30) else Color.White)) {
                 LazyColumn(modifier = Modifier.padding(16.dp)) {
                     item {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = textColor)
                             TextButton(onClick = { showRightDrawer = false }) { Text("Close ✕") }
                         }
                         Divider(modifier = Modifier.padding(vertical = 8.dp))
                         if (!isLoggedIn) {
                             Button(onClick = {
                                 scope.launch {
-                                    val result = googleAuth.signInWithGoogle()
-                                    result.onSuccess { data ->
-                                        val name = data.split("|")[0]
-                                        val email = data.split("|").getOrNull(1) ?: ""
-                                        prefs.saveUser(name, email)
-                                        isLoggedIn = true
-                                        downloadCloudData()
-                                    }
+                                    try {
+                                        val result = googleAuth.signInWithGoogle()
+                                        result.onSuccess { data ->
+                                            val name = data.split("|")[0]
+                                            val email = data.split("|").getOrNull(1) ?: ""
+                                            prefs.saveUser(name, email)
+                                            isLoggedIn = true
+                                            downloadCloudData()
+                                        }
+                                    } catch (e: Exception) {}
                                 }
-                            }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC9A227))) {
+                            }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = goldColor)) {
                                 Text("Login to Sync Data", color = Color.Black)
                             }
                         } else {
-                            Text("Welcome, $savedName 👋", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text("Welcome, $savedName 👋", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
                             Text("Synced with your Gmail account - $syncStatus", color = Color.Gray, fontSize = 12.sp)
                             TextButton(onClick = {
-                                scope.launch { googleAuth.signOut(); prefs.clearUser(); isLoggedIn = false }
+                                scope.launch { try { googleAuth.signOut(); prefs.clearUser(); isLoggedIn = false } catch (e: Exception) {} }
                             }) { Text("Logout") }
                             Button(onClick = { downloadCloudData() }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Sync Now ↻") }
                         }
                         Spacer(modifier = Modifier.height(16.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text("Dark Mode"); Switch(checked = isDarkMode, onCheckedChange = { isDarkMode = it })
+                            Text("Dark Mode", color = textColor); Switch(checked = isDarkMode, onCheckedChange = { isDarkMode = it })
                         }
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text("Text Size", fontWeight = FontWeight.Bold)
+                        Text("Text Size", fontWeight = FontWeight.Bold, color = textColor)
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("A-", fontSize = 13.sp)
+                            Text("A-", fontSize = 13.sp, color = textColor)
                             Slider(value = fontSize, onValueChange = { fontSize = it }, valueRange = 12f..28f, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
-                            Text("A+", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text("A+", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = textColor)
                         }
                         Spacer(modifier = Modifier.height(16.dp))
                         Button(onClick = { showDailyVerse = !showDailyVerse; showNotes = false }, modifier = Modifier.fillMaxWidth()) { Text(if (showDailyVerse) "Daily Verse ▲" else "Daily Verse ▼") }
                         if (showDailyVerse) {
                             Card(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFF5EEDD))) {
                                 Column(modifier = Modifier.padding(12.dp)) {
-                                    Text("DAILY VERSE - Linked to World English Bible", color = Color(0xFFC9A227), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Text("DAILY VERSE - Linked to World English Bible", color = goldColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     Text("\"Your word is a lamp for my feet, a light on my path.\"", fontSize = 15.sp, color = Color.Black)
                                     Text("Psalm 119:105 - WEB", color = Color.Gray, fontSize = 12.sp)
                                     TextButton(onClick = { openReading("World English Bible", "Psalms", 119); showRightDrawer = false }) { Text("Open in World English Bible →") }
@@ -442,13 +547,13 @@ fun HomeScreen() {
                             OutlinedTextField(value = noteText, onValueChange = { noteText = it }, label = { Text("Write your note...") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
                             Button(onClick = {
                                 scope.launch {
-                                    val verseToSave = selectedVerse ?: 1
-                                    // 1. Local Room
-                                    db.bibleDao().saveNote(NoteEntity(bookId = currentBookId, chapter = selectedChapter, verse = verseToSave, noteText = noteText, timestamp = System.currentTimeMillis()))
-                                    // 2. CLOUD
-                                    if (isLoggedIn) syncManager.uploadNote(currentBookId, selectedChapter, verseToSave, noteText)
-                                    noteText = ""
-                                    syncStatus = "Note Saved ✅"
+                                    try {
+                                        val verseToSave = selectedVerse ?: 1
+                                        db.bibleDao().saveNote(NoteEntity(bookId = currentBookId, chapter = selectedChapter, verse = verseToSave, noteText = noteText, timestamp = System.currentTimeMillis()))
+                                        if (isLoggedIn) syncManager.uploadNote(currentBookId, selectedChapter, verseToSave, noteText)
+                                        noteText = ""
+                                        syncStatus = "Note Saved ✅"
+                                    } catch (e: Exception) {}
                                 }
                             }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Save Note") }
                             Text(if (isLoggedIn) "Notes sync to cloud ✅" else "Login to sync notes", color = Color.Gray, fontSize = 11.sp)
