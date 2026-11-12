@@ -1,4 +1,4 @@
-package com.ewbible.app.ui.screens
+package com.ewbible.app
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -33,7 +33,11 @@ import kotlinx.coroutines.launch
 
 enum class ReadingLevel { BOOKS, CHAPTERS, VERSES }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalFoundationApi::class,
+    ExperimentalLayoutApi::class
+)
 @Composable
 fun HomeScreen() {
     val context = LocalContext.current
@@ -57,39 +61,56 @@ fun HomeScreen() {
     var selectedBook by remember { mutableStateOf("Genesis") }
     var selectedChapter by remember { mutableStateOf(1) }
     var selectedVerse by remember { mutableStateOf<Int?>(null) }
-    var isFirstLoad by remember { mutableStateOf(true) }
     var isFullScreen by remember { mutableStateOf(false) }
 
-    // Android Back button - exit full screen first
-    BackHandler(enabled = isFullScreen) {
-        isFullScreen = false
-    }
+    var initialized by remember { mutableStateOf(false) }
 
-    LaunchedEffect(savedMode, savedBook, savedChapter) {
-        if (isFirstLoad) {
+    LaunchedEffect(savedMode, savedBook, savedChapter, savedVerse, savedDark, savedFont, savedName) {
+        if (!initialized) {
             currentMode = savedMode
             selectedBook = savedBook
             selectedChapter = savedChapter
             selectedVerse = savedVerse
-            isFirstLoad = false
+            isDarkMode = savedDark
+            fontSize = savedFont
+            isLoggedIn = savedName != "Guest"
+            initialized = true
         }
     }
 
+    // ---------- DB ----------
     val booksList by db.bibleDao().getAllBooks().collectAsState(initial = emptyList())
     val currentBookId = booksList.find { it.name == selectedBook }?.id ?: 1
     val versesList by db.bibleDao().getVerses(currentBookId, selectedChapter).collectAsState(initial = emptyList())
 
+    val visibleVerses = remember(versesList, showSearch, searchQuery) {
+        if (!showSearch || searchQuery.isBlank()) {
+            versesList
+        } else {
+            versesList.filter { it.text.contains(searchQuery, ignoreCase = true) }
+        }
+    }
+
     var summary by remember(selectedBook, selectedChapter) { mutableStateOf<SummaryEntity?>(null) }
     LaunchedEffect(selectedBook, selectedChapter, currentBookId) {
-        try { summary = db.bibleDao().getSummary(currentBookId, selectedChapter) } catch (e: Exception) { summary = null }
+        summary = try {
+            db.bibleDao().getSummary(currentBookId, selectedChapter)
+        } catch (_: Exception) {
+            null
+        }
     }
+
     var commentaryHtml by remember(selectedBook, selectedChapter) { mutableStateOf("") }
     LaunchedEffect(selectedBook, selectedChapter, currentBookId, currentMode) {
-        try {
-            if (currentMode == "Endurance" || currentMode == "Commentary") {
-                commentaryHtml = db.bibleDao().getCommentary(currentBookId, selectedChapter)?.getHtml() ?: ""
+        commentaryHtml = if (currentMode == "Endurance" || currentMode == "Commentary") {
+            try {
+                db.bibleDao().getCommentary(currentBookId, selectedChapter)?.getHtml() ?: ""
+            } catch (_: Exception) {
+                ""
             }
-        } catch (e: Exception) { commentaryHtml = "" }
+        } else {
+            ""
+        }
     }
 
     val leftDrawerState = rememberDrawerState(DrawerValue.Closed)
@@ -106,23 +127,29 @@ fun HomeScreen() {
     var searchFilter by remember { mutableStateOf("All") }
     var showHighlightColors by remember { mutableStateOf(false) }
     var highlightedVerses by remember { mutableStateOf<Map<Int, Color>>(emptyMap()) }
-    val highlightColors = listOf(Color.Yellow, Color.Green, Color(0xFFFFB6C1), Color.Cyan, Color(0xFFFFA500))
+    val highlightColors = listOf(
+        Color.Yellow,
+        Color.Green,
+        Color(0xFFFFB6C1),
+        Color.Cyan,
+        Color(0xFFFFA500)
+    )
     var syncStatus by remember { mutableStateOf("") }
 
-    LaunchedEffect(savedDark, savedFont, savedName) {
-        if (isFirstLoad) { isDarkMode = savedDark; fontSize = savedFont }
-        isLoggedIn = savedName != "Guest"
-    }
-
     val dbHighlights by db.bibleDao().getHighlights(currentBookId, selectedChapter).collectAsState(initial = emptyList())
+
     LaunchedEffect(dbHighlights) {
-        try {
-            val map = dbHighlights.associate { it.verse to Color(runCatching { it.color.toLong() }.getOrDefault(0xFFFFFF00) ) }
-            if (dbHighlights.isNotEmpty()) highlightedVerses = map
-        } catch (e: Exception) { }
+        highlightedVerses = try {
+            dbHighlights.associate { highlight ->
+                highlight.verse to Color(
+                    runCatching { highlight.color.toLong() }.getOrDefault(0xFFFFFF00)
+                )
+            }
+        } catch (_: Exception) {
+            emptyMap()
+        }
     }
 
-    // DIM ERGONOMIC COLORS - NOT PURE BLACK
     val bgColor = if (isDarkMode) Color(0xFF1E1E22) else Color(0xFFFDF8EF)
     val textColor = if (isDarkMode) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
     val cardColor = if (isDarkMode) Color(0xFF2A2A30) else Color(0xFFF0EAD9)
@@ -133,7 +160,10 @@ fun HomeScreen() {
 
     LaunchedEffect(savedScrollIndex) {
         if (!scrollRestored && savedScrollIndex > 0) {
-            try { listState.scrollToItem(savedScrollIndex, savedScrollOffset) } catch (e: Exception) {}
+            try {
+                listState.scrollToItem(savedScrollIndex, savedScrollOffset)
+            } catch (_: Exception) {
+            }
             scrollRestored = true
         }
     }
@@ -142,20 +172,38 @@ fun HomeScreen() {
         kotlinx.coroutines.delay(500)
         scope.launch {
             try {
-                val verseNum = listState.firstVisibleItemIndex + 1
+                val verseNum = (listState.firstVisibleItemIndex + 1).coerceAtLeast(1)
                 prefs.saveScroll(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
                 prefs.saveReading(currentMode, selectedBook, selectedChapter, verseNum)
                 if (isLoggedIn) {
                     try {
-                        syncManager.uploadProgress(currentMode, selectedBook, selectedChapter, verseNum, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+                        syncManager.uploadProgress(
+                            currentMode,
+                            selectedBook,
+                            selectedChapter,
+                            verseNum,
+                            listState.firstVisibleItemIndex,
+                            listState.firstVisibleItemScrollOffset
+                        )
                         syncStatus = "Synced ✅"
-                    } catch (e: Exception) { syncStatus = "" }
+                    } catch (_: Exception) {
+                        syncStatus = ""
+                    }
                 }
-            } catch (e: Exception) {}
+            } catch (_: Exception) {
+            }
         }
     }
+
     LaunchedEffect(isDarkMode, fontSize) {
-        try { prefs.saveSettings(isDarkMode, fontSize) } catch (e: Exception) {}
+        try {
+            prefs.saveSettings(isDarkMode, fontSize)
+        } catch (_: Exception) {
+        }
+    }
+
+    BackHandler(enabled = isFullScreen) {
+        isFullScreen = false
     }
 
     fun openReading(mode: String, book: String, chapter: Int) {
@@ -164,14 +212,18 @@ fun HomeScreen() {
         selectedChapter = chapter
         selectedVerse = 1
         scrollRestored = true
+        showSearch = false
         scope.launch {
             try {
                 prefs.saveReading(mode, book, chapter, 1)
                 prefs.saveScroll(0, 0)
-                if (isLoggedIn) syncManager.uploadProgress(mode, book, chapter, 1, 0, 0)
+                if (isLoggedIn) {
+                    syncManager.uploadProgress(mode, book, chapter, 1, 0, 0)
+                }
                 listState.scrollToItem(0, 0)
                 leftDrawerState.close()
-            } catch (e: Exception) {}
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -186,27 +238,55 @@ fun HomeScreen() {
                         selectedBook = cloudProgress.book
                         selectedChapter = cloudProgress.chapter
                         selectedVerse = cloudProgress.verse
-                        prefs.saveReading(cloudProgress.mode, cloudProgress.book, cloudProgress.chapter, cloudProgress.verse)
+                        prefs.saveReading(
+                            cloudProgress.mode,
+                            cloudProgress.book,
+                            cloudProgress.chapter,
+                            cloudProgress.verse
+                        )
                         prefs.saveScroll(cloudProgress.scrollIndex, cloudProgress.scrollOffset)
                     }
                 }
+
                 val cloudHighlights = syncManager.getHighlights()
-                cloudHighlights.forEach { hl ->
-                    try { db.bibleDao().saveHighlight(HighlightEntity(hl.bookId, hl.chapter, hl.verse, hl.color)) } catch (e: Exception) {}
+                cloudHighlights.forEach { highlight ->
+                    try {
+                        db.bibleDao().saveHighlight(
+                            HighlightEntity(
+                                bookId = highlight.bookId,
+                                chapter = highlight.chapter,
+                                verse = highlight.verse,
+                                color = highlight.color
+                            )
+                        )
+                    } catch (_: Exception) {
+                    }
                 }
+
                 val cloudNotes = syncManager.getNotes()
-                cloudNotes.forEach { n ->
-                    try { db.bibleDao().saveNote(NoteEntity(bookId = n.bookId, chapter = n.chapter, verse = n.verse, noteText = n.noteText, timestamp = n.timestamp)) } catch (e: Exception) {}
+                cloudNotes.forEach { note ->
+                    try {
+                        db.bibleDao().saveNote(
+                            NoteEntity(
+                                bookId = note.bookId,
+                                chapter = note.chapter,
+                                verse = note.verse,
+                                noteText = note.noteText,
+                                timestamp = note.timestamp
+                            )
+                        )
+                    } catch (_: Exception) {
+                    }
                 }
+
                 syncStatus = "Synced ✅"
-            } catch (e: Exception) { syncStatus = "Sync failed" }
+            } catch (_: Exception) {
+                syncStatus = "Sync failed"
+            }
         }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(bgColor)) {
-
-        // ================= FULL SCREEN MODE =================
-        // ONLY the tab content, NO other words, NO top bar, NO tabs
         if (isFullScreen) {
             LazyColumn(
                 state = listState,
@@ -215,9 +295,17 @@ fun HomeScreen() {
                 if (currentMode == "World English Bible") {
                     summary?.let { s ->
                         item(key = "summary-full-$selectedBook-$selectedChapter") {
-                            Card(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFF5EEDD))) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFF5EEDD))
+                            ) {
                                 Column(modifier = Modifier.padding(16.dp)) {
-                                    Text("📖 CHAPTER SUMMARY - $selectedBook $selectedChapter", color = goldColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "CHAPTER SUMMARY - $selectedBook $selectedChapter",
+                                        color = goldColor,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(s.summary, color = Color.Black, fontSize = fontSize.sp, fontWeight = FontWeight.Bold)
                                     Spacer(modifier = Modifier.height(12.dp))
@@ -230,57 +318,120 @@ fun HomeScreen() {
                             }
                         }
                     }
-                    if (versesList.isEmpty()) {
-                        item { Text("Loading World English Bible...", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(vertical = 20.dp)) }
+
+                    if (visibleVerses.isEmpty()) {
+                        item {
+                            Text(
+                                "Loading World English Bible...",
+                                color = Color.Gray,
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(vertical = 20.dp)
+                            )
+                        }
                     }
-                    itemsIndexed(versesList, key = { _, v -> "full-$selectedBook-$selectedChapter-${v.verse}-WEB" }) { _, verse ->
+
+                    itemsIndexed(visibleVerses, key = { _, v -> "full-$selectedBook-$selectedChapter-${v.verse}-WEB" }) { _, verse ->
                         val hl = highlightedVerses[verse.verse]
-                        Row(modifier = Modifier.fillMaxWidth().background(hl ?: Color.Transparent, RoundedCornerShape(8.dp)).combinedClickable(
-                            onClick = { selectedVerse = verse.verse },
-                            onLongClick = { selectedVerse = verse.verse; showHighlightColors = true }
-                        ).padding(vertical = 10.dp, horizontal = 8.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(hl ?: Color.Transparent, RoundedCornerShape(8.dp))
+                                .combinedClickable(
+                                    onClick = {
+                                        selectedVerse = verse.verse
+                                        scope.launch {
+                                            try {
+                                                prefs.saveReading(currentMode, selectedBook, selectedChapter, verse.verse)
+                                                if (isLoggedIn) {
+                                                    syncManager.uploadProgress(
+                                                        currentMode,
+                                                        selectedBook,
+                                                        selectedChapter,
+                                                        verse.verse,
+                                                        listState.firstVisibleItemIndex,
+                                                        listState.firstVisibleItemScrollOffset
+                                                    )
+                                                }
+                                            } catch (_: Exception) {
+                                            }
+                                        }
+                                    },
+                                    onLongClick = {
+                                        selectedVerse = verse.verse
+                                        showHighlightColors = true
+                                    }
+                                )
+                                .padding(vertical = 10.dp, horizontal = 8.dp)
+                        ) {
                             Text(text = "${verse.verse}  ", color = goldColor, fontWeight = FontWeight.Bold, fontSize = fontSize.sp)
                             Text(text = verse.text, color = textColor, fontSize = fontSize.sp)
                         }
                     }
                 } else {
                     item(key = "commentary-full-$selectedBook-$selectedChapter") {
-                        if (commentaryHtml.isEmpty()) Text("Loading Endurance...", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(vertical = 20.dp))
-                        else Text(text = commentaryHtml, color = textColor, fontSize = fontSize.sp, modifier = Modifier.padding(vertical = 10.dp))
-                    }
-                }
-            }
-            // Highlight popup still works in full screen
-            if (showHighlightColors) {
-                Box(modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp)) {
-                    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = cardColor)) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text("Highlight Verse $selectedVerse - Choose Color", fontWeight = FontWeight.Bold, color = textColor)
-                            Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                                highlightColors.forEach { c ->
-                                    Button(onClick = {
-                                        selectedVerse?.let { v ->
-                                            highlightedVerses = highlightedVerses + (v to c)
-                                            scope.launch {
-                                                try {
-                                                    db.bibleDao().saveHighlight(HighlightEntity(bookId = currentBookId, chapter = selectedChapter, verse = v, color = c.value.toString()))
-                                                    if (isLoggedIn) syncManager.uploadHighlight(currentBookId, selectedChapter, v, c.value.toString())
-                                                } catch (e: Exception) {}
-                                            }
-                                        }
-                                        showHighlightColors = false
-                                    }, modifier = Modifier.size(40.dp), colors = ButtonDefaults.buttonColors(containerColor = c)) {}
-                                }
-                            }
-                            TextButton(onClick = { showHighlightColors = false }) { Text("Close") }
+                        if (commentaryHtml.isEmpty()) {
+                            Text("Loading Endurance...", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(vertical = 20.dp))
+                        } else {
+                            Text(text = commentaryHtml, color = textColor, fontSize = fontSize.sp, modifier = Modifier.padding(vertical = 10.dp))
                         }
                     }
                 }
             }
+
+            if (showHighlightColors) {
+                Box(modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp)) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = cardColor)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("Highlight Verse $selectedVerse - Choose Color", fontWeight = FontWeight.Bold, color = textColor)
+
+                            Row(
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                            ) {
+                                highlightColors.forEach { color ->
+                                    Button(
+                                        onClick = {
+                                            selectedVerse?.let { verse ->
+                                                highlightedVerses = highlightedVerses + (verse to color)
+                                                scope.launch {
+                                                    try {
+                                                        db.bibleDao().saveHighlight(
+                                                            HighlightEntity(
+                                                                bookId = currentBookId,
+                                                                chapter = selectedChapter,
+                                                                verse = verse,
+                                                                color = color.value.toString()
+                                                            )
+                                                        )
+                                                        if (isLoggedIn) {
+                                                            syncManager.uploadHighlight(currentBookId, selectedChapter, verse, color.value.toString())
+                                                        }
+                                                    } catch (_: Exception) {
+                                                    }
+                                                }
+                                            }
+                                            showHighlightColors = false
+                                        },
+                                        modifier = Modifier.size(40.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = color)
+                                    ) {}
+                                }
+                            }
+
+                            TextButton(onClick = { showHighlightColors = false }) {
+                                Text("Close")
+                            }
+                        }
+                    }
+                }
+            }
+
             return@Box
         }
 
-        // ================= NORMAL HOME MODE =================
         ModalNavigationDrawer(
             drawerState = leftDrawerState,
             drawerContent = {
@@ -288,37 +439,67 @@ fun HomeScreen() {
                     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
                         Text(text = currentMode, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                         Text(text = "Grow in the Word of God, every day.", color = goldColor, fontSize = 12.sp)
-                        if (syncStatus.isNotEmpty()) Text(text = syncStatus, color = Color.Gray, fontSize = 11.sp)
+                        if (syncStatus.isNotEmpty()) {
+                            Text(text = syncStatus, color = Color.Gray, fontSize = 11.sp)
+                        }
+
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text(text = when (readingLevel) {
-                            ReadingLevel.BOOKS -> "Book"
-                            ReadingLevel.CHAPTERS -> "$selectedBook - Chapter"
-                            ReadingLevel.VERSES -> "$selectedBook $selectedChapter - Verse"
-                        }, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+
+                        Text(
+                            text = when (readingLevel) {
+                                ReadingLevel.BOOKS -> "Book"
+                                ReadingLevel.CHAPTERS -> "$selectedBook - Chapter"
+                                ReadingLevel.VERSES -> "$selectedBook $selectedChapter - Verse"
+                            },
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+
                         Divider(modifier = Modifier.padding(vertical = 8.dp))
+
                         LazyColumn(modifier = Modifier.weight(1f)) {
                             when (readingLevel) {
                                 ReadingLevel.BOOKS -> {
                                     itemsIndexed(booksList) { _, book ->
-                                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).clickable { selectedBook = book.name; readingLevel = ReadingLevel.CHAPTERS }) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 12.dp)
+                                                .clickable {
+                                                    selectedBook = book.name
+                                                    readingLevel = ReadingLevel.CHAPTERS
+                                                }
+                                        ) {
                                             Text(text = book.name, fontSize = 16.sp, modifier = Modifier.weight(1f))
                                             Text(text = ">", color = Color.Gray)
                                         }
                                         Divider()
                                     }
                                 }
+
                                 ReadingLevel.CHAPTERS -> {
                                     itemsIndexed((1..50).toList()) { _, ch ->
-                                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).clickable { openReading(currentMode, selectedBook, ch); readingLevel = ReadingLevel.VERSES }) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 12.dp)
+                                                .clickable {
+                                                    openReading(currentMode, selectedBook, ch)
+                                                    readingLevel = ReadingLevel.VERSES
+                                                }
+                                        ) {
                                             Text(text = "Chapter $ch", fontSize = 16.sp, modifier = Modifier.weight(1f))
                                             Text(text = ">", color = Color.Gray)
                                         }
                                         Divider()
                                     }
                                 }
+
                                 ReadingLevel.VERSES -> {
                                     itemsIndexed((1..31).toList()) { _, v ->
-                                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
+                                        ) {
                                             Text(text = "Verse $v", fontSize = 16.sp, modifier = Modifier.weight(1f))
                                         }
                                         Divider()
@@ -326,15 +507,33 @@ fun HomeScreen() {
                                 }
                             }
                         }
-                        if (readingLevel == ReadingLevel.CHAPTERS) Button(onClick = { readingLevel = ReadingLevel.BOOKS }, modifier = Modifier.fillMaxWidth()) { Text("← Back to Books") }
-                        if (readingLevel == ReadingLevel.VERSES) Button(onClick = { readingLevel = ReadingLevel.CHAPTERS }, modifier = Modifier.fillMaxWidth()) { Text("← Back to Chapters") }
-                        Button(onClick = {
-                            when (readingLevel) {
-                                ReadingLevel.BOOKS -> readingLevel = ReadingLevel.CHAPTERS
-                                ReadingLevel.CHAPTERS -> { openReading(currentMode, selectedBook, 1); readingLevel = ReadingLevel.VERSES }
-                                ReadingLevel.VERSES -> scope.launch { leftDrawerState.close() }
+
+                        if (readingLevel == ReadingLevel.CHAPTERS) {
+                            Button(onClick = { readingLevel = ReadingLevel.BOOKS }, modifier = Modifier.fillMaxWidth()) {
+                                Text("← Back to Books")
                             }
-                        }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Open →") }
+                        }
+                        if (readingLevel == ReadingLevel.VERSES) {
+                            Button(onClick = { readingLevel = ReadingLevel.CHAPTERS }, modifier = Modifier.fillMaxWidth()) {
+                                Text("← Back to Chapters")
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                when (readingLevel) {
+                                    ReadingLevel.BOOKS -> readingLevel = ReadingLevel.CHAPTERS
+                                    ReadingLevel.CHAPTERS -> {
+                                        openReading(currentMode, selectedBook, 1)
+                                        readingLevel = ReadingLevel.VERSES
+                                    }
+                                    ReadingLevel.VERSES -> scope.launch { leftDrawerState.close() }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                        ) {
+                            Text("Open →")
+                        }
                     }
                 }
             }
@@ -349,7 +548,14 @@ fun HomeScreen() {
                             }
                         },
                         navigationIcon = {
-                            IconButton(onClick = { scope.launch { if (leftDrawerState.isClosed) leftDrawerState.open() else leftDrawerState.close() } }) {
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        if (leftDrawerState.isClosed) leftDrawerState.open()
+                                        else leftDrawerState.close()
+                                    }
+                                }
+                            ) {
                                 Icon(Icons.Default.Menu, contentDescription = "Menu", tint = textColor)
                             }
                         },
@@ -358,7 +564,10 @@ fun HomeScreen() {
                                 Icon(Icons.Default.MoreVert, contentDescription = "Settings", tint = textColor)
                             }
                         },
-                        colors = TopAppBarDefaults.topAppBarColors(containerColor = bgColor, titleContentColor = textColor)
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = bgColor,
+                            titleContentColor = textColor
+                        )
                     )
                 },
                 containerColor = bgColor
@@ -366,7 +575,6 @@ fun HomeScreen() {
                 Column(modifier = Modifier.fillMaxSize().padding(padding)) {
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // TEXT ONLY TABS - NO BUTTON SHAPE, JUST CLICKS - GOES FULL SCREEN
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceEvenly
@@ -376,28 +584,44 @@ fun HomeScreen() {
                             color = if (currentMode == "World English Bible") goldColor else textColor,
                             fontSize = 15.sp,
                             fontWeight = if (currentMode == "World English Bible") FontWeight.Bold else FontWeight.Normal,
-                            modifier = Modifier.weight(1f).clickable { openReading("World English Bible", selectedBook, selectedChapter); isFullScreen = true }.padding(vertical = 8.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable {
+                                    openReading("World English Bible", selectedBook, selectedChapter)
+                                    isFullScreen = true
+                                }
+                                .padding(vertical = 8.dp),
                             textAlign = TextAlign.Center
                         )
+
                         Text(
                             text = "Endurance",
                             color = if (currentMode == "Endurance") goldColor else textColor,
                             fontSize = 15.sp,
                             fontWeight = if (currentMode == "Endurance") FontWeight.Bold else FontWeight.Normal,
-                            modifier = Modifier.weight(1f).clickable { openReading("Endurance", selectedBook, selectedChapter); isFullScreen = true }.padding(vertical = 8.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable {
+                                    openReading("Endurance", selectedBook, selectedChapter)
+                                    isFullScreen = true
+                                }
+                                .padding(vertical = 8.dp),
                             textAlign = TextAlign.Center
                         )
+
                         Text(
                             text = "Search",
                             color = textColor,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Normal,
-                            modifier = Modifier.weight(1f).clickable { showSearch = true }.padding(vertical = 8.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { showSearch = true }
+                                .padding(vertical = 8.dp),
                             textAlign = TextAlign.Center
                         )
                     }
 
-                    // GENESIS 1 BELOW TABS - FROM WEB .DB ONLY
                     if (currentMode == "World English Bible") {
                         Text(
                             text = "$selectedBook $selectedChapter",
@@ -409,13 +633,25 @@ fun HomeScreen() {
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))
-                    LazyColumn(state = listState, modifier = Modifier.weight(1f).padding(horizontal = 20.dp)) {
+
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.weight(1f).padding(horizontal = 20.dp)
+                    ) {
                         if (currentMode == "World English Bible") {
                             summary?.let { s ->
                                 item(key = "summary-$selectedBook-$selectedChapter") {
-                                    Card(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFF5EEDD))) {
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF5EEDD))
+                                    ) {
                                         Column(modifier = Modifier.padding(16.dp)) {
-                                            Text("📖 CHAPTER SUMMARY - $selectedBook $selectedChapter", color = goldColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                            Text(
+                                                "CHAPTER SUMMARY - $selectedBook $selectedChapter",
+                                                color = goldColor,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Text(s.summary, color = Color.Black, fontSize = fontSize.sp, fontWeight = FontWeight.Bold)
                                             Spacer(modifier = Modifier.height(12.dp))
@@ -430,53 +666,127 @@ fun HomeScreen() {
                                     }
                                 }
                             }
-                            if (versesList.isEmpty()) {
-                                item { Text("Loading World English Bible...", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(vertical = 20.dp)) }
+
+                            if (visibleVerses.isEmpty()) {
+                                item {
+                                    Text(
+                                        "Loading World English Bible...",
+                                        color = Color.Gray,
+                                        fontSize = 14.sp,
+                                        modifier = Modifier.padding(vertical = 20.dp)
+                                    )
+                                }
                             }
-                            itemsIndexed(versesList, key = { _, v -> "$selectedBook-$selectedChapter-${v.verse}-WEB" }) { _, verse ->
+
+                            itemsIndexed(visibleVerses, key = { _, v -> "$selectedBook-$selectedChapter-${v.verse}-WEB" }) { _, verse ->
                                 val hl = highlightedVerses[verse.verse]
-                                Row(modifier = Modifier.fillMaxWidth().background(hl ?: Color.Transparent, RoundedCornerShape(8.dp)).combinedClickable(
-                                    onClick = { selectedVerse = verse.verse; scope.launch { try { prefs.saveReading(currentMode, selectedBook, selectedChapter, verse.verse); if (isLoggedIn) syncManager.uploadProgress(currentMode, selectedBook, selectedChapter, verse.verse, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) } catch (e: Exception) {} } },
-                                    onLongClick = { selectedVerse = verse.verse; showHighlightColors = true }
-                                ).padding(vertical = 10.dp, horizontal = 8.dp)) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(hl ?: Color.Transparent, RoundedCornerShape(8.dp))
+                                        .combinedClickable(
+                                            onClick = {
+                                                selectedVerse = verse.verse
+                                                scope.launch {
+                                                    try {
+                                                        prefs.saveReading(currentMode, selectedBook, selectedChapter, verse.verse)
+                                                        if (isLoggedIn) {
+                                                            syncManager.uploadProgress(
+                                                                currentMode,
+                                                                selectedBook,
+                                                                selectedChapter,
+                                                                verse.verse,
+                                                                listState.firstVisibleItemIndex,
+                                                                listState.firstVisibleItemScrollOffset
+                                                            )
+                                                        }
+                                                    } catch (_: Exception) {
+                                                    }
+                                                }
+                                            },
+                                            onLongClick = {
+                                                selectedVerse = verse.verse
+                                                showHighlightColors = true
+                                            }
+                                        )
+                                        .padding(vertical = 10.dp, horizontal = 8.dp)
+                                ) {
                                     Text(text = "${verse.verse}  ", color = goldColor, fontWeight = FontWeight.Bold, fontSize = fontSize.sp)
                                     Text(text = verse.text, color = textColor, fontSize = fontSize.sp)
                                 }
                             }
                         } else {
                             item(key = "commentary-$selectedBook-$selectedChapter") {
-                                if (commentaryHtml.isEmpty()) Text("Loading Endurance...", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(vertical = 20.dp))
-                                else Text(text = commentaryHtml, color = textColor, fontSize = fontSize.sp, modifier = Modifier.padding(vertical = 10.dp))
+                                if (commentaryHtml.isEmpty()) {
+                                    Text("Loading Endurance...", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(vertical = 20.dp))
+                                } else {
+                                    Text(text = commentaryHtml, color = textColor, fontSize = fontSize.sp, modifier = Modifier.padding(vertical = 10.dp))
+                                }
                             }
                         }
                     }
+
                     if (showHighlightColors) {
-                        Card(modifier = Modifier.fillMaxWidth().padding(16.dp), colors = CardDefaults.cardColors(containerColor = cardColor)) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = cardColor)
+                        ) {
                             Column(modifier = Modifier.padding(12.dp)) {
                                 Text("Highlight Verse $selectedVerse - Choose Color", fontWeight = FontWeight.Bold, color = textColor)
-                                Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                                    highlightColors.forEach { c ->
-                                        Button(onClick = {
-                                            selectedVerse?.let { v ->
-                                                highlightedVerses = highlightedVerses + (v to c)
-                                                scope.launch {
-                                                    try {
-                                                        db.bibleDao().saveHighlight(HighlightEntity(bookId = currentBookId, chapter = selectedChapter, verse = v, color = c.value.toString()))
-                                                        if (isLoggedIn) syncManager.uploadHighlight(currentBookId, selectedChapter, v, c.value.toString())
-                                                    } catch (e: Exception) {}
+
+                                Row(
+                                    horizontalArrangement = Arrangement.SpaceEvenly,
+                                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                                ) {
+                                    highlightColors.forEach { color ->
+                                        Button(
+                                            onClick = {
+                                                selectedVerse?.let { verse ->
+                                                    highlightedVerses = highlightedVerses + (verse to color)
+                                                    scope.launch {
+                                                        try {
+                                                            db.bibleDao().saveHighlight(
+                                                                HighlightEntity(
+                                                                    bookId = currentBookId,
+                                                                    chapter = selectedChapter,
+                                                                    verse = verse,
+                                                                    color = color.value.toString()
+                                                                )
+                                                            )
+                                                            if (isLoggedIn) {
+                                                                syncManager.uploadHighlight(currentBookId, selectedChapter, verse, color.value.toString())
+                                                            }
+                                                        } catch (_: Exception) {
+                                                        }
+                                                    }
                                                 }
-                                            }
-                                            showHighlightColors = false
-                                        }, modifier = Modifier.size(40.dp), colors = ButtonDefaults.buttonColors(containerColor = c)) {}
+                                                showHighlightColors = false
+                                            },
+                                            modifier = Modifier.size(40.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = color)
+                                        ) {}
                                     }
                                 }
-                                TextButton(onClick = {
-                                    selectedVerse?.let { v ->
-                                        highlightedVerses = highlightedVerses - v
-                                        scope.launch { try { if (isLoggedIn) syncManager.deleteHighlight(currentBookId, selectedChapter, v) } catch (e: Exception) {} }
+
+                                TextButton(
+                                    onClick = {
+                                        selectedVerse?.let { verse ->
+                                            highlightedVerses = highlightedVerses - verse
+                                            scope.launch {
+                                                try {
+                                                    db.bibleDao().deleteHighlight(currentBookId, selectedChapter, verse)
+                                                    if (isLoggedIn) {
+                                                        syncManager.deleteHighlight(currentBookId, selectedChapter, verse)
+                                                    }
+                                                } catch (_: Exception) {
+                                                }
+                                            }
+                                        }
+                                        showHighlightColors = false
                                     }
-                                    showHighlightColors = false
-                                }) { Text("Remove Highlight") }
+                                ) {
+                                    Text("Remove Highlight")
+                                }
                             }
                         }
                     }
@@ -484,79 +794,194 @@ fun HomeScreen() {
             }
         }
 
-        AnimatedVisibility(visible = showRightDrawer && !isFullScreen, enter = slideInHorizontally { it }, exit = slideOutHorizontally { it }, modifier = Modifier.align(Alignment.TopEnd)) {
-            Card(modifier = Modifier.fillMaxHeight().width(300.dp), shape = RoundedCornerShape(0.dp), colors = CardDefaults.cardColors(containerColor = if (isDarkMode) Color(0xFF2A2A30) else Color.White)) {
+        AnimatedVisibility(
+            visible = showRightDrawer && !isFullScreen,
+            enter = slideInHorizontally { it },
+            exit = slideOutHorizontally { it },
+            modifier = Modifier.align(Alignment.TopEnd)
+        ) {
+            Card(
+                modifier = Modifier.fillMaxHeight().width(300.dp),
+                shape = RoundedCornerShape(0.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isDarkMode) Color(0xFF2A2A30) else Color.White
+                )
+            ) {
                 LazyColumn(modifier = Modifier.padding(16.dp)) {
                     item {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = textColor)
                             TextButton(onClick = { showRightDrawer = false }) { Text("Close ✕") }
                         }
+
                         Divider(modifier = Modifier.padding(vertical = 8.dp))
+
                         if (!isLoggedIn) {
-                            Button(onClick = {
-                                scope.launch {
-                                    try {
-                                        val result = googleAuth.signInWithGoogle()
-                                        result.onSuccess { data ->
-                                            val name = data.split("|")[0]
-                                            val email = data.split("|").getOrNull(1) ?: ""
-                                            prefs.saveUser(name, email)
-                                            isLoggedIn = true
-                                            downloadCloudData()
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        try {
+                                            val result = googleAuth.signInWithGoogle()
+                                            result.onSuccess { data ->
+                                                val name = data.split("|")[0]
+                                                val email = data.split("|").getOrNull(1) ?: ""
+                                                prefs.saveUser(name, email)
+                                                isLoggedIn = true
+                                                downloadCloudData()
+                                            }
+                                        } catch (_: Exception) {
                                         }
-                                    } catch (e: Exception) {}
-                                }
-                            }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = goldColor)) {
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = goldColor)
+                            ) {
                                 Text("Login to Sync Data", color = Color.Black)
                             }
                         } else {
                             Text("Welcome, $savedName 👋", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
                             Text("Synced with your Gmail account - $syncStatus", color = Color.Gray, fontSize = 12.sp)
-                            TextButton(onClick = {
-                                scope.launch { try { googleAuth.signOut(); prefs.clearUser(); isLoggedIn = false } catch (e: Exception) {} }
-                            }) { Text("Logout") }
-                            Button(onClick = { downloadCloudData() }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Sync Now ↻") }
+
+                            TextButton(
+                                onClick = {
+                                    scope.launch {
+                                        try {
+                                            googleAuth.signOut()
+                                            prefs.clearUser()
+                                            isLoggedIn = false
+                                        } catch (_: Exception) {
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text("Logout")
+                            }
+
+                            Button(
+                                onClick = { downloadCloudData() },
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                            ) {
+                                Text("Sync Now ↻")
+                            }
                         }
+
                         Spacer(modifier = Modifier.height(16.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text("Dark Mode", color = textColor); Switch(checked = isDarkMode, onCheckedChange = { isDarkMode = it })
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Dark Mode", color = textColor)
+                            Switch(
+                                checked = isDarkMode,
+                                onCheckedChange = { isDarkMode = it }
+                            )
                         }
+
                         Spacer(modifier = Modifier.height(16.dp))
+
                         Text("Text Size", fontWeight = FontWeight.Bold, color = textColor)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("A-", fontSize = 13.sp, color = textColor)
-                            Slider(value = fontSize, onValueChange = { fontSize = it }, valueRange = 12f..28f, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
+                            Slider(
+                                value = fontSize,
+                                onValueChange = { fontSize = it },
+                                valueRange = 12f..28f,
+                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                            )
                             Text("A+", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = textColor)
                         }
+
                         Spacer(modifier = Modifier.height(16.dp))
-                        Button(onClick = { showDailyVerse = !showDailyVerse; showNotes = false }, modifier = Modifier.fillMaxWidth()) { Text(if (showDailyVerse) "Daily Verse ▲" else "Daily Verse ▼") }
+
+                        Button(
+                            onClick = { showDailyVerse = !showDailyVerse; showNotes = false },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (showDailyVerse) "Daily Verse ▲" else "Daily Verse ▼")
+                        }
+
                         if (showDailyVerse) {
-                            Card(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFF5EEDD))) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFF5EEDD))
+                            ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
-                                    Text("DAILY VERSE - Linked to World English Bible", color = goldColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "DAILY VERSE - Linked to World English Bible",
+                                        color = goldColor,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                     Text("\"Your word is a lamp for my feet, a light on my path.\"", fontSize = 15.sp, color = Color.Black)
                                     Text("Psalm 119:105 - WEB", color = Color.Gray, fontSize = 12.sp)
-                                    TextButton(onClick = { openReading("World English Bible", "Psalms", 119); showRightDrawer = false }) { Text("Open in World English Bible →") }
+                                    TextButton(
+                                        onClick = {
+                                            openReading("World English Bible", "Psalms", 119)
+                                            showRightDrawer = false
+                                        }
+                                    ) {
+                                        Text("Open in World English Bible →")
+                                    }
                                 }
                             }
                         }
+
                         Spacer(modifier = Modifier.height(12.dp))
-                        Button(onClick = { showNotes = !showNotes; showDailyVerse = false }, modifier = Modifier.fillMaxWidth()) { Text(if (showNotes) "Notes ▲" else "Notes ▼") }
+
+                        Button(
+                            onClick = { showNotes = !showNotes; showDailyVerse = false },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (showNotes) "Notes ▲" else "Notes ▼")
+                        }
+
                         if (showNotes) {
-                            OutlinedTextField(value = noteText, onValueChange = { noteText = it }, label = { Text("Write your note...") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
-                            Button(onClick = {
-                                scope.launch {
-                                    try {
-                                        val verseToSave = selectedVerse ?: 1
-                                        db.bibleDao().saveNote(NoteEntity(bookId = currentBookId, chapter = selectedChapter, verse = verseToSave, noteText = noteText, timestamp = System.currentTimeMillis()))
-                                        if (isLoggedIn) syncManager.uploadNote(currentBookId, selectedChapter, verseToSave, noteText)
-                                        noteText = ""
-                                        syncStatus = "Note Saved ✅"
-                                    } catch (e: Exception) {}
-                                }
-                            }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Save Note") }
-                            Text(if (isLoggedIn) "Notes sync to cloud ✅" else "Login to sync notes", color = Color.Gray, fontSize = 11.sp)
+                            OutlinedTextField(
+                                value = noteText,
+                                onValueChange = { noteText = it },
+                                label = { Text("Write your note...") },
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                            )
+
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        try {
+                                            val verseToSave = selectedVerse ?: 1
+                                            db.bibleDao().saveNote(
+                                                NoteEntity(
+                                                    bookId = currentBookId,
+                                                    chapter = selectedChapter,
+                                                    verse = verseToSave,
+                                                    noteText = noteText,
+                                                    timestamp = System.currentTimeMillis()
+                                                )
+                                            )
+                                            if (isLoggedIn) {
+                                                syncManager.uploadNote(currentBookId, selectedChapter, verseToSave, noteText)
+                                            }
+                                            noteText = ""
+                                            syncStatus = "Note Saved ✅"
+                                        } catch (_: Exception) {
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                            ) {
+                                Text("Save Note")
+                            }
+
+                            Text(
+                                if (isLoggedIn) "Notes sync to cloud ✅" else "Login to sync notes",
+                                color = Color.Gray,
+                                fontSize = 11.sp
+                            )
                         }
                     }
                 }
@@ -569,19 +994,47 @@ fun HomeScreen() {
                 title = { Text("Search - World English Bible Only") },
                 text = {
                     Column {
-                        OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, label = { Text("Search WEB...") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            label = { Text("Search WEB...") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
                         Spacer(modifier = Modifier.height(12.dp))
+
                         Text("Filter:", fontWeight = FontWeight.Bold)
-                        FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf("All","Gospel","Prophecy","Old Testament","New Testament").forEach { f ->
-                                FilterChip(selected = searchFilter == f, onClick = { searchFilter = f }, label = { Text(f, fontSize = 12.sp) })
+
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf("All", "Gospel", "Prophecy", "Old Testament", "New Testament").forEach { filter ->
+                                FilterChip(
+                                    selected = searchFilter == filter,
+                                    onClick = { searchFilter = filter },
+                                    label = { Text(filter, fontSize = 12.sp) }
+                                )
                             }
                         }
-                        Text("Searching in: $searchFilter - World English Bible", color = Color.Gray, fontSize = 12.sp)
+
+                        Text(
+                            "Searching in: $searchFilter - World English Bible",
+                            color = Color.Gray,
+                            fontSize = 12.sp
+                        )
                     }
                 },
-                confirmButton = { TextButton(onClick = { showSearch = false }) { Text("Search") } },
-                dismissButton = { TextButton(onClick = { showSearch = false }) { Text("Close") } }
+                confirmButton = {
+                    TextButton(onClick = { showSearch = false }) {
+                        Text("Search")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showSearch = false }) {
+                        Text("Close")
+                    }
+                }
             )
         }
     }
