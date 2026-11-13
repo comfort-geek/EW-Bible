@@ -23,6 +23,9 @@ interface BibleDao {
     @Query("SELECT * FROM highlights WHERE book_id = :bookId AND chapter = :chapter")
     fun getHighlights(bookId: Int, chapter: Int): Flow<List<HighlightEntity>>
 
+    @Query("SELECT * FROM highlights ORDER BY book_id, chapter, verse")
+    fun getAllHighlights(): Flow<List<HighlightEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveHighlight(h: HighlightEntity)
 
@@ -34,4 +37,7 @@ interface BibleDao {
 
     @Query("SELECT * FROM notes WHERE book_id = :bookId AND chapter = :chapter AND verse = :verse")
     fun getNotes(bookId: Int, chapter: Int, verse: Int): Flow<List<NoteEntity>>
+
+    @Query("SELECT * FROM notes ORDER BY timestamp DESC")
+    fun getAllNotes(): Flow<List<NoteEntity>>
 }
