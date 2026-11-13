@@ -344,7 +344,15 @@ fun HomeScreen() {
                     onSaveNote = {
                         val verse = selectedVerse ?: 1
                         scope.launch {
-                            db.bibleDao().saveNote(NoteEntity(currentBookId, selectedChapter, verse, noteText, System.currentTimeMillis()))
+                            db.bibleDao().saveNote(
+                                NoteEntity(
+                                    bookId = currentBookId,
+                                    chapter = selectedChapter,
+                                    verse = verse,
+                                    noteText = noteText,
+                                    timestamp = System.currentTimeMillis(),
+                                )
+                            )
                             if (isLoggedIn) syncManager.uploadNote(currentBookId, selectedChapter, verse, noteText)
                             noteText = ""
                         }
