@@ -201,7 +201,8 @@ fun HomeScreen() {
             ModalDrawerSheet(
                 drawerShape = RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp),
                 modifier = Modifier.width(300.dp),
-                containerColor = background
+                drawerContainerColor = background,
+                drawerContentColor = textColor
             ) {
                 Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
                     Text("Books", color = textColor, fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -394,7 +395,7 @@ fun HomeScreen() {
                         Spacer(modifier = Modifier.height(12.dp))
                         LazyColumn(modifier = Modifier.fillMaxSize()) {
                             items(filteredSearchResults) { bookName ->
-                                Text(bookName, color = textColor, fontSize = fontSize.sp, modifier = Modifier.fillMaxWidth().clickable { openBook(bookName, 1); selectedTab = "Bible" }.padding(vertical = 10.dp))
+                                Text(bookName, color = textColor, fontSize = fontSize.sp, modifier = Modifier.fillMaxWidth().clickable { openBook(bookName, 1); selectedTab = "Bible" }.padding(vertical = 8.dp))
                             }
                         }
                     }
