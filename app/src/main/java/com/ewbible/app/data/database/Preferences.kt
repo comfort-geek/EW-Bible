@@ -21,6 +21,10 @@ class AppPreferences(private val context: Context) {
         val USER_EMAIL = stringPreferencesKey("user_email")
         val LAST_SCROLL_INDEX = intPreferencesKey("last_scroll_index")
         val LAST_SCROLL_OFFSET = intPreferencesKey("last_scroll_offset")
+        val DAILY_VERSE_DATE = stringPreferencesKey("daily_verse_date")
+        val DAILY_VERSE_BOOK_ID = intPreferencesKey("daily_verse_book_id")
+        val DAILY_VERSE_CHAPTER = intPreferencesKey("daily_verse_chapter")
+        val DAILY_VERSE_NUMBER = intPreferencesKey("daily_verse_number")
     }
 
     val lastMode: Flow<String> = context.dataStore.data.map { it[LAST_MODE] ?: "World English Bible" }
@@ -33,6 +37,13 @@ class AppPreferences(private val context: Context) {
     val userEmail: Flow<String> = context.dataStore.data.map { it[USER_EMAIL] ?: "" }
     val lastScrollIndex: Flow<Int> = context.dataStore.data.map { it[LAST_SCROLL_INDEX] ?: 0 }
     val lastScrollOffset: Flow<Int> = context.dataStore.data.map { it[LAST_SCROLL_OFFSET] ?: 0 }
+    val dailyVerseDate: Flow<String> = context.dataStore.data.map { it[DAILY_VERSE_DATE] ?: "" }
+    val dailyVerseReference: Flow<DailyVerseReference?> = context.dataStore.data.map { preferences ->
+        val bookId = preferences[DAILY_VERSE_BOOK_ID]
+        val chapter = preferences[DAILY_VERSE_CHAPTER]
+        val verse = preferences[DAILY_VERSE_NUMBER]
+        if (bookId != null && chapter != null && verse != null) DailyVerseReference(bookId, chapter, verse) else null
+    }
 
     suspend fun saveReading(mode: String, book: String, chapter: Int, verse: Int) {
         context.dataStore.edit { prefs ->
@@ -42,24 +53,37 @@ class AppPreferences(private val context: Context) {
             prefs[LAST_VERSE] = verse
         }
     }
+
     suspend fun saveSettings(darkMode: Boolean, fontSize: Float) {
         context.dataStore.edit { prefs ->
             prefs[IS_DARK_MODE] = darkMode
             prefs[FONT_SIZE] = fontSize
         }
     }
+
     suspend fun saveUser(name: String, email: String) {
         context.dataStore.edit { prefs ->
             prefs[USER_NAME] = name
             prefs[USER_EMAIL] = email
         }
     }
+
     suspend fun saveScroll(index: Int, offset: Int) {
         context.dataStore.edit { prefs ->
-            prefs[LAST_SCROLL_INDEX] = index
-            prefs[LAST_SCROLL_OFFSET] = offset
+            prefs[LAST_SCROLL_INDEX] = index.coerceAtLeast(0)
+            prefs[LAST_SCROLL_OFFSET] = offset.coerceAtLeast(0)
         }
     }
+
+    suspend fun saveDailyVerse(date: String, reference: DailyVerseReference) {
+        context.dataStore.edit { prefs ->
+            prefs[DAILY_VERSE_DATE] = date
+            prefs[DAILY_VERSE_BOOK_ID] = reference.bookId
+            prefs[DAILY_VERSE_CHAPTER] = reference.chapter
+            prefs[DAILY_VERSE_NUMBER] = reference.verse
+        }
+    }
+
     suspend fun clearUser() {
         context.dataStore.edit { prefs ->
             prefs[USER_NAME] = "Guest"
@@ -67,3 +91,5 @@ class AppPreferences(private val context: Context) {
         }
     }
 }
+
+data class DailyVerseReference(val bookId: Int, val chapter: Int, val verse: Int)
