@@ -83,7 +83,9 @@ fun HomeScreen(db: AppDatabase, prefs: AppPreferences, auth: GoogleAuth, sync: S
     var notes by remember { mutableStateOf<List<Note>>(emptyList()) }
     var tab by remember { mutableStateOf("Bible") }
     var searchQuery by remember { mutableStateOf("") }
-    var searchResults by remember { mutableStateOf<List<Verse>>(emptyList()) }
+    // FIXED: No more List<Verse> + bookId/chapter. We store BookName + Chapter + Verse together.
+    var searchResults by remember { mutableStateOf<List<Triple<String, Int, Verse>>>(emptyList()) }
+    var isSearching by remember { mutableStateOf(false) }
     var drawerOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf<String?>(null) }
@@ -92,13 +94,11 @@ fun HomeScreen(db: AppDatabase, prefs: AppPreferences, auth: GoogleAuth, sync: S
     var isDark by remember { mutableStateOf(false) }
     var userName by remember { mutableStateOf<String?>(null) }
 
-    // Colors - Light dimmed ergonomic default
     val bgColor = if (isDark) Color(0xFF202328) else Color(0xFFEDE6D3)
     val textColor = if (isDark) Color.White else Color(0xFF2B2820)
     val cardColor = if (isDark) Color(0xFF2A2E35) else Color(0xFFF7F1E3)
     val readingGold = Color(0xFFB78F3A)
 
-    // Load initial
     LaunchedEffect(Unit) {
         allBooks = dao.getAllBooks()
         val last = prefs.getReading()
@@ -108,7 +108,6 @@ fun HomeScreen(db: AppDatabase, prefs: AppPreferences, auth: GoogleAuth, sync: S
         userName = auth.getCurrentUserName()
     }
 
-    // Load chapter data - DB calls UNCHANGED
     LaunchedEffect(selectedBook, selectedChapter) {
         val bookId = allBooks.firstOrNull { it.name == selectedBook }?.id ?: 1
         verses = dao.getVerses(bookId, selectedChapter)
@@ -133,7 +132,6 @@ fun HomeScreen(db: AppDatabase, prefs: AppPreferences, auth: GoogleAuth, sync: S
 
     Box(Modifier.fillMaxSize().background(bgColor)) {
         Column(Modifier.fillMaxSize()) {
-            // --- TOP ROW: [Menu] [Tabs] [3-dots] ---
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { drawerOpen = true }, contentPadding = PaddingValues(4.dp)) { Text("☰", color = textColor, fontSize = 22.sp) }
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center) {
@@ -159,7 +157,6 @@ fun HomeScreen(db: AppDatabase, prefs: AppPreferences, auth: GoogleAuth, sync: S
                             isDark = !isDark; settingsOpen = false
                             scope.launch { prefs.saveSettings(fontSize, isDark) }
                         })
-                        // Font Slider A- [slider] A+
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -185,14 +182,11 @@ fun HomeScreen(db: AppDatabase, prefs: AppPreferences, auth: GoogleAuth, sync: S
                 }
             }
 
-            // --- Title: ONCE only ---
             Text(selectedBook + " " + selectedChapter, color = textColor, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
 
-            // --- CONTENT ---
             when (tab) {
                 "Bible" -> {
                     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                        // Summary - FROM DB, UNCHANGED
                         summary?.let { item ->
                             item {
                                 Card(colors = CardDefaults.cardColors(containerColor = cardColor), modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
@@ -230,12 +224,38 @@ fun HomeScreen(db: AppDatabase, prefs: AppPreferences, auth: GoogleAuth, sync: S
                 "Search" -> {
                     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
                         OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, label = { Text("Search Bible...") }, modifier = Modifier.fillMaxWidth())
-                        Button(onClick = { scope.launch { searchResults = dao.searchVerses(searchQuery) } }, modifier = Modifier.padding(top = 8.dp)) { Text("Search") }
+                        Button(onClick = {
+                            scope.launch {
+                                val q = searchQuery.trim()
+                                if (q.isEmpty()) { searchResults = emptyList(); return@launch }
+                                isSearching = true
+                                val out = mutableListOf<Triple<String, Int, Verse>>()
+                                // FIXED: Uses only getVerses(bookId, chapter) which you already have
+                                for (b in allBooks) {
+                                    for (ch in 1..b.chapters) {
+                                        val vs = try { dao.getVerses(b.id, ch) } catch (_: Exception) { emptyList() }
+                                        for (v in vs) {
+                                            if (v.text.contains(q, ignoreCase = true)) {
+                                                out.add(Triple(b.name, ch, v))
+                                                if (out.size >= 100) break
+                                            }
+                                        }
+                                        if (out.size >= 100) break
+                                    }
+                                    if (out.size >= 100) break
+                                }
+                                searchResults = out
+                                isSearching = false
+                            }
+                        }, modifier = Modifier.padding(top = 8.dp)) { Text(if (isSearching) "Searching..." else "Search") }
+
+                        if (searchResults.isNotEmpty()) {
+                            Text("${searchResults.size} results", color = readingGold, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                        }
                         LazyColumn(Modifier.weight(1f)) {
-                            items(searchResults) { v ->
-                                val bName = allBooks.firstOrNull { it.id == v.bookId }?.name ?: ""
-                                Column(Modifier.fillMaxWidth().clickable { goToVerse(bName, v.chapter) }.padding(vertical = 8.dp)) {
-                                    Text("$bName ${v.chapter}:${v.verse}", color = readingGold, fontWeight = FontWeight.Bold)
+                            items(searchResults) { (bName, ch, v) ->
+                                Column(Modifier.fillMaxWidth().clickable { goToVerse(bName, ch) }.padding(vertical = 8.dp)) {
+                                    Text("$bName $ch:${v.verse}", color = readingGold, fontWeight = FontWeight.Bold)
                                     Text(v.text, color = textColor, fontSize = fontSize.sp)
                                 }
                             }
@@ -245,7 +265,6 @@ fun HomeScreen(db: AppDatabase, prefs: AppPreferences, auth: GoogleAuth, sync: S
             }
         }
 
-        // --- DRAWER: Scrollable, OT then NT ---
         if (drawerOpen) {
             AlertDialog(
                 onDismissRequest = { drawerOpen = false },
@@ -276,7 +295,6 @@ fun HomeScreen(db: AppDatabase, prefs: AppPreferences, auth: GoogleAuth, sync: S
             )
         }
 
-        // --- CLEAN DAILY VERSE ---
         if (dialog == "daily") {
             AlertDialog(
                 onDismissRequest = { dialog = null },
