@@ -1,9 +1,6 @@
 package com.ewbible.app.ui.screens
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,7 +24,6 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
@@ -41,9 +37,6 @@ import kotlinx.coroutines.launch
 
 enum class ReadingLevel { BOOKS, CHAPTERS, VERSES }
 
-// ------------------------------
-// Verse reference parsing
-// ------------------------------
 private val biblesBookAliases = mapOf(
     "Genesis" to "Genesis",
     "Exodus" to "Exodus",
@@ -136,8 +129,8 @@ data class VerseRef(
     val chapterEnd: Int = chapter
 )
 
-fun parseVerseRefs(text: String): List<Pair<IntRange, VerseRef>> {
-    return verseReferenceRegex.findAll(text).mapNotNull { match ->
+fun parseVerseRefs(text: String): List<Pair<IntRange, VerseRef>> =
+    verseReferenceRegex.findAll(text).mapNotNull { match ->
         val rawBook = match.groupValues[1]
         val canonicalBook = biblesBookAliases.entries
             .firstOrNull { it.key.equals(rawBook, ignoreCase = true) }
@@ -163,7 +156,6 @@ fun parseVerseRefs(text: String): List<Pair<IntRange, VerseRef>> {
             chapterEnd = chapterEnd
         )
     }.toList()
-}
 
 @Composable
 fun ClickableCommentaryText(
@@ -209,9 +201,6 @@ fun ClickableCommentaryText(
     )
 }
 
-// ------------------------------
-// Main screen
-// ------------------------------
 @OptIn(
     ExperimentalMaterial3Api::class,
     ExperimentalFoundationApi::class,
@@ -243,7 +232,6 @@ fun HomeScreen() {
     var isFirstLoad by remember { mutableStateOf(true) }
     var isFullScreen by remember { mutableStateOf(false) }
 
-    // Android Back button - exit full screen first
     BackHandler(enabled = isFullScreen) {
         isFullScreen = false
     }
@@ -528,11 +516,13 @@ fun HomeScreen() {
     }
 
     Box(modifier = Modifier.fillMaxSize().background(bgColor)) {
-        // ================= FULL SCREEN MODE =================
         if (isFullScreen) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize().background(bgColor).padding(horizontal = 20.dp, vertical = 16.dp)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(bgColor)
+                    .padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
                 if (currentMode == "World English Bible") {
                     summary?.let { s ->
@@ -572,7 +562,7 @@ fun HomeScreen() {
                         }
                     }
 
-                    itemsIndexed(versesList, key = { _, v -> "full-$selectedBook-$selectedChapter-${v.verse}-WEB" }) { _, verse ->
+                    itemsIndexed(versesList, key = { _, verse -> "full-$selectedBook-$selectedChapter-${verse.verse}-WEB" }) { _, verse ->
                         val hl = highlightedVerses[verse.verse]
                         Row(
                             modifier = Modifier
@@ -654,148 +644,207 @@ fun HomeScreen() {
             }
 
             VersePopupDialog()
-            return@Box
-        }
+        } else {
+            ModalNavigationDrawer(
+                drawerState = leftDrawerState,
+                drawerContent = {
+                    ModalDrawerSheet {
+                        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                            Text(text = currentMode, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text(text = "Grow in the Word of God, every day.", color = goldColor, fontSize = 12.sp)
+                            if (syncStatus.isNotEmpty()) {
+                                Text(text = syncStatus, color = Color.Gray, fontSize = 11.sp)
+                            }
 
-        // ================= NORMAL HOME MODE =================
-        ModalNavigationDrawer(
-            drawerState = leftDrawerState,
-            drawerContent = {
-                ModalDrawerSheet {
-                    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                        Text(text = currentMode, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        Text(text = "Grow in the Word of God, every day.", color = goldColor, fontSize = 12.sp)
-                        if (syncStatus.isNotEmpty()) {
-                            Text(text = syncStatus, color = Color.Gray, fontSize = 11.sp)
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            Text(
+                                text = when (readingLevel) {
+                                    ReadingLevel.BOOKS -> "Book"
+                                    ReadingLevel.CHAPTERS -> "$selectedBook - Chapter"
+                                    ReadingLevel.VERSES -> "$selectedBook $selectedChapter - Verse"
+                                },
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
+                            )
+
+                            Divider(modifier = Modifier.padding(vertical = 8.dp))
+
+                            LazyColumn(modifier = Modifier.weight(1f)) {
+                                when (readingLevel) {
+                                    ReadingLevel.BOOKS -> {
+                                        itemsIndexed(booksList) { _, book ->
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 12.dp)
+                                                    .clickable {
+                                                        selectedBook = book.name
+                                                        readingLevel = ReadingLevel.CHAPTERS
+                                                    }
+                                            ) {
+                                                Text(text = book.name, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                                                Text(text = ">", color = Color.Gray)
+                                            }
+                                            Divider()
+                                        }
+                                    }
+
+                                    ReadingLevel.CHAPTERS -> {
+                                        itemsIndexed((1..50).toList()) { _, ch ->
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 12.dp)
+                                                    .clickable {
+                                                        openReading(currentMode, selectedBook, ch)
+                                                        readingLevel = ReadingLevel.VERSES
+                                                    }
+                                            ) {
+                                                Text(text = "Chapter $ch", fontSize = 16.sp, modifier = Modifier.weight(1f))
+                                                Text(text = ">", color = Color.Gray)
+                                            }
+                                            Divider()
+                                        }
+                                    }
+
+                                    ReadingLevel.VERSES -> {
+                                        itemsIndexed((1..31).toList()) { _, v ->
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
+                                            ) {
+                                                Text(text = "Verse $v", fontSize = 16.sp, modifier = Modifier.weight(1f))
+                                            }
+                                            Divider()
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (readingLevel == ReadingLevel.CHAPTERS) {
+                                Button(onClick = { readingLevel = ReadingLevel.BOOKS }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("← Back to Books")
+                                }
+                            }
+                            if (readingLevel == ReadingLevel.VERSES) {
+                                Button(onClick = { readingLevel = ReadingLevel.CHAPTERS }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("← Back to Chapters")
+                                }
+                            }
+
+                            Button(
+                                onClick = {
+                                    when (readingLevel) {
+                                        ReadingLevel.BOOKS -> readingLevel = ReadingLevel.CHAPTERS
+                                        ReadingLevel.CHAPTERS -> {
+                                            openReading(currentMode, selectedBook, 1)
+                                            readingLevel = ReadingLevel.VERSES
+                                        }
+                                        ReadingLevel.VERSES -> scope.launch { leftDrawerState.close() }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                            ) {
+                                Text("Open →")
+                            }
                         }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Text(
-                            text = when (readingLevel) {
-                                ReadingLevel.BOOKS -> "Book"
-                                ReadingLevel.CHAPTERS -> "$selectedBook - Chapter"
-                                ReadingLevel.VERSES -> "$selectedBook $selectedChapter - Verse"
+                    }
+                }
+            ) {
+                Scaffold(
+                    topBar = {
+                        TopAppBar(
+                            title = {
+                                Column {
+                                    Text("EW Bible", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = textColor)
+                                    Text("Grow in the Word of God, every day.", color = goldColor, fontSize = 11.sp)
+                                }
                             },
+                            navigationIcon = {
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            if (leftDrawerState.isClosed) leftDrawerState.open()
+                                            else leftDrawerState.close()
+                                        }
+                                    }
+                                ) {
+                                    Icon(Icons.Default.Menu, contentDescription = "Menu", tint = textColor)
+                                }
+                            },
+                            actions = {
+                                IconButton(onClick = { showRightDrawer = !showRightDrawer }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = "Settings", tint = textColor)
+                                }
+                            },
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = bgColor,
+                                titleContentColor = textColor
+                            )
+                        )
+                    },
+                    containerColor = bgColor
+                ) { padding ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(bgColor)
+                            .padding(padding)
+                    ) {
+                        Text(
+                            text = "${selectedBook} ${selectedChapter}",
+                            color = textColor,
+                            fontSize = 24.sp,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
+                            modifier = Modifier.padding(16.dp)
                         )
 
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-
-                        LazyColumn(modifier = Modifier.weight(1f)) {
-                            when (readingLevel) {
-                                ReadingLevel.BOOKS -> {
-                                    itemsIndexed(booksList) { _, book ->
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(vertical = 12.dp)
-                                                .clickable {
-                                                    selectedBook = book.name
-                                                    readingLevel = ReadingLevel.CHAPTERS
-                                                }
-                                        ) {
-                                            Text(text = book.name, fontSize = 16.sp, modifier = Modifier.weight(1f))
-                                            Text(text = ">", color = Color.Gray)
-                                        }
-                                        Divider()
-                                    }
-                                }
-
-                                ReadingLevel.CHAPTERS -> {
-                                    itemsIndexed((1..50).toList()) { _, ch ->
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(vertical = 12.dp)
-                                                .clickable {
-                                                    openReading(currentMode, selectedBook, ch)
-                                                    readingLevel = ReadingLevel.VERSES
-                                                }
-                                        ) {
-                                            Text(text = "Chapter $ch", fontSize = 16.sp, modifier = Modifier.weight(1f))
-                                            Text(text = ">", color = Color.Gray)
-                                        }
-                                        Divider()
-                                    }
-                                }
-
-                                ReadingLevel.VERSES -> {
-                                    itemsIndexed((1..31).toList()) { _, v ->
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
-                                        ) {
-                                            Text(text = "Verse $v", fontSize = 16.sp, modifier = Modifier.weight(1f))
-                                        }
-                                        Divider()
+                        if (versesList.isNotEmpty()) {
+                            LazyColumn(
+                                state = listState,
+                                modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)
+                            ) {
+                                itemsIndexed(versesList, key = { _, verse -> "read-${selectedBook}-${selectedChapter}-${verse.verse}" }) { _, verse ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 6.dp)
+                                            .background(
+                                                color = highlightedVerses[verse.verse] ?: Color.Transparent,
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            .combinedClickable(
+                                                onClick = { selectedVerse = verse.verse },
+                                                onLongClick = { selectedVerse = verse.verse; showHighlightColors = true }
+                                            )
+                                            .padding(vertical = 8.dp, horizontal = 10.dp),
+                                        verticalAlignment = Alignment.Top
+                                    ) {
+                                        Text(
+                                            text = "${verse.verse} ",
+                                            color = goldColor,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = fontSize.sp,
+                                            modifier = Modifier.width(30.dp)
+                                        )
+                                        Text(
+                                            text = verse.text,
+                                            color = textColor,
+                                            fontSize = fontSize.sp,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
                                     }
                                 }
                             }
-                        }
-
-                        if (readingLevel == ReadingLevel.CHAPTERS) {
-                            Button(onClick = { readingLevel = ReadingLevel.BOOKS }, modifier = Modifier.fillMaxWidth()) {
-                                Text("← Back to Books")
+                        } else {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("Loading...", color = Color.Gray)
                             }
-                        }
-                        if (readingLevel == ReadingLevel.VERSES) {
-                            Button(onClick = { readingLevel = ReadingLevel.CHAPTERS }, modifier = Modifier.fillMaxWidth()) {
-                                Text("← Back to Chapters")
-                            }
-                        }
-
-                        Button(
-                            onClick = {
-                                when (readingLevel) {
-                                    ReadingLevel.BOOKS -> readingLevel = ReadingLevel.CHAPTERS
-                                    ReadingLevel.CHAPTERS -> {
-                                        openReading(currentMode, selectedBook, 1)
-                                        readingLevel = ReadingLevel.VERSES
-                                    }
-                                    ReadingLevel.VERSES -> scope.launch { leftDrawerState.close() }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                        ) {
-                            Text("Open →")
                         }
                     }
                 }
             }
-        ) {
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = {
-                            Column {
-                                Text("EW Bible", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = textColor)
-                                Text("Grow in the Word of God, every day.", color = goldColor, fontSize = 11.sp)
-                            }
-                        },
-                        navigationIcon = {
-                            IconButton(
-                                onClick = {
-                                    scope.launch {
-                                        if (leftDrawerState.isClosed) leftDrawerState.open()
-                                        else leftDrawerState.close()
-                                    }
-                                }
-                            ) {
-                                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = textColor)
-                            }
-                        },
-                        actions = {
-                            IconButton(onClick = { showRightDrawer = !showRightDrawer }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "Settings", tint = textColor)
-                            }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = bgColor,
-                            titleContentColor = textColor
-                        )
-                    )
-                },
-                containerColor = bgColor
-            ) { padding ->
-                Column(modifier = Modifier.fillMaxSize().
+        }
+    }
+}
+
