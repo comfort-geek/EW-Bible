@@ -272,6 +272,7 @@ fun HomeScreen() {
 
     var popupRef by remember { mutableStateOf<VerseRef?>(null) }
     var popupText by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
 
     fun loadVersePopup(ref: VerseRef) {
         popupRef = ref
@@ -391,7 +392,6 @@ fun HomeScreen() {
     val cardColor = if (isDarkMode) Color(0xFF2A2A30) else Color(0xFFF0EAD9)
     val goldColor = Color(0xFFC9A227)
 
-    val listState = rememberLazyListState()
     var scrollRestored by remember { mutableStateOf(false) }
 
     LaunchedEffect(savedScrollIndex) {
@@ -847,4 +847,3 @@ fun HomeScreen() {
         }
     }
 }
-
