@@ -27,6 +27,9 @@ import com.ewbible.app.data.database.*
 import com.ewbible.app.data.sync.SyncManager
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,6 +47,10 @@ fun HomeScreen() {
     val savedBook by prefs.lastBook.collectAsState(initial = "Genesis")
     val savedChapter by prefs.lastChapter.collectAsState(initial = 1)
     val savedVerse by prefs.lastVerse.collectAsState(initial = 1)
+    val savedScrollIndex by prefs.lastScrollIndex.collectAsState(initial = 0)
+    val savedScrollOffset by prefs.lastScrollOffset.collectAsState(initial = 0)
+    val savedDailyVerseDate by prefs.dailyVerseDate.collectAsState(initial = "")
+    val savedDailyVerseRef by prefs.dailyVerseReference.collectAsState(initial = null)
 
     var isDarkMode by remember { mutableStateOf(savedDark) }
     var fontSize by remember { mutableStateOf(savedFont) }
@@ -97,8 +104,6 @@ fun HomeScreen() {
     val textColor = if (isDarkMode) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
     val secondaryText = if (isDarkMode) Color(0xFFB7B0A6) else Color(0xFF524B40)
 
-    // Use the bundled database as the source of truth for the drawer. The fallback
-    // by conventional Bible book IDs also handles assets whose testament values vary.
     val otBookEntities = booksList.filter { book ->
         val testament = book.testament.trim()
         testament.equals("OT", ignoreCase = true) || testament.startsWith("Old", ignoreCase = true) ||
@@ -138,6 +143,7 @@ fun HomeScreen() {
             matchingBook?.let {
                 selectedBook = it.name
                 selectedChapter = savedChapter.coerceAtLeast(1)
+                selectedVerse = savedVerse.coerceAtLeast(1)
             }
         }
     }
@@ -148,12 +154,46 @@ fun HomeScreen() {
         isLoggedIn = savedName != "Guest"
     }
 
-    LaunchedEffect(booksList) {
+    LaunchedEffect(booksList, savedDailyVerseDate, savedDailyVerseRef) {
+        if (booksList.isEmpty()) return@LaunchedEffect
+
+        val todayKey = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val savedDailyVerse = savedDailyVerseRef
+        val sameDay = savedDailyVerseDate == todayKey
+
+        if (sameDay && savedDailyVerse != null) {
+            val savedBookEntity = booksList.firstOrNull { it.id == savedDailyVerse.bookId }
+            if (savedBookEntity != null) {
+                val verseList = db.bibleDao().getVerses(savedBookEntity.id, savedDailyVerse.chapter).first()
+                val verse = verseList.firstOrNull { it.verse == savedDailyVerse.verse }
+                if (verse != null) {
+                    dailyVerseText = "${verse.text} - ${savedBookEntity.name} ${savedDailyVerse.chapter}:${savedDailyVerse.verse}"
+                    return@LaunchedEffect
+                }
+            }
+        }
+
         val dailyBook = booksList.firstOrNull { it.name.equals("Psalms", ignoreCase = true) || it.key.equals("Psalms", ignoreCase = true) }
         if (dailyBook != null) {
             val verses = db.bibleDao().getVerses(dailyBook.id, 119).first()
             val verse = verses.firstOrNull { it.verse == 105 }
-            if (verse != null) dailyVerseText = "${verse.text} - Psalm 119:105"
+            if (verse != null) {
+                dailyVerseText = "${verse.text} - Psalm 119:105"
+                if (savedDailyVerseDate != todayKey) {
+                    scope.launch {
+                        prefs.saveDailyVerse(todayKey, DailyVerseReference(dailyBook.id, 119, 105))
+                    }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(booksList, selectedBook, selectedChapter, currentBookId, savedBook, savedChapter, savedScrollIndex, savedScrollOffset) {
+        if (booksList.isEmpty()) return@LaunchedEffect
+        if (selectedBook.equals(savedBook, ignoreCase = true) && selectedChapter == savedChapter) {
+            val safeIndex = savedScrollIndex.coerceAtLeast(0)
+            val safeOffset = savedScrollOffset.coerceAtLeast(0)
+            listState.scrollToItem(safeIndex, safeOffset)
         }
     }
 
