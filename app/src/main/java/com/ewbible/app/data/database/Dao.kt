@@ -8,6 +8,9 @@ interface BibleDao {
     @Query("SELECT * FROM books ORDER BY id")
     fun getAllBooks(): Flow<List<BookEntity>>
 
+    @Query("SELECT COALESCE(MAX(chapter), 1) FROM verses WHERE book_id = :bookId")
+    fun getMaxChapter(bookId: Int): Flow<Int>
+
     @Query("SELECT * FROM verses WHERE book_id = :bookId AND chapter = :chapter ORDER BY verse")
     fun getVerses(bookId: Int, chapter: Int): Flow<List<VerseEntity>>
 
