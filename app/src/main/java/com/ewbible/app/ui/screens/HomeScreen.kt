@@ -188,12 +188,23 @@ fun HomeScreen() {
         }
     }
 
-    LaunchedEffect(booksList, selectedBook, selectedChapter, currentBookId, savedBook, savedChapter, savedScrollIndex, savedScrollOffset) {
-        if (booksList.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(
+        booksList,
+        selectedBook,
+        selectedChapter,
+        currentBookId,
+        savedBook,
+        savedChapter,
+        savedScrollIndex,
+        savedScrollOffset,
+        versesList.size
+    ) {
+        if (booksList.isEmpty() || versesList.isEmpty()) return@LaunchedEffect
         if (selectedBook.equals(savedBook, ignoreCase = true) && selectedChapter == savedChapter) {
             val safeIndex = savedScrollIndex.coerceAtLeast(0)
             val safeOffset = savedScrollOffset.coerceAtLeast(0)
-            listState.scrollToItem(safeIndex, safeOffset)
+            val clampedIndex = safeIndex.coerceAtMost(versesList.size - 1)
+            listState.scrollToItem(clampedIndex, safeOffset)
         }
     }
 
