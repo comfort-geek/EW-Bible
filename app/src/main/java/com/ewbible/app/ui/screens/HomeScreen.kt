@@ -249,100 +249,99 @@ fun HomeScreen() {
         else -> "Bible"
     }
 
-    ModalNavigationDrawer(
-        drawerState = rememberDrawerState(if (drawerOpen) DrawerValue.Open else DrawerValue.Closed),
-        drawerContent = {
-            ModalDrawerSheet(
-                drawerContainerColor = bgColor
+    val drawerContent: @Composable () -> Unit = {
+        ModalDrawerSheet(
+            drawerContainerColor = bgColor,
+            modifier = Modifier.fillMaxHeight().width(320.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        text = "Select Book",
-                        color = textColor,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "Select Book",
+                    color = textColor,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(12.dp))
 
-                    if (books.isEmpty()) {
-                        Text("Loading books...", color = Color.Gray)
-                    } else {
-                        val grouped = books.groupBy { it.testament }
-                        grouped.forEach { (testament, items) ->
-                            Text(
-                                text = testament,
-                                color = readingGold,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            )
-                            items.forEach { book ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            selectBook(book.name)
-                                            drawerOpen = false
-                                        }
-                                        .padding(vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = book.name,
-                                        color = if (book.name == selectedBook) readingGold else textColor,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    if (book.name == selectedBook) {
-                                        Text("●", color = readingGold)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = "Chapter ${selectedChapter}",
-                        color = textColor,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(Modifier.height(8.dp))
-
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 220.dp)
-                    ) {
-                        items((1..chapterCount).toList()) { chapter ->
+                if (books.isEmpty()) {
+                    Text("Loading books...", color = Color.Gray)
+                } else {
+                    val grouped = books.groupBy { it.testament }
+                    grouped.forEach { (testament, items) ->
+                        Text(
+                            text = testament,
+                            color = readingGold,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                        items.forEach { book ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        selectChapter(chapter)
+                                        selectBook(book.name)
                                         drawerOpen = false
                                     }
                                     .padding(vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "Chapter $chapter",
-                                    color = if (chapter == selectedChapter) readingGold else textColor,
+                                    text = book.name,
+                                    color = if (book.name == selectedBook) readingGold else textColor,
                                     modifier = Modifier.weight(1f)
                                 )
-                                if (chapter == selectedChapter) {
+                                if (book.name == selectedBook) {
                                     Text("●", color = readingGold)
                                 }
                             }
                         }
                     }
                 }
+
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    text = "Chapter ${selectedChapter}",
+                    color = textColor,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(8.dp))
+
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp)
+                ) {
+                    items((1..chapterCount).toList()) { chapter ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selectChapter(chapter)
+                                    drawerOpen = false
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Chapter $chapter",
+                                color = if (chapter == selectedChapter) readingGold else textColor,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (chapter == selectedChapter) {
+                                Text("●", color = readingGold)
+                            }
+                        }
+                    }
+                }
             }
-        },
-        gesturesEnabled = true
-    ) {
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             containerColor = bgColor,
             topBar = {
@@ -710,7 +709,26 @@ fun HomeScreen() {
                 }
             }
         }
-    )
+
+        if (drawerOpen) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.35f))
+                    .clickable { drawerOpen = false }
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(300.dp)
+                        .align(Alignment.CenterStart),
+                    color = bgColor
+                ) {
+                    drawerContent()
+                }
+            }
+        }
+    }
 
     if (dialog == "daily") {
         AlertDialog(
