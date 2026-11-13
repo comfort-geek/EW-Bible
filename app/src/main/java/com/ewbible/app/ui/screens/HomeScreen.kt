@@ -143,7 +143,6 @@ fun HomeScreen() {
             matchingBook?.let {
                 selectedBook = it.name
                 selectedChapter = savedChapter.coerceAtLeast(1)
-                selectedVerse = savedVerse.coerceAtLeast(1)
             }
         }
     }
@@ -154,33 +153,16 @@ fun HomeScreen() {
         isLoggedIn = savedName != "Guest"
     }
 
-    LaunchedEffect(booksList, savedDailyVerseDate, savedDailyVerseRef) {
-        if (booksList.isEmpty()) return@LaunchedEffect
-
+    LaunchedEffect(booksList) {
         val todayKey = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-        val savedDailyVerse = savedDailyVerseRef
-        val sameDay = savedDailyVerseDate == todayKey
-
-        if (sameDay && savedDailyVerse != null) {
-            val savedBookEntity = booksList.firstOrNull { it.id == savedDailyVerse.bookId }
-            if (savedBookEntity != null) {
-                val verseList = db.bibleDao().getVerses(savedBookEntity.id, savedDailyVerse.chapter).first()
-                val verse = verseList.firstOrNull { it.verse == savedDailyVerse.verse }
-                if (verse != null) {
-                    dailyVerseText = "${verse.text} - ${savedBookEntity.name} ${savedDailyVerse.chapter}:${savedDailyVerse.verse}"
-                    return@LaunchedEffect
-                }
-            }
-        }
-
         val dailyBook = booksList.firstOrNull { it.name.equals("Psalms", ignoreCase = true) || it.key.equals("Psalms", ignoreCase = true) }
         if (dailyBook != null) {
             val verses = db.bibleDao().getVerses(dailyBook.id, 119).first()
             val verse = verses.firstOrNull { it.verse == 105 }
             if (verse != null) {
                 dailyVerseText = "${verse.text} - Psalm 119:105"
-                if (savedDailyVerseDate != todayKey) {
-                    scope.launch {
+                scope.launch {
+                    if (savedDailyVerseDate != todayKey) {
                         prefs.saveDailyVerse(todayKey, DailyVerseReference(dailyBook.id, 119, 105))
                     }
                 }
@@ -249,114 +231,32 @@ fun HomeScreen() {
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet(
-                drawerShape = RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp),
-                modifier = Modifier.width(300.dp),
-                drawerContainerColor = background,
-                drawerContentColor = textColor
-            ) {
-                Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                    Text("Books", color = textColor, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    if (booksList.isEmpty()) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = gold)
-                        }
-                    } else {
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            item {
-                                Text("Old Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                Spacer(modifier = Modifier.height(8.dp))
-                            }
-                            items(otBookEntities, key = { it.id }) { book ->
-                                val isSelected = selectedBook == book.name
-                                val isExpanded = expandedBook == book.name
-                                val chapterCount by db.bibleDao().getMaxChapter(book.id).collectAsState(initial = 1)
-                                Column {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().clickable {
-                                            expandedBook = if (isExpanded) null else book.name
-                                            if (!isExpanded) {
-                                                selectedBook = book.name
-                                                selectedChapter = 1
-                                            }
-                                        }.padding(vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(book.name, color = if (isSelected) gold else textColor, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                                        Text(if (isExpanded) "▾" else "▸", color = secondaryText)
-                                    }
-                                    if (isExpanded) {
-                                        FlowRow(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            for (chapter in 1..chapterCount.coerceAtLeast(1)) {
-                                                val selected = selectedBook == book.name && selectedChapter == chapter
-                                                Text(
-                                                    text = "Ch $chapter",
-                                                    color = if (selected) Color.White else textColor,
-                                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                                    modifier = Modifier.background(if (selected) gold else panel, RoundedCornerShape(8.dp))
-                                                        .clickable { openBook(book.name, chapter); selectedTab = "Bible" }
-                                                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                                                    fontSize = 12.sp
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            item {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text("New Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                Spacer(modifier = Modifier.height(8.dp))
-                            }
-                            items(ntBookEntities, key = { it.id }) { book ->
-                                val isSelected = selectedBook == book.name
-                                val isExpanded = expandedBook == book.name
-                                val chapterCount by db.bibleDao().getMaxChapter(book.id).collectAsState(initial = 1)
-                                Column {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().clickable {
-                                            expandedBook = if (isExpanded) null else book.name
-                                            if (!isExpanded) {
-                                                selectedBook = book.name
-                                                selectedChapter = 1
-                                            }
-                                        }.padding(vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(book.name, color = if (isSelected) gold else textColor, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                                        Text(if (isExpanded) "▾" else "▸", color = secondaryText)
-                                    }
-                                    if (isExpanded) {
-                                        FlowRow(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            for (chapter in 1..chapterCount.coerceAtLeast(1)) {
-                                                val selected = selectedBook == book.name && selectedChapter == chapter
-                                                Text(
-                                                    text = "Ch $chapter",
-                                                    color = if (selected) Color.White else textColor,
-                                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                                    modifier = Modifier.background(if (selected) gold else panel, RoundedCornerShape(8.dp))
-                                                        .clickable { openBook(book.name, chapter); selectedTab = "Bible" }
-                                                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                                                    fontSize = 12.sp
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            BookDrawer(
+                booksList = booksList,
+                otBookEntities = otBookEntities,
+                ntBookEntities = ntBookEntities,
+                selectedBook = selectedBook,
+                selectedChapter = selectedChapter,
+                expandedBook = expandedBook,
+                background = background,
+                textColor = textColor,
+                panel = panel,
+                gold = gold,
+                secondaryText = secondaryText,
+                onOpenBook = { bookName, chapter ->
+                    openBook(bookName, chapter)
+                    selectedTab = "Bible"
+                },
+                onSelectBook = { bookName ->
+                    expandedBook = bookName
+                    selectedBook = bookName
+                    selectedChapter = 1
+                },
+                onToggleBook = { bookName ->
+                    expandedBook = if (expandedBook == bookName) null else bookName
+                },
+                db = db
+            )
         }
     ) {
         Box(modifier = Modifier.fillMaxSize().background(background)) {
@@ -400,117 +300,389 @@ fun HomeScreen() {
                 }
 
                 when (selectedTab) {
-                    "Bible" -> {
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            Text("$selectedBook $selectedChapter", color = textColor, fontWeight = FontWeight.Bold, fontSize = 20.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp))
-                            LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-                                summary?.let { s -> item {
-                                    Card(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp), colors = CardDefaults.cardColors(containerColor = panel)) {
-                                        Column(modifier = Modifier.padding(16.dp)) {
-                                            Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                            Spacer(modifier = Modifier.height(8.dp)); Text(s.summary, color = textColor, fontSize = fontSize.sp)
-                                            Spacer(modifier = Modifier.height(8.dp)); Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                            Text(s.whatHappened, color = textColor, fontSize = fontSize.sp)
-                                            Spacer(modifier = Modifier.height(8.dp)); Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                            Text(s.application, color = textColor, fontSize = fontSize.sp)
-                                        }
-                                    }
-                                } }
-                                itemsIndexed(versesList, key = { _, verse -> "${selectedBook}-${selectedChapter}-${verse.verse}" }) { _, verse ->
-                                    val verseBg = currentHighlightMap[verse.verse] ?: Color.Transparent
-                                    Row(modifier = Modifier.fillMaxWidth().background(verseBg, RoundedCornerShape(8.dp)).combinedClickable(
-                                        onClick = { selectedVerse = verse.verse; saveReadingProgress() },
-                                        onLongClick = { selectedVerse = verse.verse; showHighlightColors = true }
-                                    ).padding(vertical = 10.dp, horizontal = 8.dp)) {
-                                        Text("${verse.verse}", color = gold, fontWeight = FontWeight.Bold, fontSize = fontSize.sp, modifier = Modifier.width(32.dp))
-                                        Text(verse.text, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
-                                    }
-                                }
-                            }
+                    "Bible" -> BibleContent(
+                        selectedBook = selectedBook,
+                        selectedChapter = selectedChapter,
+                        summary = summary,
+                        versesList = versesList,
+                        currentHighlightMap = currentHighlightMap,
+                        fontSize = fontSize,
+                        gold = gold,
+                        panel = panel,
+                        textColor = textColor,
+                        onVerseClick = { verse ->
+                            selectedVerse = verse
+                            saveReadingProgress()
+                        },
+                        onVerseLongClick = { verse ->
+                            selectedVerse = verse
+                            showHighlightColors = true
                         }
-                    }
-                    "Open EW" -> LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 8.dp)) {
-                        item {
-                            if (commentaryHtml.isEmpty()) Text("No commentary available for this chapter.", color = secondaryText, fontSize = fontSize.sp)
-                            else Text(commentaryHtml, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
+                    )
+                    "Open EW" -> OpenEWContent(
+                        commentaryHtml = commentaryHtml,
+                        fontSize = fontSize,
+                        textColor = textColor,
+                        secondaryText = secondaryText
+                    )
+                    "Search" -> SearchContent(
+                        searchQuery = searchQuery,
+                        searchFilter = searchFilter,
+                        filteredSearchResults = filteredSearchResults,
+                        textColor = textColor,
+                        gold = gold,
+                        onQueryChange = { searchQuery = it },
+                        onFilterChange = { searchFilter = it },
+                        onOpenBook = { bookName ->
+                            openBook(bookName, 1)
+                            selectedTab = "Bible"
                         }
-                    }
-                    "Search" -> Column(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 10.dp)) {
-                        OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, label = { Text("Search Bible...") }, modifier = Modifier.fillMaxWidth())
-                        Spacer(modifier = Modifier.height(12.dp))
-                        FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf("All", "Gospel", "Prophecy", "Old Testament", "New Testament").forEach { filter ->
-                                FilterChip(selected = searchFilter == filter, onClick = { searchFilter = filter }, label = { Text(filter, fontSize = 12.sp) })
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            items(filteredSearchResults) { bookName ->
-                                Text(bookName, color = textColor, fontSize = fontSize.sp, modifier = Modifier.fillMaxWidth().clickable { openBook(bookName, 1); selectedTab = "Bible" }.padding(vertical = 8.dp))
-                            }
-                        }
-                    }
+                    )
                 }
 
                 if (showNotes) {
-                    Card(modifier = Modifier.fillMaxWidth().padding(16.dp), colors = CardDefaults.cardColors(containerColor = panel)) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text("Notes", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedTextField(value = noteText, onValueChange = { noteText = it }, label = { Text("Write your note...") }, modifier = Modifier.fillMaxWidth())
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Button(onClick = {
-                                val verseNum = selectedVerse ?: 1
-                                scope.launch {
-                                    db.bibleDao().saveNote(NoteEntity(bookId = currentBookId, chapter = selectedChapter, verse = verseNum, noteText = noteText, timestamp = System.currentTimeMillis()))
-                                    if (isLoggedIn) syncManager.uploadNote(currentBookId, selectedChapter, verseNum, noteText)
-                                    noteText = ""
-                                }
-                            }, modifier = Modifier.fillMaxWidth()) { Text("Save Note") }
+                    NotesCard(
+                        noteText = noteText,
+                        panel = panel,
+                        gold = gold,
+                        textColor = textColor,
+                        onNoteTextChange = { noteText = it },
+                        onSaveNote = {
+                            val verseNum = selectedVerse ?: 1
+                            scope.launch {
+                                db.bibleDao().saveNote(
+                                    NoteEntity(
+                                        bookId = currentBookId,
+                                        chapter = selectedChapter,
+                                        verse = verseNum,
+                                        noteText = noteText,
+                                        timestamp = System.currentTimeMillis()
+                                    )
+                                )
+                                if (isLoggedIn) syncManager.uploadNote(currentBookId, selectedChapter, verseNum, noteText)
+                                noteText = ""
+                            }
                         }
-                    }
+                    )
                 }
 
                 if (showHighlightColors) {
-                    Card(modifier = Modifier.fillMaxWidth().padding(16.dp), colors = CardDefaults.cardColors(containerColor = panel)) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text("Highlight Verse ${selectedVerse ?: 1}", color = gold, fontWeight = FontWeight.Bold)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                                listOf(Color.Yellow, Color.Green, Color(0xFFFFB6C1), Color.Cyan, Color(0xFFFFA500)).forEach { color ->
-                                    Box(modifier = Modifier.size(34.dp).background(color, RoundedCornerShape(8.dp)).clickable {
-                                        selectedVerse?.let { verse ->
-                                            scope.launch {
-                                                db.bibleDao().saveHighlight(HighlightEntity(bookId = currentBookId, chapter = selectedChapter, verse = verse, color = color.value.toString()))
-                                                if (isLoggedIn) syncManager.uploadHighlight(currentBookId, selectedChapter, verse, color.value.toString())
-                                            }
-                                        }
-                                        showHighlightColors = false
-                                    })
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
-                            TextButton(onClick = {
-                                selectedVerse?.let { verse ->
-                                    scope.launch {
-                                        db.bibleDao().deleteHighlight(currentBookId, selectedChapter, verse)
-                                        if (isLoggedIn) syncManager.deleteHighlight(currentBookId, selectedChapter, verse)
-                                    }
-                                }
-                                showHighlightColors = false
-                            }) { Text("Remove Highlight") }
-                        }
-                    }
+                    HighlightCard(
+                        selectedVerse = selectedVerse,
+                        currentBookId = currentBookId,
+                        selectedChapter = selectedChapter,
+                        panel = panel,
+                        gold = gold,
+                        textColor = textColor,
+                        db = db,
+                        isLoggedIn = isLoggedIn,
+                        syncManager = syncManager,
+                        onDismiss = { showHighlightColors = false }
+                    )
                 }
             }
             if (dailyVerseDialog) {
-                AlertDialog(
-                    onDismissRequest = { dailyVerseDialog = false },
-                    title = { Text("Daily Verse", color = gold, fontWeight = FontWeight.Bold) },
-                    text = { Text(dailyVerseText, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 8).sp, textAlign = TextAlign.Center) },
-                    confirmButton = { TextButton(onClick = { dailyVerseDialog = false }) { Text("Close") } }
+                DailyVerseDialog(
+                    dailyVerseText = dailyVerseText,
+                    gold = gold,
+                    textColor = textColor,
+                    fontSize = fontSize,
+                    onDismiss = { dailyVerseDialog = false }
                 )
             }
         }
     }
+}
+
+@Composable
+private fun BookDrawer(
+    booksList: List<BookEntity>,
+    otBookEntities: List<BookEntity>,
+    ntBookEntities: List<BookEntity>,
+    selectedBook: String,
+    selectedChapter: Int,
+    expandedBook: String?,
+    background: Color,
+    textColor: Color,
+    panel: Color,
+    gold: Color,
+    secondaryText: Color,
+    onOpenBook: (String, Int) -> Unit,
+    onSelectBook: (String) -> Unit,
+    onToggleBook: (String) -> Unit,
+    db: AppDatabase
+) {
+    ModalDrawerSheet(
+        drawerShape = RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp),
+        modifier = Modifier.width(300.dp),
+        drawerContainerColor = background,
+        drawerContentColor = textColor
+    ) {
+        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            Text("Books", color = textColor, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(12.dp))
+            if (booksList.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = gold)
+                }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    item {
+                        Text("Old Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    items(otBookEntities, key = { it.id }) { book ->
+                        val isSelected = selectedBook == book.name
+                        val isExpanded = expandedBook == book.name
+                        val chapterCount by db.bibleDao().getMaxChapter(book.id).collectAsState(initial = 1)
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    onToggleBook(book.name)
+                                    if (!isExpanded) onSelectBook(book.name)
+                                }.padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(book.name, color = if (isSelected) gold else textColor, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                                Text(if (isExpanded) "▾" else "▸", color = secondaryText)
+                            }
+                            if (isExpanded) {
+                                FlowRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    for (chapter in 1..chapterCount.coerceAtLeast(1)) {
+                                        val selected = selectedBook == book.name && selectedChapter == chapter
+                                        Text(
+                                            text = "Ch $chapter",
+                                            color = if (selected) Color.White else textColor,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                            modifier = Modifier.background(if (selected) gold else panel, RoundedCornerShape(8.dp))
+                                                .clickable { onOpenBook(book.name, chapter) }
+                                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("New Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    items(ntBookEntities, key = { it.id }) { book ->
+                        val isSelected = selectedBook == book.name
+                        val isExpanded = expandedBook == book.name
+                        val chapterCount by db.bibleDao().getMaxChapter(book.id).collectAsState(initial = 1)
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    onToggleBook(book.name)
+                                    if (!isExpanded) onSelectBook(book.name)
+                                }.padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(book.name, color = if (isSelected) gold else textColor, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                                Text(if (isExpanded) "▾" else "▸", color = secondaryText)
+                            }
+                            if (isExpanded) {
+                                FlowRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    for (chapter in 1..chapterCount.coerceAtLeast(1)) {
+                                        val selected = selectedBook == book.name && selectedChapter == chapter
+                                        Text(
+                                            text = "Ch $chapter",
+                                            color = if (selected) Color.White else textColor,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                            modifier = Modifier.background(if (selected) gold else panel, RoundedCornerShape(8.dp))
+                                                .clickable { onOpenBook(book.name, chapter) }
+                                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BibleContent(
+    selectedBook: String,
+    selectedChapter: Int,
+    summary: SummaryEntity?,
+    versesList: List<VerseEntity>,
+    currentHighlightMap: Map<Int, Color>,
+    fontSize: Float,
+    gold: Color,
+    panel: Color,
+    textColor: Color,
+    onVerseClick: (Int) -> Unit,
+    onVerseLongClick: (Int) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Text("$selectedBook $selectedChapter", color = textColor, fontWeight = FontWeight.Bold, fontSize = 20.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp))
+        LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+            summary?.let { s -> item {
+                Card(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp), colors = CardDefaults.cardColors(containerColor = panel)) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Spacer(modifier = Modifier.height(8.dp)); Text(s.summary, color = textColor, fontSize = fontSize.sp)
+                        Spacer(modifier = Modifier.height(8.dp)); Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(s.whatHappened, color = textColor, fontSize = fontSize.sp)
+                        Spacer(modifier = Modifier.height(8.dp)); Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(s.application, color = textColor, fontSize = fontSize.sp)
+                    }
+                }
+            } }
+            itemsIndexed(versesList, key = { _, verse -> "${selectedBook}-${selectedChapter}-${verse.verse}" }) { _, verse ->
+                val verseBg = currentHighlightMap[verse.verse] ?: Color.Transparent
+                Row(modifier = Modifier.fillMaxWidth().background(verseBg, RoundedCornerShape(8.dp)).combinedClickable(
+                    onClick = { onVerseClick(verse.verse) },
+                    onLongClick = { onVerseLongClick(verse.verse) }
+                ).padding(vertical = 10.dp, horizontal = 8.dp)) {
+                    Text("${verse.verse}", color = gold, fontWeight = FontWeight.Bold, fontSize = fontSize.sp, modifier = Modifier.width(32.dp))
+                    Text(verse.text, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OpenEWContent(
+    commentaryHtml: String,
+    fontSize: Float,
+    textColor: Color,
+    secondaryText: Color
+) {
+    LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 8.dp)) {
+        item {
+            if (commentaryHtml.isEmpty()) {
+                Text("No commentary available for this chapter.", color = secondaryText, fontSize = fontSize.sp)
+            } else {
+                Text(commentaryHtml, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchContent(
+    searchQuery: String,
+    searchFilter: String,
+    filteredSearchResults: List<String>,
+    textColor: Color,
+    gold: Color,
+    onQueryChange: (String) -> Unit,
+    onFilterChange: (String) -> Unit,
+    onOpenBook: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 10.dp)) {
+        OutlinedTextField(value = searchQuery, onValueChange = onQueryChange, label = { Text("Search Bible...") }, modifier = Modifier.fillMaxWidth())
+        Spacer(modifier = Modifier.height(12.dp))
+        FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("All", "Gospel", "Prophecy", "Old Testament", "New Testament").forEach { filter ->
+                FilterChip(selected = searchFilter == filter, onClick = { onFilterChange(filter) }, label = { Text(filter, fontSize = 12.sp) })
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(filteredSearchResults) { bookName ->
+                Text(bookName, color = textColor, fontSize = 14.sp, modifier = Modifier.fillMaxWidth().clickable { onOpenBook(bookName) }.padding(vertical = 8.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun NotesCard(
+    noteText: String,
+    panel: Color,
+    gold: Color,
+    textColor: Color,
+    onNoteTextChange: (String) -> Unit,
+    onSaveNote: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth().padding(16.dp), colors = CardDefaults.cardColors(containerColor = panel)) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("Notes", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(value = noteText, onValueChange = onNoteTextChange, label = { Text("Write your note...") }, modifier = Modifier.fillMaxWidth())
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(onClick = onSaveNote, modifier = Modifier.fillMaxWidth()) { Text("Save Note") }
+        }
+    }
+}
+
+@Composable
+private fun HighlightCard(
+    selectedVerse: Int?,
+    currentBookId: Int,
+    selectedChapter: Int,
+    panel: Color,
+    gold: Color,
+    textColor: Color,
+    db: AppDatabase,
+    isLoggedIn: Boolean,
+    syncManager: SyncManager,
+    onDismiss: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth().padding(16.dp), colors = CardDefaults.cardColors(containerColor = panel)) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("Highlight Verse ${selectedVerse ?: 1}", color = gold, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                listOf(Color.Yellow, Color.Green, Color(0xFFFFB6C1), Color.Cyan, Color(0xFFFFA500)).forEach { color ->
+                    Box(modifier = Modifier.size(34.dp).background(color, RoundedCornerShape(8.dp)).clickable {
+                        selectedVerse?.let { verse ->
+                            val saveScope = rememberCoroutineScope()
+                            saveScope.launch {
+                                db.bibleDao().saveHighlight(HighlightEntity(bookId = currentBookId, chapter = selectedChapter, verse = verse, color = color.value.toString()))
+                                if (isLoggedIn) syncManager.uploadHighlight(currentBookId, selectedChapter, verse, color.value.toString())
+                            }
+                        }
+                        onDismiss()
+                    })
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            TextButton(onClick = {
+                selectedVerse?.let { verse ->
+                    val deleteScope = rememberCoroutineScope()
+                    deleteScope.launch {
+                        db.bibleDao().deleteHighlight(currentBookId, selectedChapter, verse)
+                        if (isLoggedIn) syncManager.deleteHighlight(currentBookId, selectedChapter, verse)
+                    }
+                }
+                onDismiss()
+            }) { Text("Remove Highlight") }
+        }
+    }
+}
+
+@Composable
+private fun DailyVerseDialog(
+    dailyVerseText: String,
+    gold: Color,
+    textColor: Color,
+    fontSize: Float,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Daily Verse", color = gold, fontWeight = FontWeight.Bold) },
+        text = { Text(dailyVerseText, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 8).sp, textAlign = TextAlign.Center) },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
 }
