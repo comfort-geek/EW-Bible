@@ -48,6 +48,8 @@ fun HomeScreen() {
     var isDarkMode by remember { mutableStateOf(savedDark) }
     var fontSize by remember { mutableStateOf(savedFont) }
     var isLoggedIn by remember { mutableStateOf(savedName != "Guest") }
+    var searchQuery by remember { mutableStateOf("") }
+    var searchFilter by remember { mutableStateOf("All") }
 
     var selectedBook by remember { mutableStateOf(savedBook) }
     var selectedChapter by remember { mutableStateOf(savedChapter) }
@@ -115,7 +117,12 @@ fun HomeScreen() {
         "Habakkuk","Malachi","Jonah","Nahum","Obadiah"
     )
 
-    val availableBooks = booksList.ifEmpty { otBooks + ntBooks }.sortedBy { it }
+    val availableBooks: List<String> = if (booksList.isEmpty()) {
+        (otBooks + ntBooks).sorted()
+    } else {
+        booksList.map { it.name }.sorted()
+    }
+
     val filteredSearchResults = remember(searchQuery, searchFilter, availableBooks) {
         val q = searchQuery.trim()
         val list = when (searchFilter) {
