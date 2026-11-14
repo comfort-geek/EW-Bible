@@ -9,6 +9,17 @@ plugins {
 android {
     namespace = "com.ewbible.app"
     compileSdk = 36
+
+    // FIX: Use fixed debug.keystore from repo root, so SHA-1 never changes on GitHub
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.ewbible.app"
         minSdk = 24
@@ -17,6 +28,9 @@ android {
         versionName = "1.0"
     }
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release { isMinifyEnabled = false }
     }
     compileOptions {
