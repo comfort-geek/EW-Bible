@@ -76,7 +76,7 @@ fun BibleContent(
                         }
                     }
                 } }
-                itemsIndexed(versesList, key = { _, verse -> verse.id }) { _, verse ->
+                itemsIndexed(versesList, key = { _, verse -> verse.verse }) { _, verse ->
                     val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
                     Row(
                         modifier = Modifier.fillMaxWidth()
