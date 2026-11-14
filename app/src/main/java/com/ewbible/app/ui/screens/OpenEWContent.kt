@@ -1,16 +1,18 @@
 package com.ewbible.app.ui.screens
 
+import android.graphics.Color as AndroidColor
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
-import android.graphics.Color as AndroidColor
-import android.webkit.WebView
-import android.webkit.WebViewClient
 
 @Composable
 fun OpenEWContent(
@@ -22,7 +24,11 @@ fun OpenEWContent(
     val renderedHtml = if (commentaryHtml.isBlank()) {
         "<p class=\"empty\">No commentary available for this chapter.</p>"
     } else {
-        commentaryHtml
+        // If commentary is a full <html> doc, strip it - otherwise nested <html> = blank
+        val t = commentaryHtml.trim()
+        if (t.contains("<body", ignoreCase = true)) {
+            t.substringAfter("<body", "").substringAfter(">", "").substringBeforeLast("</body>", t)
+        } else t
     }
     val textColorCss = "#%06X".format(0xFFFFFF and textColor.toArgb())
     val secondaryColorCss = "#%06X".format(0xFFFFFF and secondaryText.toArgb())
@@ -33,6 +39,8 @@ fun OpenEWContent(
         </head><body>$renderedHtml</body></html>
     """.trimIndent()
 
+    // Only reload WebView when html actually changes
+    val lastLoaded = remember { mutableStateOf("") }
     AndroidView(
         modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
         factory = { context ->
@@ -43,6 +51,11 @@ fun OpenEWContent(
                 webViewClient = WebViewClient()
             }
         },
-        update = { webView -> webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null) },
+        update = { webView ->
+            if (lastLoaded.value != html) {
+                lastLoaded.value = html
+                webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
+            }
+        },
     )
 }
