@@ -19,6 +19,9 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun NotesCard(
+    selectedBook: String,
+    selectedChapter: Int,
+    selectedVerse: Int?,
     noteText: String,
     panel: Color,
     gold: Color,
@@ -31,17 +34,17 @@ fun NotesCard(
         colors = CardDefaults.cardColors(containerColor = panel),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Text("Notes", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text("Notes - $selectedBook $selectedChapter:${selectedVerse ?: 1}", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = noteText,
                 onValueChange = onNoteTextChange,
                 label = { Text("Write your note...") },
                 modifier = Modifier.fillMaxWidth(),
+                minLines = 3,
             )
             Spacer(modifier = Modifier.height(8.dp))
             Button(onClick = onSaveNote, modifier = Modifier.fillMaxWidth()) { Text("Save Note") }
         }
     }
 }
-
