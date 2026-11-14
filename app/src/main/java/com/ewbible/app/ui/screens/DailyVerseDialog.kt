@@ -24,4 +24,3 @@ fun DailyVerseDialog(
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
 }
-
