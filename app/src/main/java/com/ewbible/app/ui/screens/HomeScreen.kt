@@ -200,7 +200,6 @@ fun HomeScreen() {
         selectedVerse = savedVerse.coerceAtLeast(1)
     }
 
-    // FIXED: Real Firebase check, not just prefs
     LaunchedEffect(savedDark, savedFont, savedName) {
         isDarkMode = savedDark
         fontSize = savedFont
@@ -208,6 +207,7 @@ fun HomeScreen() {
         if (!googleAuth.isLoggedIn() && savedName != "Guest") {
             prefs.saveUser("Guest", "")
         }
+        if (isLoggedIn) syncFromCloud()
     }
 
     LaunchedEffect(booksList, savedDailyVerseDate, savedDailyVerseRef) {
@@ -249,6 +249,7 @@ fun HomeScreen() {
         scope.launch {
             prefs.saveReading("World English Bible", bookName, chapter, 1)
             prefs.saveScroll(0, 0)
+            if (isLoggedIn) syncManager.uploadProgress("World English Bible", bookName, chapter, 1, 0, 0)
             listState.scrollToItem(0)
             drawerState.close()
         }
@@ -259,10 +260,10 @@ fun HomeScreen() {
         scope.launch {
             prefs.saveReading("World English Bible", selectedBook, selectedChapter, verse)
             prefs.saveScroll(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+            if (isLoggedIn) syncManager.uploadProgress("World English Bible", selectedBook, selectedChapter, verse, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
         }
     }
 
-    // FIXED: No more double-Result bug
     fun handleGoogleLogin() {
         scope.launch {
             googleAuth.signInWithGoogle().onSuccess { data ->
@@ -270,6 +271,7 @@ fun HomeScreen() {
                 val email = data.substringAfter('|', "")
                 prefs.saveUser(name, email)
                 isLoggedIn = true
+                syncFromCloud()
             }.onFailure {
                 isLoggedIn = false
             }
@@ -281,6 +283,31 @@ fun HomeScreen() {
             googleAuth.signOut()
             prefs.saveUser("Guest", "")
             isLoggedIn = false
+        }
+    }
+
+    // NEW: Download from Firestore -> Local Room
+    fun syncFromCloud() {
+        scope.launch {
+            syncManager.getHighlights().forEach { cloud ->
+                db.bibleDao().saveHighlight(
+                    HighlightEntity(bookId = cloud.bookId, chapter = cloud.chapter, verse = cloud.verse, color = cloud.color)
+                )
+            }
+            syncManager.getNotes().forEach { cloud ->
+                db.bibleDao().saveNote(
+                    NoteEntity(bookId = cloud.bookId, chapter = cloud.chapter, verse = cloud.verse, noteText = cloud.noteText, timestamp = cloud.timestamp)
+                )
+            }
+            syncManager.getProgress()?.let { p ->
+                if (booksList.any { it.name == p.book }) {
+                    selectedBook = p.book
+                    selectedChapter = p.chapter
+                    selectedVerse = p.verse
+                    prefs.saveReading(p.mode, p.book, p.chapter, p.verse)
+                    prefs.saveScroll(p.scrollIndex, p.scrollOffset)
+                }
+            }
         }
     }
 
@@ -305,6 +332,7 @@ fun HomeScreen() {
         val verse = selectedVerse ?: return
         scope.launch {
             db.bibleDao().deleteHighlight(currentBookId, selectedChapter, verse)
+            if (isLoggedIn) syncManager.deleteHighlight(currentBookId, selectedChapter, verse)
             showHighlightColors = false
         }
     }
@@ -346,7 +374,6 @@ fun HomeScreen() {
                         Icon(Icons.Default.MoreVert, contentDescription = "Settings", tint = textColor)
                     }
                     DropdownMenu(expanded = settingsOpen, onDismissRequest = { settingsOpen = false }) {
-                        // FIXED: Now shows Log out when logged in
                         DropdownMenuItem(text = { Text(if (isLoggedIn) "Log out" else "Log in with Google") }, onClick = { settingsOpen = false; if (isLoggedIn) handleGoogleLogout() else handleGoogleLogin() })
                         DropdownMenuItem(text = { Text(if (isDarkMode) "Light mode" else "Dark mode") }, onClick = { settingsOpen = false; isDarkMode = !isDarkMode })
                         DropdownMenuItem(
