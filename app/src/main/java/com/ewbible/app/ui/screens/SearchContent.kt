@@ -2,6 +2,7 @@ package com.ewbible.app.ui.screens
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +16,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -37,6 +39,7 @@ fun SearchContent(
             onValueChange = onQueryChange,
             label = { Text("Search Bible...") },
             modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
         )
         Spacer(modifier = Modifier.height(12.dp))
         FlowRow(
@@ -53,16 +56,25 @@ fun SearchContent(
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(filteredSearchResults) { bookName ->
+        if (filteredSearchResults.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    bookName,
+                    if (searchQuery.isBlank()) "Type to search books" else "No results for \"$searchQuery\"",
                     color = textColor,
-                    fontSize = 14.sp,
-                    modifier = Modifier.fillMaxWidth().clickable { onOpenBook(bookName) }.padding(vertical = 8.dp),
+                    fontSize = 14.sp
                 )
+            }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(filteredSearchResults, key = { it }) { bookName ->
+                    Text(
+                        bookName,
+                        color = textColor,
+                        fontSize = 14.sp,
+                        modifier = Modifier.fillMaxWidth().clickable { onOpenBook(bookName) }.padding(vertical = 10.dp),
+                    )
+                }
             }
         }
     }
 }
-
