@@ -19,19 +19,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+data class SearchResult(val bookName: String, val bookId: Int, val chapter: Int, val verse: Int, val text: String)
 
 @Composable
 fun SearchContent(
     searchQuery: String,
     searchFilter: String,
     filteredSearchResults: List<String>,
+    verseResults: List<SearchResult>,
     textColor: Color,
     gold: Color,
     onQueryChange: (String) -> Unit,
     onFilterChange: (String) -> Unit,
     onOpenBook: (String) -> Unit,
+    onOpenVerse: (String, Int, Int) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 10.dp)) {
         OutlinedTextField(
@@ -56,23 +61,46 @@ fun SearchContent(
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
-        if (filteredSearchResults.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    if (searchQuery.isBlank()) "Type to search books" else "No results for \"$searchQuery\"",
-                    color = textColor,
-                    fontSize = 14.sp
-                )
+        val showVerses = searchQuery.trim().length >= 2
+        if (!showVerses) {
+            if (filteredSearchResults.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Type 2+ letters to search verse text", color = textColor, fontSize = 14.sp)
+                }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(filteredSearchResults, key = { it }) { bookName ->
+                        Text(
+                            bookName,
+                            color = textColor,
+                            fontSize = 14.sp,
+                            modifier = Modifier.fillMaxWidth().clickable { onOpenBook(bookName) }.padding(vertical = 10.dp),
+                        )
+                    }
+                }
             }
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(filteredSearchResults, key = { it }) { bookName ->
-                    Text(
-                        bookName,
-                        color = textColor,
-                        fontSize = 14.sp,
-                        modifier = Modifier.fillMaxWidth().clickable { onOpenBook(bookName) }.padding(vertical = 10.dp),
-                    )
+            if (verseResults.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("No verses found for \"$searchQuery\"", color = textColor, fontSize = 14.sp)
+                }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(verseResults, key = { "${it.bookId}-${it.chapter}-${it.verse}" }) { result ->
+                        Column(
+                            modifier = Modifier.fillMaxWidth()
+                                .clickable { onOpenVerse(result.bookName, result.chapter, result.verse) }
+                                .padding(vertical = 10.dp)
+                        ) {
+                            Text(
+                                "${result.bookName} ${result.chapter}:${result.verse}",
+                                color = gold,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                            Text(result.text, color = textColor, fontSize = 14.sp)
+                        }
+                    }
                 }
             }
         }
