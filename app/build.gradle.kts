@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "com.ewbible.app"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig {
         applicationId = "com.ewbible.app"
         minSdk = 24
