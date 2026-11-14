@@ -112,11 +112,38 @@ fun HomeScreen() {
     }
 
     var summary by remember(selectedBook, selectedChapter) { mutableStateOf<SummaryEntity?>(null) }
+    var commentaryHtml by remember(selectedBook, selectedChapter) { mutableStateOf("") }
+
+    // FIX: Defined BEFORE any LaunchedEffect that calls it
+    // Download from Firestore -> Local Room
+    fun syncFromCloud() {
+        scope.launch {
+            syncManager.getHighlights().forEach { cloud ->
+                db.bibleDao().saveHighlight(
+                    HighlightEntity(bookId = cloud.bookId, chapter = cloud.chapter, verse = cloud.verse, color = cloud.color)
+                )
+            }
+            syncManager.getNotes().forEach { cloud ->
+                db.bibleDao().saveNote(
+                    NoteEntity(bookId = cloud.bookId, chapter = cloud.chapter, verse = cloud.verse, noteText = cloud.noteText, timestamp = cloud.timestamp)
+                )
+            }
+            syncManager.getProgress()?.let { p ->
+                if (booksList.any { it.name == p.book }) {
+                    selectedBook = p.book
+                    selectedChapter = p.chapter
+                    selectedVerse = p.verse
+                    prefs.saveReading(p.mode, p.book, p.chapter, p.verse)
+                    prefs.saveScroll(p.scrollIndex, p.scrollOffset)
+                }
+            }
+        }
+    }
+
     LaunchedEffect(selectedBook, selectedChapter, currentBookId) {
         summary = db.bibleDao().getSummary(currentBookId, selectedChapter)
     }
 
-    var commentaryHtml by remember(selectedBook, selectedChapter) { mutableStateOf("") }
     LaunchedEffect(selectedBook, selectedChapter, currentBookId, selectedTab) {
         if (selectedTab == "Open EW") {
             commentaryHtml = db.bibleDao().getCommentary(currentBookId, selectedChapter)?.getHtml().orEmpty()
@@ -283,31 +310,6 @@ fun HomeScreen() {
             googleAuth.signOut()
             prefs.saveUser("Guest", "")
             isLoggedIn = false
-        }
-    }
-
-    // NEW: Download from Firestore -> Local Room
-    fun syncFromCloud() {
-        scope.launch {
-            syncManager.getHighlights().forEach { cloud ->
-                db.bibleDao().saveHighlight(
-                    HighlightEntity(bookId = cloud.bookId, chapter = cloud.chapter, verse = cloud.verse, color = cloud.color)
-                )
-            }
-            syncManager.getNotes().forEach { cloud ->
-                db.bibleDao().saveNote(
-                    NoteEntity(bookId = cloud.bookId, chapter = cloud.chapter, verse = cloud.verse, noteText = cloud.noteText, timestamp = cloud.timestamp)
-                )
-            }
-            syncManager.getProgress()?.let { p ->
-                if (booksList.any { it.name == p.book }) {
-                    selectedBook = p.book
-                    selectedChapter = p.chapter
-                    selectedVerse = p.verse
-                    prefs.saveReading(p.mode, p.book, p.chapter, p.verse)
-                    prefs.saveScroll(p.scrollIndex, p.scrollOffset)
-                }
-            }
         }
     }
 
