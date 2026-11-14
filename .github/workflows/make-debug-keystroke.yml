@@ -1,0 +1,27 @@
+name: Make Fixed Debug Keystore
+on:
+  workflow_dispatch:
+
+jobs:
+  make-keystore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate debug.keystore if not exists
+        run: |
+          if [ -f debug.keystore ]; then
+            echo "Already exists, skipping"
+          else
+            keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          echo "=== YOUR SHA1 - COPY THIS ==="
+          keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android | grep SHA1
+
+      - name: Commit keystore to repo
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add debug.keystore
+          git commit -m "Add fixed debug keystore" || echo "Nothing to commit"
+          git push
