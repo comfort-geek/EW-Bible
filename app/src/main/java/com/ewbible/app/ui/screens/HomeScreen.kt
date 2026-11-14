@@ -4,9 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -25,6 +23,8 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -33,11 +33,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.material3.rememberDrawerState
-import androidx.compose.material3.DrawerValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -94,6 +93,8 @@ fun HomeScreen() {
     var showHighlightColors by remember { mutableStateOf(false) }
     var dailyVerseDialog by remember { mutableStateOf(false) }
     var dailyVerseText by remember { mutableStateOf("Your word is a lamp for my feet, a light on my path. - Psalm 119:105") }
+    var verseSearchResults by remember { mutableStateOf<List<SearchResult>>(emptyList()) }
+    var chapterCounts by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val listState = rememberLazyListState()
@@ -106,7 +107,7 @@ fun HomeScreen() {
     val highlights by db.bibleDao().getHighlights(currentBookId, selectedChapter).collectAsState(initial = emptyList())
     val highlightMap = remember(highlights) {
         highlights.associate { highlight ->
-            highlight.verse to runCatching { Color(highlight.color.toLong(16)) }.getOrDefault(Color.Yellow)
+            highlight.verse to parseHighlightColor(highlight.color)
         }
     }
 
@@ -120,6 +121,15 @@ fun HomeScreen() {
         if (selectedTab == "Open EW") {
             commentaryHtml = db.bibleDao().getCommentary(currentBookId, selectedChapter)?.getHtml().orEmpty()
         }
+    }
+
+    LaunchedEffect(booksList) {
+        if (booksList.isEmpty()) return@LaunchedEffect
+        val counts = mutableMapOf<Int, Int>()
+        for (book in booksList) {
+            counts[book.id] = db.bibleDao().getMaxChapter(book.id)
+        }
+        chapterCounts = counts
     }
 
     val gold = Color(0xFFC9A227)
@@ -145,7 +155,7 @@ fun HomeScreen() {
     val availableBooks = remember(booksList) { booksList.sortedBy { it.id }.map { it.name } }
     val filteredSearchResults = remember(searchQuery, searchFilter, availableBooks, otBooks, ntBooks) {
         val gospelBooks = setOf("Matthew", "Mark", "Luke", "John")
-        val prophecyBooks = setOf("Isaiah", "Jeremiah", "Ezekiel", "Daniel", "Hosea", "Joel", "Amos", "Micah", "Zechariah", "Habakkuk", "Malachi", "Jonah", "Nahum", "Obadiah")
+        val prophecyBooks = setOf("Isaiah", "Jeremiah", "Ezekiel", "Daniel", "Hosea", "Joel", "Amos", "Obadiah", "Jonah", "Micah", "Nahum", "Habakkuk", "Zephaniah", "Haggai", "Zechariah", "Malachi", "Revelation")
         val candidates = when (searchFilter) {
             "Gospel" -> availableBooks.filter { it in gospelBooks }
             "Prophecy" -> availableBooks.filter { it in prophecyBooks }
@@ -155,6 +165,29 @@ fun HomeScreen() {
         }
         val query = searchQuery.trim()
         if (query.isEmpty()) candidates else candidates.filter { it.contains(query, ignoreCase = true) }
+    }
+
+    LaunchedEffect(searchQuery, searchFilter, booksList) {
+        val query = searchQuery.trim()
+        if (query.length < 2 || booksList.isEmpty()) {
+            verseSearchResults = emptyList()
+            return@LaunchedEffect
+        }
+        val bookById = booksList.associateBy { it.id }
+        val gospelBooks = setOf("Matthew", "Mark", "Luke", "John")
+        val prophecyBooks = setOf("Isaiah", "Jeremiah", "Ezekiel", "Daniel", "Hosea", "Joel", "Amos", "Obadiah", "Jonah", "Micah", "Nahum", "Habakkuk", "Zephaniah", "Haggai", "Zechariah", "Malachi", "Revelation")
+        val rows = db.bibleDao().searchVerses(query)
+        verseSearchResults = rows.mapNotNull { row ->
+            val book = bookById[row.bookId] ?: return@mapNotNull null
+            val allowed = when (searchFilter) {
+                "Gospel" -> book.name in gospelBooks
+                "Prophecy" -> book.name in prophecyBooks
+                "Old Testament" -> book.id <= 39
+                "New Testament" -> book.id > 39
+                else -> true
+            }
+            if (!allowed) null else SearchResult(book.name, book.id, row.chapter, row.verse, row.text)
+        }
     }
 
     LaunchedEffect(booksList, savedBook, savedChapter, savedVerse) {
@@ -185,20 +218,23 @@ fun HomeScreen() {
                 return@LaunchedEffect
             }
         }
-        val psalms = booksList.firstOrNull { it.name.equals("Psalms", true) || it.key.equals("Psalms", true) } ?: return@LaunchedEffect
-        val verse = db.bibleDao().getVerses(psalms.id, 119).first().firstOrNull { it.verse == 105 } ?: return@LaunchedEffect
-        dailyVerseText = "${verse.text} - Psalm 119:105"
-        prefs.saveDailyVerse(today, DailyVerseReference(psalms.id, 119, 105))
+        val random = java.util.Random(today.hashCode().toLong())
+        val book = booksList[random.nextInt(booksList.size)]
+        val maxChapter = db.bibleDao().getMaxChapter(book.id).coerceAtLeast(1)
+        val chapter = random.nextInt(maxChapter) + 1
+        val verses = db.bibleDao().getVerses(book.id, chapter).first()
+        if (verses.isEmpty()) return@LaunchedEffect
+        val verse = verses[random.nextInt(verses.size)]
+        dailyVerseText = "${verse.text} - ${book.name} $chapter:${verse.verse}"
+        prefs.saveDailyVerse(today, DailyVerseReference(book.id, chapter, verse.verse))
     }
 
     LaunchedEffect(isDarkMode, fontSize) {
         prefs.saveSettings(isDarkMode, fontSize)
     }
 
-    LaunchedEffect(selectedBook, selectedChapter, versesList.size, summary) {
-        if (versesList.isEmpty()) return@LaunchedEffect
-        val itemCount = versesList.size + if (summary == null) 0 else 1
-        listState.scrollToItem(savedScrollIndex.coerceIn(0, (itemCount - 1).coerceAtLeast(0)), savedScrollOffset.coerceAtLeast(0))
+    LaunchedEffect(selectedBook, selectedChapter) {
+        listState.scrollToItem(0)
     }
 
     fun openBook(bookName: String, chapter: Int) {
@@ -233,13 +269,38 @@ fun HomeScreen() {
         }
     }
 
+    fun saveHighlight(color: Color) {
+        val verse = selectedVerse ?: return
+        val hex = "#%08X".format(color.toArgb())
+        scope.launch {
+            db.bibleDao().saveHighlight(
+                HighlightEntity(
+                    bookId = currentBookId,
+                    chapter = selectedChapter,
+                    verse = verse,
+                    color = hex
+                )
+            )
+            if (isLoggedIn) syncManager.uploadHighlight(currentBookId, selectedChapter, verse, hex)
+            showHighlightColors = false
+        }
+    }
+
+    fun removeHighlight() {
+        val verse = selectedVerse ?: return
+        scope.launch {
+            db.bibleDao().deleteHighlight(currentBookId, selectedChapter, verse)
+            showHighlightColors = false
+        }
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
             BookDrawer(
-                booksList = booksList,
                 otBookEntities = otBooks,
                 ntBookEntities = ntBooks,
+                chapterCounts = chapterCounts,
                 selectedBook = selectedBook,
                 selectedChapter = selectedChapter,
                 expandedBook = expandedBook,
@@ -254,7 +315,6 @@ fun HomeScreen() {
                     selectedChapter = 1
                 },
                 onToggleBook = { bookName -> expandedBook = if (expandedBook == bookName) null else bookName },
-                db = db,
             )
         },
     ) {
@@ -326,16 +386,25 @@ fun HomeScreen() {
                     searchQuery = searchQuery,
                     searchFilter = searchFilter,
                     filteredSearchResults = filteredSearchResults,
+                    verseResults = verseSearchResults,
                     textColor = textColor,
                     gold = gold,
                     onQueryChange = { searchQuery = it },
                     onFilterChange = { searchFilter = it },
                     onOpenBook = { bookName -> openBook(bookName, 1); selectedTab = "Bible" },
+                    onOpenVerse = { bookName, chapter, verse ->
+                        openBook(bookName, chapter)
+                        selectedVerse = verse
+                        selectedTab = "Bible"
+                    },
                 )
             }
 
             if (showNotes) {
                 NotesCard(
+                    selectedBook = selectedBook,
+                    selectedChapter = selectedChapter,
+                    selectedVerse = selectedVerse,
                     noteText = noteText,
                     panel = panel,
                     gold = gold,
@@ -363,14 +432,11 @@ fun HomeScreen() {
             if (showHighlightColors) {
                 HighlightCard(
                     selectedVerse = selectedVerse,
-                    currentBookId = currentBookId,
-                    selectedChapter = selectedChapter,
                     panel = panel,
                     gold = gold,
                     textColor = textColor,
-                    db = db,
-                    isLoggedIn = isLoggedIn,
-                    syncManager = syncManager,
+                    onHighlightPicked = ::saveHighlight,
+                    onRemoveHighlight = ::removeHighlight,
                     onDismiss = { showHighlightColors = false },
                 )
             }
@@ -385,5 +451,15 @@ fun HomeScreen() {
             fontSize = fontSize,
             onDismiss = { dailyVerseDialog = false },
         )
+    }
+}
+
+private fun parseHighlightColor(raw: String): Color {
+    val cleaned = raw.trim().removePrefix("#")
+    val parsed = runCatching { cleaned.toLong(16) }.getOrNull() ?: return Color.Yellow
+    return when (cleaned.length) {
+        8 -> Color(parsed.toInt())
+        6 -> Color((0xFF000000L or parsed).toInt())
+        else -> Color.Yellow
     }
 }
