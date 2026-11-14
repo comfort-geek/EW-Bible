@@ -19,7 +19,6 @@ data class CloudHighlight(
     val color: String = ""
 )
 
-// --- NEW: READING PROGRESS ---
 data class CloudProgress(
     val mode: String = "World English Bible",
     val book: String = "Genesis",
@@ -38,67 +37,83 @@ class SyncManager {
 
     // --- NOTES ---
     suspend fun uploadNote(bookId: Int, chapter: Int, verse: Int, text: String) {
-        val uid = userId() ?: return
-        val note = CloudNote(bookId, chapter, verse, text, System.currentTimeMillis())
-        db.collection("users").document(uid)
-            .collection("notes")
-            .document("${bookId}_${chapter}_${verse}")
-            .set(note).await()
+        try {
+            val uid = userId() ?: return
+            val note = CloudNote(bookId, chapter, verse, text, System.currentTimeMillis())
+            db.collection("users").document(uid)
+                .collection("notes")
+                .document("${bookId}_${chapter}_${verse}")
+                .set(note).await()
+        } catch (e: Exception) { /* offline - keep local, don't crash */ }
     }
 
     suspend fun getNotes(): List<CloudNote> {
-        val uid = userId() ?: return emptyList()
-        val snap = db.collection("users").document(uid)
-            .collection("notes").get().await()
-        return snap.toObjects(CloudNote::class.java)
+        return try {
+            val uid = userId() ?: return emptyList()
+            val snap = db.collection("users").document(uid)
+                .collection("notes").get().await()
+            snap.toObjects(CloudNote::class.java)
+        } catch (e: Exception) { emptyList() }
     }
 
     suspend fun deleteNote(bookId: Int, chapter: Int, verse: Int) {
-        val uid = userId() ?: return
-        db.collection("users").document(uid)
-            .collection("notes")
-            .document("${bookId}_${chapter}_${verse}")
-            .delete().await()
+        try {
+            val uid = userId() ?: return
+            db.collection("users").document(uid)
+                .collection("notes")
+                .document("${bookId}_${chapter}_${verse}")
+                .delete().await()
+        } catch (e: Exception) { }
     }
 
     // --- HIGHLIGHTS ---
     suspend fun uploadHighlight(bookId: Int, chapter: Int, verse: Int, color: String) {
-        val uid = userId() ?: return
-        val hl = CloudHighlight(bookId, chapter, verse, color)
-        db.collection("users").document(uid)
-            .collection("highlights")
-            .document("${bookId}_${chapter}_${verse}")
-            .set(hl).await()
+        try {
+            val uid = userId() ?: return
+            val hl = CloudHighlight(bookId, chapter, verse, color)
+            db.collection("users").document(uid)
+                .collection("highlights")
+                .document("${bookId}_${chapter}_${verse}")
+                .set(hl).await()
+        } catch (e: Exception) { }
     }
 
     suspend fun deleteHighlight(bookId: Int, chapter: Int, verse: Int) {
-        val uid = userId() ?: return
-        db.collection("users").document(uid)
-            .collection("highlights")
-            .document("${bookId}_${chapter}_${verse}")
-            .delete().await()
+        try {
+            val uid = userId() ?: return
+            db.collection("users").document(uid)
+                .collection("highlights")
+                .document("${bookId}_${chapter}_${verse}")
+                .delete().await()
+        } catch (e: Exception) { }
     }
 
     suspend fun getHighlights(): List<CloudHighlight> {
-        val uid = userId() ?: return emptyList()
-        val snap = db.collection("users").document(uid)
-            .collection("highlights").get().await()
-        return snap.toObjects(CloudHighlight::class.java)
+        return try {
+            val uid = userId() ?: return emptyList()
+            val snap = db.collection("users").document(uid)
+                .collection("highlights").get().await()
+            snap.toObjects(CloudHighlight::class.java)
+        } catch (e: Exception) { emptyList() }
     }
 
     // --- READING PROGRESS ---
     suspend fun uploadProgress(mode: String, book: String, chapter: Int, verse: Int, scrollIndex: Int, scrollOffset: Int) {
-        val uid = userId() ?: return
-        val p = CloudProgress(mode, book, chapter, verse, scrollIndex, scrollOffset, System.currentTimeMillis())
-        db.collection("users").document(uid)
-            .collection("progress").document("lastReading")
-            .set(p).await()
+        try {
+            val uid = userId() ?: return
+            val p = CloudProgress(mode, book, chapter, verse, scrollIndex, scrollOffset, System.currentTimeMillis())
+            db.collection("users").document(uid)
+                .collection("progress").document("lastReading")
+                .set(p).await()
+        } catch (e: Exception) { }
     }
 
     suspend fun getProgress(): CloudProgress? {
-        val uid = userId() ?: return null
-        val snap = db.collection("users").document(uid)
-            .collection("progress").document("lastReading").get().await()
-        return snap.toObject(CloudProgress::class.java)
+        return try {
+            val uid = userId() ?: return null
+            val snap = db.collection("users").document(uid)
+                .collection("progress").document("lastReading").get().await()
+            snap.toObject(CloudProgress::class.java)
+        } catch (e: Exception) { null }
     }
 }
