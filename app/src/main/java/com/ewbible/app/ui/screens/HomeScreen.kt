@@ -200,10 +200,14 @@ fun HomeScreen() {
         selectedVerse = savedVerse.coerceAtLeast(1)
     }
 
+    // FIXED: Real Firebase check, not just prefs
     LaunchedEffect(savedDark, savedFont, savedName) {
         isDarkMode = savedDark
         fontSize = savedFont
-        isLoggedIn = savedName != "Guest"
+        isLoggedIn = googleAuth.isLoggedIn() && savedName != "Guest"
+        if (!googleAuth.isLoggedIn() && savedName != "Guest") {
+            prefs.saveUser("Guest", "")
+        }
     }
 
     LaunchedEffect(booksList, savedDailyVerseDate, savedDailyVerseRef) {
@@ -258,14 +262,25 @@ fun HomeScreen() {
         }
     }
 
+    // FIXED: No more double-Result bug
     fun handleGoogleLogin() {
         scope.launch {
-            runCatching { googleAuth.signInWithGoogle() }.getOrNull()?.onSuccess { data ->
+            googleAuth.signInWithGoogle().onSuccess { data ->
                 val name = data.substringBefore('|').ifBlank { "User" }
                 val email = data.substringAfter('|', "")
                 prefs.saveUser(name, email)
                 isLoggedIn = true
+            }.onFailure {
+                isLoggedIn = false
             }
+        }
+    }
+
+    fun handleGoogleLogout() {
+        scope.launch {
+            googleAuth.signOut()
+            prefs.saveUser("Guest", "")
+            isLoggedIn = false
         }
     }
 
@@ -331,7 +346,8 @@ fun HomeScreen() {
                         Icon(Icons.Default.MoreVert, contentDescription = "Settings", tint = textColor)
                     }
                     DropdownMenu(expanded = settingsOpen, onDismissRequest = { settingsOpen = false }) {
-                        DropdownMenuItem(text = { Text(if (isLoggedIn) "Logged in" else "Log in with Google") }, onClick = { settingsOpen = false; if (!isLoggedIn) handleGoogleLogin() })
+                        // FIXED: Now shows Log out when logged in
+                        DropdownMenuItem(text = { Text(if (isLoggedIn) "Log out" else "Log in with Google") }, onClick = { settingsOpen = false; if (isLoggedIn) handleGoogleLogout() else handleGoogleLogin() })
                         DropdownMenuItem(text = { Text(if (isDarkMode) "Light mode" else "Dark mode") }, onClick = { settingsOpen = false; isDarkMode = !isDarkMode })
                         DropdownMenuItem(
                             text = {
