@@ -3,6 +3,7 @@ package com.ewbible.app.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +20,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -50,44 +52,50 @@ fun BibleContent(
             fontSize = 20.sp,
             modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
         )
-        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-            summary?.let { item {
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                    colors = CardDefaults.cardColors(containerColor = panel),
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(summary.summary, color = textColor, fontSize = fontSize.sp)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Text(summary.whatHappened, color = textColor, fontSize = fontSize.sp)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Text(summary.application, color = textColor, fontSize = fontSize.sp)
+        if (versesList.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Loading verses...", color = textColor, fontSize = fontSize.sp)
+            }
+        } else {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+                summary?.let { item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        colors = CardDefaults.cardColors(containerColor = panel),
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(summary.summary, color = textColor, fontSize = fontSize.sp)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(summary.whatHappened, color = textColor, fontSize = fontSize.sp)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(summary.application, color = textColor, fontSize = fontSize.sp)
+                        }
                     }
-                }
-            } }
-            itemsIndexed(versesList, key = { _, verse -> "$selectedBook-$selectedChapter-${verse.verse}" }) { _, verse ->
-                val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .background(verseBackground, RoundedCornerShape(8.dp))
-                        .combinedClickable(
-                            onClick = { onVerseClick(verse.verse) },
-                            onLongClick = { onVerseLongClick(verse.verse) },
+                } }
+                itemsIndexed(versesList, key = { _, verse -> verse.id }) { _, verse ->
+                    val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .background(verseBackground, RoundedCornerShape(8.dp))
+                            .combinedClickable(
+                                onClick = { onVerseClick(verse.verse) },
+                                onLongClick = { onVerseLongClick(verse.verse) },
+                            )
+                            .padding(vertical = 10.dp, horizontal = 8.dp),
+                    ) {
+                        Text(
+                            text = "${verse.verse}",
+                            color = gold,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = fontSize.sp,
+                            modifier = Modifier.width(32.dp),
                         )
-                        .padding(vertical = 10.dp, horizontal = 8.dp),
-                ) {
-                    Text(
-                        text = "${verse.verse}",
-                        color = gold,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = fontSize.sp,
-                        modifier = Modifier.width(32.dp),
-                    )
-                    Text(verse.text, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
+                        Text(verse.text, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
+                    }
                 }
             }
         }
