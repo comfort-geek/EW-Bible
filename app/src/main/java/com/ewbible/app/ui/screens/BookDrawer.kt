@@ -15,27 +15,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.shape.RoundedCornerShape
-import com.ewbible.app.data.database.AppDatabase
 import com.ewbible.app.data.database.BookEntity
 
 @Composable
 fun BookDrawer(
-    booksList: List<BookEntity>,
     otBookEntities: List<BookEntity>,
     ntBookEntities: List<BookEntity>,
+    chapterCounts: Map<Int, Int>,
     selectedBook: String,
     selectedChapter: Int,
     expandedBook: String?,
@@ -47,7 +44,6 @@ fun BookDrawer(
     onOpenBook: (String, Int) -> Unit,
     onSelectBook: (String) -> Unit,
     onToggleBook: (String) -> Unit,
-    db: AppDatabase,
 ) {
     ModalDrawerSheet(
         drawerShape = RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp),
@@ -58,17 +54,17 @@ fun BookDrawer(
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
             Text("Books", color = textColor, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(12.dp))
-            if (booksList.isEmpty()) {
+            if (otBookEntities.isEmpty() && ntBookEntities.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = gold) }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     item { Text("Old Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp); Spacer(Modifier.height(8.dp)) }
                     items(otBookEntities, key = { it.id }) { book ->
-                        BookDrawerRow(book, selectedBook, selectedChapter, expandedBook, textColor, panel, gold, secondaryText, db, onOpenBook, onSelectBook, onToggleBook)
+                        BookDrawerRow(book, chapterCounts[book.id] ?: 1, selectedBook, selectedChapter, expandedBook, textColor, panel, gold, secondaryText, onOpenBook, onSelectBook, onToggleBook)
                     }
-                    item { Spacer(Modifier.height(12.dp)); Text("New Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp); Spacer(Modifier.height(8.dp)) }
+                    item { Spacer(modifier = Modifier.height(12.dp)); Text("New Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp); Spacer(Modifier.height(8.dp)) }
                     items(ntBookEntities, key = { it.id }) { book ->
-                        BookDrawerRow(book, selectedBook, selectedChapter, expandedBook, textColor, panel, gold, secondaryText, db, onOpenBook, onSelectBook, onToggleBook)
+                        BookDrawerRow(book, chapterCounts[book.id] ?: 1, selectedBook, selectedChapter, expandedBook, textColor, panel, gold, secondaryText, onOpenBook, onSelectBook, onToggleBook)
                     }
                 }
             }
@@ -79,6 +75,7 @@ fun BookDrawer(
 @Composable
 private fun BookDrawerRow(
     book: BookEntity,
+    chapterCount: Int,
     selectedBook: String,
     selectedChapter: Int,
     expandedBook: String?,
@@ -86,14 +83,12 @@ private fun BookDrawerRow(
     panel: Color,
     gold: Color,
     secondaryText: Color,
-    db: AppDatabase,
     onOpenBook: (String, Int) -> Unit,
     onSelectBook: (String) -> Unit,
     onToggleBook: (String) -> Unit,
 ) {
     val isSelected = selectedBook == book.name
     val isExpanded = expandedBook == book.name
-    val chapterCount by db.bibleDao().getMaxChapter(book.id).collectAsState(initial = 1)
     Column {
         Row(
             modifier = Modifier.fillMaxWidth().clickable {
