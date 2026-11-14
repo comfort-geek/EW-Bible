@@ -12,7 +12,6 @@ import kotlinx.coroutines.tasks.await
 class GoogleAuth(private val context: Context) {
     private val auth = FirebaseAuth.getInstance()
     private val credentialManager = CredentialManager.create(context)
-    // PASTE from google-services.json -> oauth_client -> client_id
     private val WEB_CLIENT_ID = "449427316381-tqtci4os3eqilpvj8ubmvm72ocjp2ff4.apps.googleusercontent.com"
 
     suspend fun signInWithGoogle(): Result<String> {
@@ -31,6 +30,8 @@ class GoogleAuth(private val context: Context) {
             Result.success("$name|$email")
         } catch (e: Exception) { Result.failure(e) }
     }
+
     fun signOut() { auth.signOut() }
     fun currentUser() = auth.currentUser
+    fun isLoggedIn(): Boolean = auth.currentUser != null
 }
