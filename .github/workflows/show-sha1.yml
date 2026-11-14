@@ -1,0 +1,10 @@
+name: Show SHA1
+on:
+  workflow_dispatch:
+jobs:
+  sha1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show SHA1
+        run: keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android
