@@ -36,12 +36,54 @@ data class CommentaryEntity(
     @ColumnInfo(name = "html_compressed") val htmlCompressed: ByteArray
 ) {
     fun getHtml(): String {
-        return try {
-            val inflater = java.util.zip.InflaterInputStream(htmlCompressed.inputStream())
-            inflater.readBytes().toString(Charsets.UTF_8)
-        } catch (e: Exception) {
-            ""
-        }
+        // DB verified in Pydroid: ZLIB (x DA), NOT GZIP, NOT raw deflate
+        // Old code used InflaterInputStream.readBytes() - returns "" on Android
+        // This uses Inflater + buffer loop - reliable
+        try {
+            val inflater = java.util.zip.Inflater() // nowrap=false = ZLIB
+            inflater.setInput(htmlCompressed)
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(4096)
+            while (!inflater.finished()) {
+                val n = inflater.inflate(buf)
+                if (n == 0) break
+                out.write(buf, 0, n)
+            }
+            inflater.end()
+            val text = out.toString(Charsets.UTF_8)
+            if (text.isNotBlank()) return text
+        } catch (e: Exception) { }
+
+        // Fallback: GZIP
+        try {
+            val gzip = java.util.zip.GZIPInputStream(htmlCompressed.inputStream())
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(4096)
+            while (true) {
+                val n = gzip.read(buf)
+                if (n == -1) break
+                out.write(buf, 0, n)
+            }
+            val text = out.toString(Charsets.UTF_8)
+            if (text.isNotBlank()) return text
+        } catch (e: Exception) { }
+
+        // Fallback: Plain HTML
+        try {
+            return htmlCompressed.toString(Charsets.UTF_8)
+        } catch (e: Exception) { return "" }
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is CommentaryEntity) return false
+        return bookId == other.bookId && chapter == other.chapter && htmlCompressed.contentEquals(other.htmlCompressed)
+    }
+    override fun hashCode(): Int {
+        var result = bookId
+        result = 31 * result + chapter
+        result = 31 * result + htmlCompressed.contentHashCode()
+        return result
     }
 }
 
