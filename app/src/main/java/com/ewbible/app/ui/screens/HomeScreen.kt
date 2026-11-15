@@ -207,7 +207,6 @@ fun HomeScreen() {
         selectedVerse = savedVerse.coerceAtLeast(1)
     }
 
-    // FIX: Restore exact scroll position once - only on first load, after verses are loaded
     LaunchedEffect(versesList, savedScrollIndex, savedScrollOffset) {
         if (hasRestoredScroll) return@LaunchedEffect
         if (versesList.isEmpty()) return@LaunchedEffect
@@ -215,7 +214,6 @@ fun HomeScreen() {
             hasRestoredScroll = true
             return@LaunchedEffect
         }
-        // versesList has header items too, so clamp to list size
         val targetIndex = savedScrollIndex.coerceIn(0, (versesList.size + 2))
         runCatching { listState.scrollToItem(targetIndex, savedScrollOffset) }
         hasRestoredScroll = true
@@ -262,14 +260,13 @@ fun HomeScreen() {
     }
 
     LaunchedEffect(isDarkMode, fontSize) { prefs.saveSettings(isDarkMode, fontSize) }
-    // REMOVED: LaunchedEffect(selectedBook, selectedChapter) { listState.scrollToItem(0) } - this was killing scroll restore
 
     fun openBook(bookName: String, chapter: Int) {
         selectedBook = bookName
         selectedChapter = chapter
         selectedVerse = 1
         expandedBook = bookName
-        hasRestoredScroll = true // user manually changed book, don't restore old scroll
+        hasRestoredScroll = true
         scope.launch {
             prefs.saveReading("World English Bible", bookName, chapter, 1)
             prefs.saveScroll(0, 0)
@@ -322,117 +319,126 @@ fun HomeScreen() {
         }
     }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            BookDrawer(
-                otBookEntities = otBooks, ntBookEntities = ntBooks, chapterCounts = chapterCounts,
-                selectedBook = selectedBook, selectedChapter = selectedChapter, expandedBook = expandedBook,
-                background = background, textColor = textColor, panel = panel, gold = gold, secondaryText = secondaryText,
-                onOpenBook = { bookName, chapter -> openBook(bookName, chapter) },
-                onSelectBook = { bookName -> selectedBook = bookName; selectedChapter = 1 },
-                onToggleBook = { bookName -> expandedBook = if (expandedBook == bookName) null else bookName },
-            )
-        },
-    ) {
-        Box(modifier = Modifier.fillMaxSize().background(background)) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                TopAppBar(
-                    title = { Text("EW Bible", color = textColor, fontWeight = FontWeight.Bold) },
-                    navigationIcon = {
-                        IconButton(onClick = { scope.launch { if (drawerState.isClosed) drawerState.open() else drawerState.close() } }) {
-                            Icon(Icons.Default.Menu, contentDescription = "Menu", tint = textColor)
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = { settingsOpen = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Settings", tint = textColor)
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = background),
-                )
-                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    listOf("Bible", "Open EW", "Search").forEach { tab ->
-                        Text(text = tab, color = if (selectedTab == tab) gold else textColor,
-                            fontWeight = if (selectedTab == tab) FontWeight.Bold else FontWeight.Normal, fontSize = 15.sp,
-                            modifier = Modifier.weight(1f).clickable { selectedTab = tab }.padding(vertical = 8.dp), textAlign = TextAlign.Center)
-                    }
-                }
-                when (selectedTab) {
-                    "Bible" -> BibleContent(selectedBook = selectedBook, selectedChapter = selectedChapter, summary = summary, versesList = versesList, currentHighlightMap = highlightMap, fontSize = fontSize, gold = gold, panel = panel, textColor = textColor, listState = listState, onVerseClick = ::saveReadingProgress, onVerseLongClick = { verse -> selectedVerse = verse; showHighlightColors = true })
-                    "Open EW" -> OpenEWContent(commentaryHtml = commentaryHtml, fontSize = fontSize, textColor = textColor, secondaryText = secondaryText, hasError = commentaryError, bookName = selectedBook, chapter = selectedChapter)
-                    "Search" -> SearchContent(searchQuery = searchQuery, searchFilter = searchFilter, filteredSearchResults = filteredSearchResults, verseResults = verseSearchResults, textColor = textColor, gold = gold, onQueryChange = { searchQuery = it }, onFilterChange = { searchFilter = it }, onOpenBook = { bookName -> openBook(bookName, 1); selectedTab = "Bible" }, onOpenVerse = { bookName, chapter, verse -> openBook(bookName, chapter); selectedVerse = verse; selectedTab = "Bible" })
-                }
-                if (showNotes) {
-                    NotesCard(selectedBook = selectedBook, selectedChapter = selectedChapter, selectedVerse = selectedVerse, noteText = noteText, panel = panel, gold = gold, textColor = textColor, onNoteTextChange = { noteText = it }, onSaveNote = {
-                        val verse = selectedVerse ?: 1
-                        scope.launch {
-                            db.bibleDao().saveNote(NoteEntity(bookId = currentBookId, chapter = selectedChapter, verse = verse, noteText = noteText, timestamp = System.currentTimeMillis()))
-                            if (isLoggedIn) syncManager.uploadNote(currentBookId, selectedChapter, verse, noteText)
-                            noteText = ""
-                        }
-                    })
-                }
-                if (showHighlightColors) {
-                    HighlightCard(selectedVerse = selectedVerse, panel = panel, gold = gold, textColor = textColor, onHighlightPicked = ::saveHighlight, onRemoveHighlight = ::removeHighlight, onDismiss = { showHighlightColors = false })
+    Column(modifier = Modifier.fillMaxSize().background(background)) {
+        // REMOVED: TopAppBar EW Bible - now only the tab row is at the top
+        // TOP ROW - Menu + Tabs + Settings all on SAME line, vertically centered
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = { scope.launch { if (drawerState.isClosed) drawerState.open() else drawerState.close() } }) {
+                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = textColor)
+            }
+            Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                listOf("Bible", "Open EW", "Search").forEach { tab ->
+                    Text(
+                        text = tab,
+                        color = if (selectedTab == tab) gold else textColor,
+                        fontWeight = if (selectedTab == tab) FontWeight.Bold else FontWeight.Normal,
+                        fontSize = 15.sp,
+                        modifier = Modifier.clickable { selectedTab = tab }.padding(vertical = 8.dp, horizontal = 2.dp),
+                        textAlign = TextAlign.Center
+                    )
                 }
             }
+            IconButton(onClick = { settingsOpen = true }) {
+                Icon(Icons.Default.MoreVert, contentDescription = "Settings", tint = textColor)
+            }
+        }
 
-            if (settingsOpen) {
-                Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).clickable { settingsOpen = false }) {
-                    Column(
-                        modifier = Modifier.fillMaxHeight().fillMaxWidth(0.85f).align(Alignment.CenterEnd).background(background).clickable(enabled = false) { }.padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                            Text("Settings", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = textColor)
-                            IconButton(onClick = { settingsOpen = false }) { Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor) }
-                        }
-                        if (isLoggedIn) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Box(modifier = Modifier.size(56.dp).clip(CircleShape).background(gold), contentAlignment = Alignment.Center) {
-                                    Text(userName.firstOrNull()?.toString()?.uppercase() ?: "U", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        // Content area - drawer + settings live ONLY below the tab row
+        ModalNavigationDrawer(
+            modifier = Modifier.weight(1f),
+            drawerState = drawerState,
+            drawerContent = {
+                BookDrawer(
+                    otBookEntities = otBooks, ntBookEntities = ntBooks, chapterCounts = chapterCounts,
+                    selectedBook = selectedBook, selectedChapter = selectedChapter, expandedBook = expandedBook,
+                    background = background, textColor = textColor, panel = panel, gold = gold, secondaryText = secondaryText,
+                    onOpenBook = { bookName, chapter -> openBook(bookName, chapter) },
+                    onSelectBook = { bookName -> selectedBook = bookName; selectedChapter = 1 },
+                    onToggleBook = { bookName -> expandedBook = if (expandedBook == bookName) null else bookName },
+                )
+            },
+        ) {
+            Box(modifier = Modifier.fillMaxSize().background(background)) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    when (selectedTab) {
+                        "Bible" -> BibleContent(selectedBook = selectedBook, selectedChapter = selectedChapter, summary = summary, versesList = versesList, currentHighlightMap = highlightMap, fontSize = fontSize, gold = gold, panel = panel, textColor = textColor, listState = listState, onVerseClick = ::saveReadingProgress, onVerseLongClick = { verse -> selectedVerse = verse; showHighlightColors = true })
+                        "Open EW" -> OpenEWContent(commentaryHtml = commentaryHtml, fontSize = fontSize, textColor = textColor, secondaryText = secondaryText, hasError = commentaryError, bookName = selectedBook, chapter = selectedChapter)
+                        "Search" -> SearchContent(searchQuery = searchQuery, searchFilter = searchFilter, filteredSearchResults = filteredSearchResults, verseResults = verseSearchResults, textColor = textColor, gold = gold, onQueryChange = { searchQuery = it }, onFilterChange = { searchFilter = it }, onOpenBook = { bookName -> openBook(bookName, 1); selectedTab = "Bible" }, onOpenVerse = { bookName, chapter, verse -> openBook(bookName, chapter); selectedVerse = verse; selectedTab = "Bible" })
+                    }
+                    if (showNotes) {
+                        NotesCard(selectedBook = selectedBook, selectedChapter = selectedChapter, selectedVerse = selectedVerse, noteText = noteText, panel = panel, gold = gold, textColor = textColor, onNoteTextChange = { noteText = it }, onSaveNote = {
+                            val verse = selectedVerse ?: 1
+                            scope.launch {
+                                db.bibleDao().saveNote(NoteEntity(bookId = currentBookId, chapter = selectedChapter, verse = verse, noteText = noteText, timestamp = System.currentTimeMillis()))
+                                if (isLoggedIn) syncManager.uploadNote(currentBookId, selectedChapter, verse, noteText)
+                                noteText = ""
+                            }
+                        })
+                    }
+                    if (showHighlightColors) {
+                        HighlightCard(selectedVerse = selectedVerse, panel = panel, gold = gold, textColor = textColor, onHighlightPicked = ::saveHighlight, onRemoveHighlight = ::removeHighlight, onDismiss = { showHighlightColors = false })
+                    }
+                }
+
+                if (settingsOpen) {
+                    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).clickable { settingsOpen = false }) {
+                        Column(
+                            modifier = Modifier.fillMaxHeight().fillMaxWidth(0.85f).align(Alignment.CenterEnd).background(background).clickable(enabled = false) { }.padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                Text("Settings", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = textColor)
+                                IconButton(onClick = { settingsOpen = false }) { Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor) }
+                            }
+                            if (isLoggedIn) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Box(modifier = Modifier.size(56.dp).clip(CircleShape).background(gold), contentAlignment = Alignment.Center) {
+                                        Text(userName.firstOrNull()?.toString()?.uppercase() ?: "U", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Column {
+                                        Text(userName, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = textColor)
+                                        Text(userEmail, fontSize = 13.sp, color = secondaryText)
+                                    }
                                 }
-                                Column {
-                                    Text(userName, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = textColor)
-                                    Text(userEmail, fontSize = 13.sp, color = secondaryText)
+                                Button(onClick = { handleGoogleLogout() }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
+                                    Text("Log out", color = textColor)
+                                }
+                            } else {
+                                Text("Not signed in", color = secondaryText)
+                                Button(onClick = { settingsOpen = false; handleGoogleLogin() }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Log in with Google")
                                 }
                             }
-                            Button(onClick = { handleGoogleLogout() }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
-                                Text("Log out", color = textColor)
-                            }
-                        } else {
-                            Text("Not signed in", color = secondaryText)
-                            Button(onClick = { settingsOpen = false; handleGoogleLogin() }, modifier = Modifier.fillMaxWidth()) {
-                                Text("Log in with Google")
-                            }
-                        }
-                        Divider(color = panel)
-                        Text("Appearance", fontWeight = FontWeight.Bold, color = textColor)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf("System", "Light", "Dark").forEach { mode ->
-                                val selected = themeMode == mode
-                                Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(if (selected) gold else panel).clickable {
-                                    themeMode = mode
-                                    isDarkMode = when (mode) { "Light" -> false; "Dark" -> true; else -> systemDark }
-                                }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-                                    Text(mode, color = if (selected) Color.White else textColor, fontWeight = FontWeight.Bold)
+                            Divider(color = panel)
+                            Text("Appearance", fontWeight = FontWeight.Bold, color = textColor)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf("System", "Light", "Dark").forEach { mode ->
+                                    val selected = themeMode == mode
+                                    Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(if (selected) gold else panel).clickable {
+                                        themeMode = mode
+                                        isDarkMode = when (mode) { "Light" -> false; "Dark" -> true; else -> systemDark }
+                                    }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                                        Text(mode, color = if (selected) Color.White else textColor, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
-                        }
-                        Text("Font size", fontWeight = FontWeight.Bold, color = textColor)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("A-", color = textColor)
-                            Slider(value = fontSize, onValueChange = { fontSize = it }, valueRange = 12f..28f, modifier = Modifier.weight(1f).padding(horizontal = 6.dp))
-                            Text("A+", color = textColor)
-                        }
-                        Text("Daily Verse", fontWeight = FontWeight.Bold, color = textColor)
-                        Button(onClick = { settingsOpen = false; dailyVerseDialog = true }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
-                            Text("Show Daily Verse", color = textColor)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { settingsOpen = false; showNotes = !showNotes }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
-                                Text(if (showNotes) "Hide Notes" else "Notes", color = textColor)
+                            Text("Font size", fontWeight = FontWeight.Bold, color = textColor)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("A-", color = textColor)
+                                Slider(value = fontSize, onValueChange = { fontSize = it }, valueRange = 12f..28f, modifier = Modifier.weight(1f).padding(horizontal = 6.dp))
+                                Text("A+", color = textColor)
+                            }
+                            Text("Daily Verse", fontWeight = FontWeight.Bold, color = textColor)
+                            Button(onClick = { settingsOpen = false; dailyVerseDialog = true }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
+                                Text("Show Daily Verse", color = textColor)
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { settingsOpen = false; showNotes = !showNotes }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
+                                    Text(if (showNotes) "Hide Notes" else "Notes", color = textColor)
+                                }
                             }
                         }
                     }
