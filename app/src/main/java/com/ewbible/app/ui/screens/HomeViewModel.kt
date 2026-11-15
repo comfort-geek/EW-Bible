@@ -34,7 +34,8 @@ data class HomeUiState(
     val fontSize: Float = 16f,
     val isLoggedIn: Boolean = false,
     val userName: String = "Guest",
-    val userEmail: String = ""
+    val userEmail: String = "",
+    val scrollRestoreKey: Int = 0
 )
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -62,6 +63,7 @@ class HomeViewModel(
     private val chapterCounts = MutableStateFlow<Map<Int, Int>>(emptyMap())
     private val searchResults = MutableStateFlow<List<SearchResult>>(emptyList())
     private val dailyVerse = MutableStateFlow("")
+    private val scrollRestoreKey = MutableStateFlow(0)
 
     val books: Flow<List<BookEntity>> = dao.getAllBooks()
 
@@ -192,7 +194,9 @@ class HomeViewModel(
             fontSize = fontSize,
             userName = userName,
             userEmail = userEmail,
-            isLoggedIn = userName != "Guest" && userEmail.isNotBlank()
+            isLoggedIn = googleAuth.isLoggedIn() &&
+                    userName != "Guest" &&
+                    userEmail.isNotBlank()
         )
     }
 
@@ -200,8 +204,9 @@ class HomeViewModel(
         readingState,
         navigationState,
         contentState,
-        userSettingsState
-    ) { reading, navigation, content, settings ->
+        userSettingsState,
+        scrollRestoreKey
+    ) { reading, navigation, content, settings, restoreKey ->
         HomeUiState(
             books = reading.books,
             verses = reading.verses,
@@ -222,7 +227,8 @@ class HomeViewModel(
             fontSize = settings.fontSize,
             isLoggedIn = settings.isLoggedIn,
             userName = settings.userName,
-            userEmail = settings.userEmail
+            userEmail = settings.userEmail,
+            scrollRestoreKey = restoreKey
         )
     }.stateIn(
         scope = viewModelScope,
@@ -270,6 +276,12 @@ class HomeViewModel(
 
         viewModelScope.launch {
             loadDailyVerse()
+        }
+
+        viewModelScope.launch {
+            if (isLoggedIn()) {
+                syncFromCloud()
+            }
         }
     }
 
@@ -518,8 +530,10 @@ class HomeViewModel(
             }
 
             syncManager.getProgress()?.let { progress ->
-                val bookExists = books.first().any { book ->
-                    book.name == progress.book
+                val bookList = books.first()
+                val bookExists = bookList.any { book ->
+                    book.name == progress.book ||
+                            book.key == progress.book
                 }
 
                 if (bookExists) {
@@ -537,16 +551,17 @@ class HomeViewModel(
                         progress.scrollIndex,
                         progress.scrollOffset
                     )
+
+                    scrollRestoreKey.value += 1
                 }
             }
         }
     }
 
     private fun isLoggedIn(): Boolean {
-        val userName = prefs.userName
-        val userEmail = prefs.userEmail
-
-        return false
+        return googleAuth.isLoggedIn() &&
+                prefs.userName != "Guest" &&
+                prefs.userEmail.isNotBlank()
     }
 
     private suspend fun restoreSavedReading() {
