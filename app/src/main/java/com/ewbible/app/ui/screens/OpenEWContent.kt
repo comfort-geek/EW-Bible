@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +35,11 @@ fun OpenEWContent(
     val context = LocalContext.current
 
     var webViewFailed by remember { mutableStateOf(false) }
+
+    // FIX ISSUE 2: reset failure when you change chapter/book, so a new chapter can load
+    LaunchedEffect(bookName, chapter) {
+        webViewFailed = false
+    }
 
     // Clean HTML safely - never crash on bad HTML
     val renderedHtml = remember(commentaryHtml) {
@@ -70,7 +76,8 @@ fun OpenEWContent(
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
             if (bookName.isNotBlank()) {
                 Text(
-                    text = "$bookName $chapter - Open EW",
+                    // FIX ISSUE 1: title only
+                    text = "$bookName $chapter",
                     color = textColor,
                     fontWeight = FontWeight.Bold,
                     fontSize = 20.sp,
@@ -92,7 +99,8 @@ fun OpenEWContent(
     Column(modifier = Modifier.fillMaxSize()) {
         if (bookName.isNotBlank()) {
             Text(
-                text = "$bookName $chapter - Open EW",
+                // FIX ISSUE 1: title only
+                text = "$bookName $chapter",
                 color = textColor,
                 fontWeight = FontWeight.Bold,
                 fontSize = 20.sp,
@@ -100,12 +108,11 @@ fun OpenEWContent(
             )
         }
 
-        val lastLoaded = remember { mutableStateOf("") }
+        // FIX ISSUE 2: lastLoaded resets per book+chapter, so new commentary always loads
+        val lastLoaded = remember(bookName, chapter) { mutableStateOf("") }
         AndroidView(
             modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
             factory = { ctx ->
-                // FIX: Fresh WebView every time this screen opens.
-                // No remember + no reused destroyed WebView.
                 WebView(ctx).apply {
                     settings.javaScriptEnabled = false
                     settings.domStorageEnabled = false
@@ -138,7 +145,6 @@ fun OpenEWContent(
                 }
             },
             onRelease = { wv ->
-                // FIX: Destroy cleanly when you leave Open EW
                 runCatching {
                     wv.stopLoading()
                     wv.removeAllViews()
