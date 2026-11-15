@@ -2,8 +2,16 @@ package com.ewbible.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -338,7 +346,6 @@ fun HomeScreen() {
                 }
                 when (selectedTab) {
                     "Bible" -> BibleContent(selectedBook = selectedBook, selectedChapter = selectedChapter, summary = summary, versesList = versesList, currentHighlightMap = highlightMap, fontSize = fontSize, gold = gold, panel = panel, textColor = textColor, listState = listState, onVerseClick = ::saveReadingProgress, onVerseLongClick = { verse -> selectedVerse = verse; showHighlightColors = true })
-                    // FIX: Pass error flag, OpenEWContent must handle empty safely - see below
                     "Open EW" -> OpenEWContent(commentaryHtml = commentaryHtml, fontSize = fontSize, textColor = textColor, secondaryText = secondaryText, hasError = commentaryError, bookName = selectedBook, chapter = selectedChapter)
                     "Search" -> SearchContent(searchQuery = searchQuery, searchFilter = searchFilter, filteredSearchResults = filteredSearchResults, verseResults = verseSearchResults, textColor = textColor, gold = gold, onQueryChange = { searchQuery = it }, onFilterChange = { searchFilter = it }, onOpenBook = { bookName -> openBook(bookName, 1); selectedTab = "Bible" }, onOpenVerse = { bookName, chapter, verse -> openBook(bookName, chapter); selectedVerse = verse; selectedTab = "Bible" })
                 }
@@ -361,7 +368,7 @@ fun HomeScreen() {
             if (settingsOpen) {
                 Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).clickable { settingsOpen = false }) {
                     Column(
-                        modifier = Modifier.fillMaxHeight().fillMaxWidth(0.85f).align(Alignment.CenterEnd).background(background).padding(20.dp),
+                        modifier = Modifier.fillMaxHeight().fillMaxWidth(0.85f).align(Alignment.CenterEnd).background(background).clickable(enabled = false) { }.padding(20.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
