@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -101,24 +102,40 @@ private fun BookDrawerRow(
             Text(if (isExpanded) "▾" else "▸", color = secondaryText)
         }
         if (isExpanded) {
-            FlowRow(
+            // FIX: Numbers only, well aligned, narrow - not full width
+            // Centered 232dp box = 5 x 40dp + spacing, so 1 2 3 4 5 line up
+            Box(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                contentAlignment = Alignment.Center
             ) {
-                for (chapter in 1..chapterCount.coerceAtLeast(1)) {
-                    val isChapterSelected = selectedBook == book.name && selectedChapter == chapter
-                    Text(
-                        text = "Ch $chapter",
-                        color = if (isChapterSelected) Color.White else textColor,
-                        fontWeight = if (isChapterSelected) FontWeight.Bold else FontWeight.Normal,
-                        modifier = Modifier.background(if (isChapterSelected) gold else panel, RoundedCornerShape(8.dp))
-                            .clickable { onOpenBook(book.name, chapter) }
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        fontSize = 12.sp,
-                    )
+                FlowRow(
+                    modifier = Modifier.width(232.dp).padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    for (chapter in 1..chapterCount.coerceAtLeast(1)) {
+                        val isChapterSelected = selectedBook == book.name && selectedChapter == chapter
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(
+                                    if (isChapterSelected) gold else panel,
+                                    RoundedCornerShape(10.dp)
+                                )
+                                .clickable { onOpenBook(book.name, chapter) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "$chapter",
+                                color = if (isChapterSelected) Color.White else textColor,
+                                fontWeight = if (isChapterSelected) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
                 }
             }
+            Spacer(modifier = Modifier.height(4.dp))
         }
     }
 }
