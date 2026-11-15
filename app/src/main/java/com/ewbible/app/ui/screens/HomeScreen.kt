@@ -15,9 +15,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
@@ -82,6 +86,7 @@ fun HomeScreen() {
     var expandedBook by remember { mutableStateOf<String?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
     var showNotes by remember { mutableStateOf(false) }
+    var showAllNotes by remember { mutableStateOf(false) }
     var noteText by remember { mutableStateOf("") }
     var showHighlightColors by remember { mutableStateOf(false) }
     var dailyVerseDialog by remember { mutableStateOf(false) }
@@ -103,6 +108,8 @@ fun HomeScreen() {
     val highlightMap = remember(highlights) {
         highlights.associate { highlight -> highlight.verse to parseHighlightColor(highlight.color) }
     }
+    // FIX: Notes folder - all saved notes for Settings > Notes
+    val allNotes by db.bibleDao().getAllNotes().collectAsState(initial = emptyList())
 
     var summary by remember(selectedBook, selectedChapter) { mutableStateOf<SummaryEntity?>(null) }
     var commentaryHtml by remember(selectedBook, selectedChapter) { mutableStateOf("") }
@@ -357,30 +364,41 @@ fun HomeScreen() {
                     when (selectedTab) {
                         "Bible" -> BibleContent(selectedBook = selectedBook, selectedChapter = selectedChapter, summary = summary, versesList = versesList, currentHighlightMap = highlightMap, fontSize = fontSize, gold = gold, panel = panel, textColor = textColor, listState = listState, onVerseClick = ::saveReadingProgress,
                             onVerseLongClick = { verse -> selectedVerse = verse; noteText = ""; showNotes = true; showHighlightColors = true })
-                        // FIX 12: Open EW verse tap jumps to Bible tab
                         "Open EW" -> OpenEWContent(commentaryHtml = commentaryHtml, fontSize = fontSize, textColor = textColor, secondaryText = secondaryText, hasError = commentaryError, bookName = selectedBook, chapter = selectedChapter,
                             onVerseClick = { book, ch, vs -> openBook(book, ch); selectedVerse = vs; selectedTab = "Bible" })
                         "Search" -> SearchContent(searchQuery = searchQuery, searchFilter = searchFilter, filteredSearchResults = filteredSearchResults, verseResults = verseSearchResults, textColor = textColor, gold = gold, onQueryChange = { searchQuery = it }, onFilterChange = { searchFilter = it }, onOpenBook = { bookName -> openBook(bookName, 1); selectedTab = "Bible" }, onOpenVerse = { bookName, chapter, verse -> openBook(bookName, chapter); selectedVerse = verse; selectedTab = "Bible" })
                     }
-                    if (showNotes) {
-                        NotesCard(selectedBook = selectedBook, selectedChapter = selectedChapter, selectedVerse = selectedVerse, noteText = noteText, panel = panel, gold = gold, textColor = textColor, onNoteTextChange = { noteText = it }, onSaveNote = {
-                            val verse = selectedVerse ?: 1
-                            scope.launch {
-                                db.bibleDao().saveNote(NoteEntity(bookId = currentBookId, chapter = selectedChapter, verse = verse, noteText = noteText, timestamp = System.currentTimeMillis()))
-                                if (isLoggedIn) syncManager.uploadNote(currentBookId, selectedChapter, verse, noteText)
-                                noteText = ""
+                }
+
+                // FIX: Highlight + Add Note as OVERLAY - not below BibleContent, so they are visible
+                if (showNotes || showHighlightColors) {
+                    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).clickable { showNotes = false; showHighlightColors = false }, contentAlignment = Alignment.BottomCenter) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            if (showNotes) {
+                                NotesCard(selectedBook = selectedBook, selectedChapter = selectedChapter, selectedVerse = selectedVerse, noteText = noteText, panel = panel, gold = gold, textColor = textColor, onNoteTextChange = { noteText = it }, onSaveNote = {
+                                    val verse = selectedVerse ?: 1
+                                    scope.launch {
+                                        db.bibleDao().saveNote(NoteEntity(bookId = currentBookId, chapter = selectedChapter, verse = verse, noteText = noteText, timestamp = System.currentTimeMillis()))
+                                        if (isLoggedIn) syncManager.uploadNote(currentBookId, selectedChapter, verse, noteText)
+                                        noteText = ""
+                                        showNotes = false
+                                    }
+                                })
                             }
-                        })
-                    }
-                    if (showHighlightColors) {
-                        HighlightCard(selectedVerse = selectedVerse, panel = panel, gold = gold, textColor = textColor, onHighlightPicked = ::saveHighlight, onRemoveHighlight = ::removeHighlight, onDismiss = { showHighlightColors = false })
+                            if (showHighlightColors) {
+                                HighlightCard(selectedVerse = selectedVerse, panel = panel, gold = gold, textColor = textColor, onHighlightPicked = ::saveHighlight, onRemoveHighlight = ::removeHighlight, onDismiss = { showHighlightColors = false })
+                            }
+                        }
                     }
                 }
 
                 if (settingsOpen) {
                     Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).clickable { settingsOpen = false }) {
                         Column(
-                            modifier = Modifier.fillMaxHeight().fillMaxWidth(0.85f).align(Alignment.CenterEnd).background(background).clickable(enabled = false) { }.padding(16.dp),
+                            // FIX: Settings scrollable + duplicate Daily Verse removed
+                            modifier = Modifier.fillMaxHeight().fillMaxWidth(0.85f).align(Alignment.CenterEnd).background(background).clickable(enabled = false) { }
+                                .verticalScroll(rememberScrollState())
+                                .padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
@@ -418,15 +436,17 @@ fun HomeScreen() {
                                 Slider(value = fontSize, onValueChange = { fontSize = it }, valueRange = 12f..28f, modifier = Modifier.weight(1f).height(24.dp).padding(horizontal = 6.dp))
                                 Text("A+", color = textColor, fontSize = 13.sp)
                             }
-                            Text("Daily Verse", fontWeight = FontWeight.Bold, color = textColor, fontSize = 14.sp)
+                            // FIX: Removed duplicate black-bold Text("Daily Verse") - only button below
                             Button(onClick = { settingsOpen = false; dailyVerseDialog = true }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
                                 Text("Daily Verse", color = textColor, fontSize = 14.sp)
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { settingsOpen = false; showNotes = !showNotes }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
-                                    Text(if (showNotes) "Hide Notes" else "Notes", color = textColor, fontSize = 14.sp)
+                                // FIX: Notes now opens Notes Folder (all notes), not empty card
+                                Button(onClick = { settingsOpen = false; showAllNotes = true }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
+                                    Text("Notes (${allNotes.size})", color = textColor, fontSize = 14.sp)
                                 }
                             }
+                            Spacer(modifier = Modifier.height(80.dp))
                         }
                     }
                 }
@@ -435,6 +455,38 @@ fun HomeScreen() {
     }
     if (dailyVerseDialog) {
         DailyVerseDialog(dailyVerseText = dailyVerseText, gold = gold, textColor = textColor, fontSize = fontSize, onDismiss = { dailyVerseDialog = false })
+    }
+    // FIX: Notes Folder dialog - list of all saved notes
+    if (showAllNotes) {
+        AlertDialog(
+            onDismissRequest = { showAllNotes = false },
+            title = { Text("Notes (${allNotes.size})", color = textColor, fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+            text = {
+                if (allNotes.isEmpty()) {
+                    Text("No notes yet.\nHold a verse in Bible tab to add a note.", color = textColor, fontSize = 14.sp)
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().height(400.dp)) {
+                        items(allNotes, key = { "${it.bookId}-${it.chapter}-${it.verse}-${it.timestamp}" }) { note ->
+                            val bookName = booksList.firstOrNull { it.id == note.bookId }?.name ?: "Book ${note.bookId}"
+                            Column(modifier = Modifier.fillMaxWidth().clickable {
+                                showAllNotes = false
+                                openBook(bookName, note.chapter)
+                                selectedVerse = note.verse
+                                selectedTab = "Bible"
+                            }.padding(vertical = 10.dp)) {
+                                Text("$bookName ${note.chapter}:${note.verse}", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(note.noteText, color = textColor, fontSize = 14.sp)
+                            }
+                            Divider(color = panel)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAllNotes = false }) { Text("Close", color = gold) }
+            },
+            containerColor = background
+        )
     }
 }
 
