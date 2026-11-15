@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -319,9 +321,8 @@ fun HomeScreen() {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(background)) {
-        // REMOVED: TopAppBar EW Bible - now only the tab row is at the top
-        // TOP ROW - Menu + Tabs + Settings all on SAME line, vertically centered
+    // POINT 1 FIX: statusBarsPadding + navigationBarsPadding so view is not cut top/bottom
+    Column(modifier = Modifier.fillMaxSize().background(background).statusBarsPadding().navigationBarsPadding()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -346,7 +347,6 @@ fun HomeScreen() {
             }
         }
 
-        // Content area - drawer + settings live ONLY below the tab row
         ModalNavigationDrawer(
             modifier = Modifier.weight(1f),
             drawerState = drawerState,
