@@ -17,7 +17,8 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "ewbible.db"
-                ).fallbackToDestructiveMigration().build()
+                ).createFromAsset("ewbible.db")
+                .fallbackToDestructiveMigration().build()
                 // Force Room to create the file now
                 instance.openHelper.writableDatabase
                 INSTANCE = instance
