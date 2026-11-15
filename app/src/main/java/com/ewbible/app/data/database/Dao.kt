@@ -14,9 +14,8 @@ interface BibleDao {
     @Query("SELECT * FROM verses WHERE book_id = :bookId AND chapter = :chapter ORDER BY verse")
     fun getVerses(bookId: Int, chapter: Int): Flow<List<VerseEntity>>
 
-    // FIX: Caller passes "%love%" already, LOWER() makes it case-insensitive
-    @Query("SELECT * FROM verses WHERE LOWER(text) LIKE LOWER(:pattern) ORDER BY book_id, chapter, verse LIMIT 200")
-    suspend fun searchVerses(pattern: String): List<VerseEntity>
+    @Query("SELECT * FROM verses")
+    suspend fun getAllVersesList(): List<VerseEntity>
 
     @Query("SELECT * FROM summaries WHERE book_id = :bookId AND chapter = :chapter")
     suspend fun getSummary(bookId: Int, chapter: Int): SummaryEntity?
