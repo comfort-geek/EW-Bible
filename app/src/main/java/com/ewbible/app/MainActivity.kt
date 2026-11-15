@@ -15,6 +15,22 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // TEMP - copy empty Room DB to files for Pydroid
+        try {
+            // Force DB creation first
+            com.ewbible.app.data.database.AppDatabase.getInstance(this)
+            val dbFile = getDatabasePath("ewbible.db")
+            val outFile = java.io.File(getExternalFilesDir(null), "room_empty.db")
+            if (dbFile.exists()) {
+                dbFile.inputStream().use { input ->
+                    outFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+
         setContent {
             // Theme is handled inside HomeScreen for Dark Mode switch,
             // but we keep EWBibleTheme here as base so Material3 works
