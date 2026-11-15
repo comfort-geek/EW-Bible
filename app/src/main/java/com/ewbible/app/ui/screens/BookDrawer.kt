@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -53,12 +54,14 @@ fun BookDrawer(
         drawerContentColor = textColor,
     ) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            Text("Books", color = textColor, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            // FIX 4: Title 22.sp -> 18.sp, same as Settings
+            Text("Books", color = textColor, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(12.dp))
             if (otBookEntities.isEmpty() && ntBookEntities.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = gold) }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                // FIX 1: bottom padding so last book not cut
+                LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 80.dp)) {
                     item { Text("Old Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp); Spacer(Modifier.height(8.dp)) }
                     items(otBookEntities, key = { it.id }) { book ->
                         BookDrawerRow(book, chapterCounts[book.id] ?: 1, selectedBook, selectedChapter, expandedBook, textColor, panel, gold, secondaryText, onOpenBook, onSelectBook, onToggleBook)
@@ -102,7 +105,7 @@ private fun BookDrawerRow(
             Text(if (isExpanded) "▾" else "▸", color = secondaryText)
         }
         if (isExpanded) {
-            // FIX: Numbers only, well aligned, narrow - not full width
+            // FIX 14: Numbers only, small, centered - NOT full width
             // Centered 232dp box = 5 x 40dp + spacing, so 1 2 3 4 5 line up
             Box(
                 modifier = Modifier.fillMaxWidth(),
@@ -122,6 +125,7 @@ private fun BookDrawerRow(
                                     if (isChapterSelected) gold else panel,
                                     RoundedCornerShape(10.dp)
                                 )
+                                // FIX 13: Tap chapter -> onOpenBook -> HomeScreen closes drawer
                                 .clickable { onOpenBook(book.name, chapter) },
                             contentAlignment = Alignment.Center
                         ) {
