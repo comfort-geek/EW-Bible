@@ -7,11 +7,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -83,6 +85,7 @@ fun HomeScreen() {
     var dailyVerseText by remember { mutableStateOf("Your word is a lamp for my feet, a light on my path. - Psalm 119:105") }
     var verseSearchResults by remember { mutableStateOf<List<SearchResult>>(emptyList()) }
     var chapterCounts by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
+    var hasRestoredScroll by remember { mutableStateOf(false) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val listState = rememberLazyListState()
@@ -174,7 +177,6 @@ fun HomeScreen() {
         if (query.isEmpty()) candidates else candidates.filter { it.contains(query, ignoreCase = true) }
     }
 
-    // FIX: Search - pass "%query%" to match new DAO, escape % and _ so they don't act as wildcards
     LaunchedEffect(searchQuery, searchFilter, booksList) {
         val query = searchQuery.trim()
         if (query.length < 2 || booksList.isEmpty()) { verseSearchResults = emptyList(); return@LaunchedEffect }
@@ -203,6 +205,20 @@ fun HomeScreen() {
         selectedBook = restoredBook.name
         selectedChapter = savedChapter.coerceAtLeast(1)
         selectedVerse = savedVerse.coerceAtLeast(1)
+    }
+
+    // FIX: Restore exact scroll position once - only on first load, after verses are loaded
+    LaunchedEffect(versesList, savedScrollIndex, savedScrollOffset) {
+        if (hasRestoredScroll) return@LaunchedEffect
+        if (versesList.isEmpty()) return@LaunchedEffect
+        if (savedScrollIndex <= 0 && savedScrollOffset <= 0) {
+            hasRestoredScroll = true
+            return@LaunchedEffect
+        }
+        // versesList has header items too, so clamp to list size
+        val targetIndex = savedScrollIndex.coerceIn(0, (versesList.size + 2))
+        runCatching { listState.scrollToItem(targetIndex, savedScrollOffset) }
+        hasRestoredScroll = true
     }
 
     LaunchedEffect(savedName, savedEmail) {
@@ -246,13 +262,14 @@ fun HomeScreen() {
     }
 
     LaunchedEffect(isDarkMode, fontSize) { prefs.saveSettings(isDarkMode, fontSize) }
-    LaunchedEffect(selectedBook, selectedChapter) { listState.scrollToItem(0) }
+    // REMOVED: LaunchedEffect(selectedBook, selectedChapter) { listState.scrollToItem(0) } - this was killing scroll restore
 
     fun openBook(bookName: String, chapter: Int) {
         selectedBook = bookName
         selectedChapter = chapter
         selectedVerse = 1
         expandedBook = bookName
+        hasRestoredScroll = true // user manually changed book, don't restore old scroll
         scope.launch {
             prefs.saveReading("World English Bible", bookName, chapter, 1)
             prefs.saveScroll(0, 0)
