@@ -1,6 +1,7 @@
 package com.ewbible.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
@@ -23,7 +24,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,9 +49,8 @@ fun BibleContent(
     onVerseClick: (Int) -> Unit,
     onVerseLongClick: (Int) -> Unit,
 ) {
+    val haptic = LocalHapticFeedback.current
     Column(modifier = Modifier.fillMaxSize()) {
-        // FIX 2: Title is "2 Samuel 3" only - no suffix
-        // FIX 8: Don't show blank title while restoring - show nothing if book empty
         if (selectedBook.isNotBlank()) {
             Text(
                 text = "$selectedBook $selectedChapter",
@@ -57,9 +60,6 @@ fun BibleContent(
                 modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
             )
         }
-        // FIX 8: NO "Loading verses..." - show list directly, even if empty.
-        // HomeScreen already restores saved book before showing, so no Genesis 1 flash.
-        // FIX 1: bottom padding so last verse not cut
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
@@ -86,13 +86,19 @@ fun BibleContent(
             itemsIndexed(versesList, key = { _, verse -> verse.verse }) { _, verse ->
                 val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
                 Row(
+                    // FIX: Padding BEFORE clickable + clip before background = whole row is holdable
                     modifier = Modifier.fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .clip(RoundedCornerShape(8.dp))
                         .background(verseBackground, RoundedCornerShape(8.dp))
                         .combinedClickable(
                             onClick = { onVerseClick(verse.verse) },
-                            onLongClick = { onVerseLongClick(verse.verse) },
+                            onLongClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onVerseLongClick(verse.verse)
+                            },
                         )
-                        .padding(vertical = 10.dp, horizontal = 8.dp),
+                        .padding(vertical = 8.dp, horizontal = 8.dp),
                 ) {
                     Text(
                         text = "${verse.verse}",
