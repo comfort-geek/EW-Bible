@@ -31,7 +31,8 @@ class AppPreferences(private val context: Context) {
     val lastBook: Flow<String> = context.dataStore.data.map { it[LAST_BOOK] ?: "Genesis" }
     val lastChapter: Flow<Int> = context.dataStore.data.map { it[LAST_CHAPTER] ?: 1 }
     val lastVerse: Flow<Int> = context.dataStore.data.map { it[LAST_VERSE] ?: 1 }
-    val isDarkMode: Flow<Boolean> = context.dataStore.data.map { it[IS_DARK_MODE] ?: true }
+    // FIX: Nullable - null = user never picked, use System theme
+    val isDarkMode: Flow<Boolean?> = context.dataStore.data.map { it[IS_DARK_MODE] }
     val fontSize: Flow<Float> = context.dataStore.data.map { it[FONT_SIZE] ?: 16f }
     val userName: Flow<String> = context.dataStore.data.map { it[USER_NAME] ?: "Guest" }
     val userEmail: Flow<String> = context.dataStore.data.map { it[USER_EMAIL] ?: "" }
