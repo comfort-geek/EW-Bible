@@ -50,7 +50,6 @@ fun HomeScreen() {
     val scope = rememberCoroutineScope()
     val systemDark = isSystemInDarkTheme()
 
-    // FIX 1: Default = system, NOT true. So app no longer always starts dark.
     val savedDark by prefs.isDarkMode.collectAsState(initial = null)
     val savedFont by prefs.fontSize.collectAsState(initial = 16f)
     val savedName by prefs.userName.collectAsState(initial = "Guest")
@@ -63,9 +62,8 @@ fun HomeScreen() {
     val savedDailyVerseDate by prefs.dailyVerseDate.collectAsState(initial = "")
     val savedDailyVerseRef by prefs.dailyVerseReference.collectAsState(initial = null)
 
-    // Use system theme until user picks one
     var isDarkMode by remember { mutableStateOf(systemDark) }
-    var themeMode by remember { mutableStateOf("System") } // System / Light / Dark
+    var themeMode by remember { mutableStateOf("System") }
     var fontSize by remember { mutableStateOf(savedFont) }
     var isLoggedIn by remember { mutableStateOf(false) }
     var userName by remember { mutableStateOf("Guest") }
@@ -127,7 +125,6 @@ fun HomeScreen() {
         summary = runCatching { db.bibleDao().getSummary(currentBookId, selectedChapter) }.getOrNull()
     }
 
-    // FIX 2: Open EW - NEVER crash. Wrap in try/catch, never use !!
     LaunchedEffect(selectedBook, selectedChapter, currentBookId, selectedTab) {
         if (selectedTab == "Open EW") {
             commentaryError = false
@@ -177,13 +174,15 @@ fun HomeScreen() {
         if (query.isEmpty()) candidates else candidates.filter { it.contains(query, ignoreCase = true) }
     }
 
+    // FIX: Search - pass "%query%" to match new DAO, escape % and _ so they don't act as wildcards
     LaunchedEffect(searchQuery, searchFilter, booksList) {
         val query = searchQuery.trim()
         if (query.length < 2 || booksList.isEmpty()) { verseSearchResults = emptyList(); return@LaunchedEffect }
         val bookById = booksList.associateBy { it.id }
         val gospelBooks = setOf("Matthew", "Mark", "Luke", "John")
         val prophecyBooks = setOf("Isaiah", "Jeremiah", "Ezekiel", "Daniel", "Hosea", "Joel", "Amos", "Obadiah", "Jonah", "Micah", "Nahum", "Habakkuk", "Zephaniah", "Haggai", "Zechariah", "Malachi", "Revelation")
-        val rows = db.bibleDao().searchVerses(query)
+        val safeQuery = query.replace("%", "\\%").replace("_", "\\_")
+        val rows = runCatching { db.bibleDao().searchVerses("%$safeQuery%") }.getOrDefault(emptyList())
         verseSearchResults = rows.mapNotNull { row ->
             val book = bookById[row.bookId] ?: return@mapNotNull null
             val allowed = when (searchFilter) {
@@ -206,7 +205,6 @@ fun HomeScreen() {
         selectedVerse = savedVerse.coerceAtLeast(1)
     }
 
-    // FIX 3: Only sync profile once, don't overwrite isDarkMode every recomposition
     LaunchedEffect(savedName, savedEmail) {
         userName = savedName
         userEmail = savedEmail
@@ -307,7 +305,6 @@ fun HomeScreen() {
         }
     }
 
-    // Main layout - Drawer is SHARED for Bible + Open EW, so left menu is same
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -364,7 +361,6 @@ fun HomeScreen() {
                 }
             }
 
-            // FIX 4: Settings = FULL HEIGHT panel on RIGHT, not a DropdownMenu. No cut-off.
             if (settingsOpen) {
                 Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).clickable { settingsOpen = false }) {
                     Column(
@@ -375,7 +371,6 @@ fun HomeScreen() {
                             Text("Settings", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = textColor)
                             IconButton(onClick = { settingsOpen = false }) { Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor) }
                         }
-                        // FIX 5: Google profile on TOP
                         if (isLoggedIn) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Box(modifier = Modifier.size(56.dp).clip(CircleShape).background(gold), contentAlignment = Alignment.Center) {
@@ -397,7 +392,6 @@ fun HomeScreen() {
                         }
                         Divider(color = panel)
                         Text("Appearance", fontWeight = FontWeight.Bold, color = textColor)
-                        // Light / Dark / System - proper segmented control, not a broken Slider
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf("System", "Light", "Dark").forEach { mode ->
                                 val selected = themeMode == mode
