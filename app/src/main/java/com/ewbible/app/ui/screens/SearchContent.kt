@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,7 +30,8 @@ data class SearchResult(val bookName: String, val bookId: Int, val chapter: Int,
 fun SearchContent(
     searchQuery: String,
     searchFilter: String,
-    filteredSearchResults: List<String>,
+    // FIX 6: Kept for compatibility with HomeScreen call, but IGNORED - never show book list in Search
+    filteredSearchResults: List<String> = emptyList(),
     verseResults: List<SearchResult>,
     textColor: Color,
     gold: Color,
@@ -43,10 +45,12 @@ fun SearchContent(
             value = searchQuery,
             onValueChange = onQueryChange,
             label = { Text("Search Bible...") },
+            placeholder = { Text("e.g. love, faith, lamp") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
         Spacer(modifier = Modifier.height(12.dp))
+        // FIX 5: Categories filter VERSE results, not books
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -63,20 +67,15 @@ fun SearchContent(
         Spacer(modifier = Modifier.height(12.dp))
         val showVerses = searchQuery.trim().length >= 2
         if (!showVerses) {
-            if (filteredSearchResults.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Type 2+ letters to search verse text", color = textColor, fontSize = 14.sp)
-                }
-            } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(filteredSearchResults, key = { it }) { bookName ->
-                        Text(
-                            bookName,
-                            color = textColor,
-                            fontSize = 14.sp,
-                            modifier = Modifier.fillMaxWidth().clickable { onOpenBook(bookName) }.padding(vertical = 10.dp),
-                        )
-                    }
+            // FIX 6: NO book list here anymore - even if filteredSearchResults is passed, we ignore it
+            // FIX 5: Empty state tells user this is VERSE search
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Search verse text", color = textColor, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("Type 2+ letters to search verses", color = textColor, fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Use categories above to narrow results", color = textColor, fontSize = 13.sp)
                 }
             }
         } else {
@@ -85,7 +84,11 @@ fun SearchContent(
                     Text("No verses found for \"$searchQuery\"", color = textColor, fontSize = 14.sp)
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                // FIX 1: bottom padding so last verse not cut
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 80.dp)
+                ) {
                     items(verseResults, key = { "${it.bookId}-${it.chapter}-${it.verse}" }) { result ->
                         Column(
                             modifier = Modifier.fillMaxWidth()
