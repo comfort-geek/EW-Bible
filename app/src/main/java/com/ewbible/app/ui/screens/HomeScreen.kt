@@ -59,7 +59,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.ewbible.app.data.auth.GoogleAuth
 import com.ewbible.app.data.preferences.AppPreferences
 import kotlinx.coroutines.launch
 
@@ -76,7 +75,6 @@ fun HomeScreen(
     val isDark = state.darkMode ?: systemDark
 
     val prefs = remember { AppPreferences(context) }
-    val googleAuth = remember { GoogleAuth(context) }
 
     val savedScrollIndex by prefs.lastScrollIndex.collectAsState(initial = 0)
     val savedScrollOffset by prefs.lastScrollOffset.collectAsState(initial = 0)
@@ -91,23 +89,41 @@ fun HomeScreen(
     var showHighlightColors by remember { mutableStateOf(false) }
     var dailyVerseDialog by remember { mutableStateOf(false) }
     var hasRestoredScroll by remember { mutableStateOf(false) }
+    var lastScrollRestoreKey by remember { mutableStateOf(0) }
 
-    val drawerState = rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
+    val drawerState = rememberDrawerState(
+        initialValue = androidx.compose.material3.DrawerValue.Closed
+    )
     val listState = rememberLazyListState()
 
     LaunchedEffect(state.currentBookId, state.selectedChapter) {
         viewModel.loadSummary()
     }
 
-    LaunchedEffect(state.currentBookId, state.selectedChapter, state.selectedTab) {
+    LaunchedEffect(
+        state.currentBookId,
+        state.selectedChapter,
+        state.selectedTab
+    ) {
         if (state.selectedTab == "Open EW") {
             viewModel.loadCommentary()
         }
     }
 
-    LaunchedEffect(state.verses, savedScrollIndex, savedScrollOffset) {
-        if (hasRestoredScroll) return@LaunchedEffect
+    LaunchedEffect(
+        state.verses,
+        savedScrollIndex,
+        savedScrollOffset,
+        state.scrollRestoreKey
+    ) {
         if (state.verses.isEmpty()) return@LaunchedEffect
+
+        if (state.scrollRestoreKey != lastScrollRestoreKey) {
+            lastScrollRestoreKey = state.scrollRestoreKey
+            hasRestoredScroll = false
+        }
+
+        if (hasRestoredScroll) return@LaunchedEffect
 
         if (savedScrollIndex <= 0 && savedScrollOffset <= 0) {
             hasRestoredScroll = true
@@ -446,9 +462,7 @@ fun HomeScreen(
                                 }
                             }
 
-                            val isLoggedIn =
-                                googleAuth.isLoggedIn() &&
-                                        state.userName != "Guest"
+                            val isLoggedIn = state.isLoggedIn
 
                             if (isLoggedIn) {
                                 Row(
