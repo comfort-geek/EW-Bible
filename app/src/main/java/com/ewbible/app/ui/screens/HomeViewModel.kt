@@ -558,10 +558,14 @@ class HomeViewModel(
         }
     }
 
-    private fun isLoggedIn(): Boolean {
-        return googleAuth.isLoggedIn() &&
-                prefs.userName != "Guest" &&
-                prefs.userEmail.isNotBlank()
+    private suspend fun isLoggedIn(): Boolean {
+    val userName = prefs.userName.first()
+    val userEmail = prefs.userEmail.first()
+
+    return googleAuth.isLoggedIn() &&
+            userName != "Guest" &&
+            userEmail.isNotBlank()
+}
     }
 
     private suspend fun restoreSavedReading() {
