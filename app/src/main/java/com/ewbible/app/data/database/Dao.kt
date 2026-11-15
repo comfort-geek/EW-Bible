@@ -3,19 +3,53 @@ package com.ewbible.app.data.database
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
+data class BookChapterCount(
+    val bookId: Int,
+    val chapterCount: Int
+)
+
+data class VerseSearchResult(
+    val bookId: Int,
+    val bookName: String,
+    val chapter: Int,
+    val verse: Int,
+    val text: String
+)
+
 @Dao
 interface BibleDao {
+
     @Query("SELECT * FROM books ORDER BY id")
     fun getAllBooks(): Flow<List<BookEntity>>
 
     @Query("SELECT COALESCE(MAX(chapter), 1) FROM verses WHERE book_id = :bookId")
     suspend fun getMaxChapter(bookId: Int): Int
 
+    @Query("""
+        SELECT book_id AS bookId, MAX(chapter) AS chapterCount
+        FROM verses
+        GROUP BY book_id
+    """)
+    suspend fun getChapterCounts(): List<BookChapterCount>
+
     @Query("SELECT * FROM verses WHERE book_id = :bookId AND chapter = :chapter ORDER BY verse")
     fun getVerses(bookId: Int, chapter: Int): Flow<List<VerseEntity>>
 
     @Query("SELECT * FROM verses")
     suspend fun getAllVersesList(): List<VerseEntity>
+
+    @Query("""
+        SELECT v.book_id AS bookId,
+               b.name AS bookName,
+               v.chapter,
+               v.verse,
+               v.text
+        FROM verses v
+        INNER JOIN books b ON b.id = v.book_id
+        WHERE v.text LIKE '%' || :query || '%'
+        LIMIT 200
+    """)
+    suspend fun searchVerses(query: String): List<VerseSearchResult>
 
     @Query("SELECT * FROM summaries WHERE book_id = :bookId AND chapter = :chapter")
     suspend fun getSummary(bookId: Int, chapter: Int): SummaryEntity?
@@ -33,13 +67,34 @@ interface BibleDao {
     fun getAllHighlights(): Flow<List<HighlightEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun saveHighlight(h: HighlightEntity)
+    suspend fun saveHighlight(highlight: HighlightEntity)
 
-    @Query("DELETE FROM highlights WHERE book_id = :bookId AND chapter = :chapter AND verse = :verse")
+    @Query("""
+        DELETE FROM highlights
+        WHERE book_id = :bookId
+          AND chapter = :chapter
+          AND verse = :verse
+    """)
     suspend fun deleteHighlight(bookId: Int, chapter: Int, verse: Int)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun saveNote(n: NoteEntity)
+    suspend fun saveNote(note: NoteEntity)
+
+    @Update
+    suspend fun updateNote(note: NoteEntity)
+
+    @Query("""
+        SELECT * FROM notes
+        WHERE book_id = :bookId
+          AND chapter = :chapter
+          AND verse = :verse
+        LIMIT 1
+    """)
+    suspend fun getNoteAtVerse(
+        bookId: Int,
+        chapter: Int,
+        verse: Int
+    ): NoteEntity?
 
     @Query("SELECT * FROM notes WHERE book_id = :bookId AND chapter = :chapter AND verse = :verse")
     fun getNotes(bookId: Int, chapter: Int, verse: Int): Flow<List<NoteEntity>>
