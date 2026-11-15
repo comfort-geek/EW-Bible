@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -58,8 +59,9 @@ fun HomeScreen() {
     val savedFont by prefs.fontSize.collectAsState(initial = 16f)
     val savedName by prefs.userName.collectAsState(initial = "Guest")
     val savedEmail by prefs.userEmail.collectAsState(initial = "")
-    val savedBook by prefs.lastBook.collectAsState(initial = "Genesis")
-    val savedChapter by prefs.lastChapter.collectAsState(initial = 1)
+    // FIX 8: Start empty, NOT Genesis - so no Genesis 1 flash
+    val savedBook by prefs.lastBook.collectAsState(initial = "")
+    val savedChapter by prefs.lastChapter.collectAsState(initial = 0)
     val savedVerse by prefs.lastVerse.collectAsState(initial = 1)
     val savedScrollIndex by prefs.lastScrollIndex.collectAsState(initial = 0)
     val savedScrollOffset by prefs.lastScrollOffset.collectAsState(initial = 0)
@@ -88,6 +90,7 @@ fun HomeScreen() {
     var verseSearchResults by remember { mutableStateOf<List<SearchResult>>(emptyList()) }
     var chapterCounts by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
     var hasRestoredScroll by remember { mutableStateOf(false) }
+    var hasRestoredBook by remember { mutableStateOf(false) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val listState = rememberLazyListState()
@@ -164,20 +167,9 @@ fun HomeScreen() {
             t.equals("NT", ignoreCase = true) || t.startsWith("New", ignoreCase = true) || (t.isBlank() && book.id > 39)
         }.sortedBy { it.id }
     }
-    val availableBooks = remember(booksList) { booksList.sortedBy { it.id }.map { it.name } }
-    val filteredSearchResults = remember(searchQuery, searchFilter, availableBooks, otBooks, ntBooks) {
-        val gospelBooks = setOf("Matthew", "Mark", "Luke", "John")
-        val prophecyBooks = setOf("Isaiah", "Jeremiah", "Ezekiel", "Daniel", "Hosea", "Joel", "Amos", "Obadiah", "Jonah", "Micah", "Nahum", "Habakkuk", "Zephaniah", "Haggai", "Zechariah", "Malachi", "Revelation")
-        val candidates = when (searchFilter) {
-            "Gospel" -> availableBooks.filter { it in gospelBooks }
-            "Prophecy" -> availableBooks.filter { it in prophecyBooks }
-            "Old Testament" -> availableBooks.filter { name -> otBooks.any { it.name == name } }
-            "New Testament" -> availableBooks.filter { name -> ntBooks.any { it.name == name } }
-            else -> availableBooks
-        }
-        val query = searchQuery.trim()
-        if (query.isEmpty()) candidates else candidates.filter { it.contains(query, ignoreCase = true) }
-    }
+    // FIX 6: No book listing in Search - only categories + verse results
+    // filteredSearchResults is now always empty, SearchContent must not show book list
+    val filteredSearchResults: List<String> = emptyList()
 
     LaunchedEffect(searchQuery, searchFilter, booksList) {
         val query = searchQuery.trim()
@@ -200,13 +192,16 @@ fun HomeScreen() {
         }
     }
 
+    // FIX 8: Restore saved progress directly, no Genesis fallback flash
     LaunchedEffect(booksList, savedBook, savedChapter, savedVerse) {
         if (booksList.isEmpty()) return@LaunchedEffect
+        if (savedBook.isBlank()) return@LaunchedEffect
         val restoredBook = booksList.firstOrNull { it.name.equals(savedBook, ignoreCase = true) || it.key.equals(savedBook, ignoreCase = true) }
-            ?: booksList.minByOrNull { it.id } ?: return@LaunchedEffect
+            ?: return@LaunchedEffect
         selectedBook = restoredBook.name
         selectedChapter = savedChapter.coerceAtLeast(1)
         selectedVerse = savedVerse.coerceAtLeast(1)
+        hasRestoredBook = true
     }
 
     LaunchedEffect(versesList, savedScrollIndex, savedScrollOffset) {
@@ -269,6 +264,7 @@ fun HomeScreen() {
         selectedVerse = 1
         expandedBook = bookName
         hasRestoredScroll = true
+        hasRestoredBook = true
         scope.launch {
             prefs.saveReading("World English Bible", bookName, chapter, 1)
             prefs.saveScroll(0, 0)
@@ -321,7 +317,6 @@ fun HomeScreen() {
         }
     }
 
-    // POINT 1 FIX: statusBarsPadding + navigationBarsPadding so view is not cut top/bottom
     Column(modifier = Modifier.fillMaxSize().background(background).statusBarsPadding().navigationBarsPadding()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
@@ -364,7 +359,9 @@ fun HomeScreen() {
             Box(modifier = Modifier.fillMaxSize().background(background)) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     when (selectedTab) {
-                        "Bible" -> BibleContent(selectedBook = selectedBook, selectedChapter = selectedChapter, summary = summary, versesList = versesList, currentHighlightMap = highlightMap, fontSize = fontSize, gold = gold, panel = panel, textColor = textColor, listState = listState, onVerseClick = ::saveReadingProgress, onVerseLongClick = { verse -> selectedVerse = verse; showHighlightColors = true })
+                        "Bible" -> BibleContent(selectedBook = selectedBook, selectedChapter = selectedChapter, summary = summary, versesList = versesList, currentHighlightMap = highlightMap, fontSize = fontSize, gold = gold, panel = panel, textColor = textColor, listState = listState, onVerseClick = ::saveReadingProgress,
+                            // FIX 11: Long-press opens Add Note card + Highlight colors
+                            onVerseLongClick = { verse -> selectedVerse = verse; noteText = ""; showNotes = true; showHighlightColors = true })
                         "Open EW" -> OpenEWContent(commentaryHtml = commentaryHtml, fontSize = fontSize, textColor = textColor, secondaryText = secondaryText, hasError = commentaryError, bookName = selectedBook, chapter = selectedChapter)
                         "Search" -> SearchContent(searchQuery = searchQuery, searchFilter = searchFilter, filteredSearchResults = filteredSearchResults, verseResults = verseSearchResults, textColor = textColor, gold = gold, onQueryChange = { searchQuery = it }, onFilterChange = { searchFilter = it }, onOpenBook = { bookName -> openBook(bookName, 1); selectedTab = "Bible" }, onOpenVerse = { bookName, chapter, verse -> openBook(bookName, chapter); selectedVerse = verse; selectedTab = "Bible" })
                     }
@@ -386,58 +383,56 @@ fun HomeScreen() {
                 if (settingsOpen) {
                     Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).clickable { settingsOpen = false }) {
                         Column(
-                            modifier = Modifier.fillMaxHeight().fillMaxWidth(0.85f).align(Alignment.CenterEnd).background(background).clickable(enabled = false) { }.padding(20.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                            modifier = Modifier.fillMaxHeight().fillMaxWidth(0.85f).align(Alignment.CenterEnd).background(background).clickable(enabled = false) { }.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                                Text("Settings", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = textColor)
+                                // FIX 4: 22.sp -> 18.sp
+                                Text("Settings", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
                                 IconButton(onClick = { settingsOpen = false }) { Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor) }
                             }
                             if (isLoggedIn) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    Box(modifier = Modifier.size(56.dp).clip(CircleShape).background(gold), contentAlignment = Alignment.Center) {
-                                        Text(userName.firstOrNull()?.toString()?.uppercase() ?: "U", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Box(modifier = Modifier.size(44.dp).clip(CircleShape).background(gold), contentAlignment = Alignment.Center) {
+                                        Text(userName.firstOrNull()?.toString()?.uppercase() ?: "U", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                                     }
-                                    Column {
-                                        Text(userName, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = textColor)
-                                        Text(userEmail, fontSize = 13.sp, color = secondaryText)
+                                    // FIX 3: Single line, ellipsis, like Google account
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(userName, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = textColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(userEmail, fontSize = 12.sp, color = secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
                                 }
                                 Button(onClick = { handleGoogleLogout() }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
-                                    Text("Log out", color = textColor)
+                                    Text("Log out", color = textColor, fontSize = 14.sp)
                                 }
                             } else {
-                                Text("Not signed in", color = secondaryText)
+                                Text("Not signed in", color = secondaryText, fontSize = 14.sp)
                                 Button(onClick = { settingsOpen = false; handleGoogleLogin() }, modifier = Modifier.fillMaxWidth()) {
-                                    Text("Log in with Google")
+                                    Text("Log in with Google", fontSize = 14.sp)
                                 }
                             }
                             Divider(color = panel)
-                            Text("Appearance", fontWeight = FontWeight.Bold, color = textColor)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf("System", "Light", "Dark").forEach { mode ->
-                                    val selected = themeMode == mode
-                                    Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(if (selected) gold else panel).clickable {
-                                        themeMode = mode
-                                        isDarkMode = when (mode) { "Light" -> false; "Dark" -> true; else -> systemDark }
-                                    }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-                                        Text(mode, color = if (selected) Color.White else textColor, fontWeight = FontWeight.Bold)
-                                    }
-                                }
+                            Text("Appearance", fontWeight = FontWeight.Bold, color = textColor, fontSize = 14.sp)
+                            // FIX 7: Only ONE Dark Mode button, no System / Light
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(panel).clickable { isDarkMode = !isDarkMode; themeMode = if (isDarkMode) "Dark" else "Light" }.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                                Text("Dark Mode", color = textColor, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                Switch(checked = isDarkMode, onCheckedChange = { isDarkMode = it; themeMode = if (it) "Dark" else "Light" })
                             }
-                            Text("Font size", fontWeight = FontWeight.Bold, color = textColor)
+                            Text("Font size", fontWeight = FontWeight.Bold, color = textColor, fontSize = 14.sp)
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("A-", color = textColor)
-                                Slider(value = fontSize, onValueChange = { fontSize = it }, valueRange = 12f..28f, modifier = Modifier.weight(1f).padding(horizontal = 6.dp))
-                                Text("A+", color = textColor)
+                                Text("A-", color = textColor, fontSize = 13.sp)
+                                // FIX 9: Smaller slider
+                                Slider(value = fontSize, onValueChange = { fontSize = it }, valueRange = 12f..28f, modifier = Modifier.weight(1f).height(24.dp).padding(horizontal = 6.dp))
+                                Text("A+", color = textColor, fontSize = 13.sp)
                             }
-                            Text("Daily Verse", fontWeight = FontWeight.Bold, color = textColor)
+                            // FIX 10: "Daily Verse" only, Notes = Add Notes same thing
+                            Text("Daily Verse", fontWeight = FontWeight.Bold, color = textColor, fontSize = 14.sp)
                             Button(onClick = { settingsOpen = false; dailyVerseDialog = true }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
-                                Text("Show Daily Verse", color = textColor)
+                                Text("Daily Verse", color = textColor, fontSize = 14.sp)
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(onClick = { settingsOpen = false; showNotes = !showNotes }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
-                                    Text(if (showNotes) "Hide Notes" else "Notes", color = textColor)
+                                    Text(if (showNotes) "Hide Notes" else "Notes", color = textColor, fontSize = 14.sp)
                                 }
                             }
                         }
