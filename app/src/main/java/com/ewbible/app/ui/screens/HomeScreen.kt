@@ -59,7 +59,6 @@ fun HomeScreen() {
     val savedFont by prefs.fontSize.collectAsState(initial = 16f)
     val savedName by prefs.userName.collectAsState(initial = "Guest")
     val savedEmail by prefs.userEmail.collectAsState(initial = "")
-    // FIX 8: Start empty, NOT Genesis - so no Genesis 1 flash
     val savedBook by prefs.lastBook.collectAsState(initial = "")
     val savedChapter by prefs.lastChapter.collectAsState(initial = 0)
     val savedVerse by prefs.lastVerse.collectAsState(initial = 1)
@@ -167,8 +166,6 @@ fun HomeScreen() {
             t.equals("NT", ignoreCase = true) || t.startsWith("New", ignoreCase = true) || (t.isBlank() && book.id > 39)
         }.sortedBy { it.id }
     }
-    // FIX 6: No book listing in Search - only categories + verse results
-    // filteredSearchResults is now always empty, SearchContent must not show book list
     val filteredSearchResults: List<String> = emptyList()
 
     LaunchedEffect(searchQuery, searchFilter, booksList) {
@@ -192,7 +189,6 @@ fun HomeScreen() {
         }
     }
 
-    // FIX 8: Restore saved progress directly, no Genesis fallback flash
     LaunchedEffect(booksList, savedBook, savedChapter, savedVerse) {
         if (booksList.isEmpty()) return@LaunchedEffect
         if (savedBook.isBlank()) return@LaunchedEffect
@@ -360,9 +356,10 @@ fun HomeScreen() {
                 Column(modifier = Modifier.fillMaxSize()) {
                     when (selectedTab) {
                         "Bible" -> BibleContent(selectedBook = selectedBook, selectedChapter = selectedChapter, summary = summary, versesList = versesList, currentHighlightMap = highlightMap, fontSize = fontSize, gold = gold, panel = panel, textColor = textColor, listState = listState, onVerseClick = ::saveReadingProgress,
-                            // FIX 11: Long-press opens Add Note card + Highlight colors
                             onVerseLongClick = { verse -> selectedVerse = verse; noteText = ""; showNotes = true; showHighlightColors = true })
-                        "Open EW" -> OpenEWContent(commentaryHtml = commentaryHtml, fontSize = fontSize, textColor = textColor, secondaryText = secondaryText, hasError = commentaryError, bookName = selectedBook, chapter = selectedChapter)
+                        // FIX 12: Open EW verse tap jumps to Bible tab
+                        "Open EW" -> OpenEWContent(commentaryHtml = commentaryHtml, fontSize = fontSize, textColor = textColor, secondaryText = secondaryText, hasError = commentaryError, bookName = selectedBook, chapter = selectedChapter,
+                            onVerseClick = { book, ch, vs -> openBook(book, ch); selectedVerse = vs; selectedTab = "Bible" })
                         "Search" -> SearchContent(searchQuery = searchQuery, searchFilter = searchFilter, filteredSearchResults = filteredSearchResults, verseResults = verseSearchResults, textColor = textColor, gold = gold, onQueryChange = { searchQuery = it }, onFilterChange = { searchFilter = it }, onOpenBook = { bookName -> openBook(bookName, 1); selectedTab = "Bible" }, onOpenVerse = { bookName, chapter, verse -> openBook(bookName, chapter); selectedVerse = verse; selectedTab = "Bible" })
                     }
                     if (showNotes) {
@@ -387,7 +384,6 @@ fun HomeScreen() {
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                                // FIX 4: 22.sp -> 18.sp
                                 Text("Settings", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
                                 IconButton(onClick = { settingsOpen = false }) { Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor) }
                             }
@@ -396,7 +392,6 @@ fun HomeScreen() {
                                     Box(modifier = Modifier.size(44.dp).clip(CircleShape).background(gold), contentAlignment = Alignment.Center) {
                                         Text(userName.firstOrNull()?.toString()?.uppercase() ?: "U", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                                     }
-                                    // FIX 3: Single line, ellipsis, like Google account
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(userName, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = textColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                         Text(userEmail, fontSize = 12.sp, color = secondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -413,7 +408,6 @@ fun HomeScreen() {
                             }
                             Divider(color = panel)
                             Text("Appearance", fontWeight = FontWeight.Bold, color = textColor, fontSize = 14.sp)
-                            // FIX 7: Only ONE Dark Mode button, no System / Light
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(panel).clickable { isDarkMode = !isDarkMode; themeMode = if (isDarkMode) "Dark" else "Light" }.padding(horizontal = 12.dp, vertical = 10.dp)) {
                                 Text("Dark Mode", color = textColor, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                                 Switch(checked = isDarkMode, onCheckedChange = { isDarkMode = it; themeMode = if (it) "Dark" else "Light" })
@@ -421,11 +415,9 @@ fun HomeScreen() {
                             Text("Font size", fontWeight = FontWeight.Bold, color = textColor, fontSize = 14.sp)
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("A-", color = textColor, fontSize = 13.sp)
-                                // FIX 9: Smaller slider
                                 Slider(value = fontSize, onValueChange = { fontSize = it }, valueRange = 12f..28f, modifier = Modifier.weight(1f).height(24.dp).padding(horizontal = 6.dp))
                                 Text("A+", color = textColor, fontSize = 13.sp)
                             }
-                            // FIX 10: "Daily Verse" only, Notes = Add Notes same thing
                             Text("Daily Verse", fontWeight = FontWeight.Bold, color = textColor, fontSize = 14.sp)
                             Button(onClick = { settingsOpen = false; dailyVerseDialog = true }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
                                 Text("Daily Verse", color = textColor, fontSize = 14.sp)
