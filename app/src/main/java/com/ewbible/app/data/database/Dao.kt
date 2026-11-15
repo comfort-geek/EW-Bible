@@ -23,6 +23,9 @@ interface BibleDao {
     @Query("SELECT * FROM commentary WHERE book_id = :bookId AND chapter = :chapter")
     suspend fun getCommentary(bookId: Int, chapter: Int): CommentaryEntity?
 
+    @Query("SELECT html_compressed FROM commentary WHERE book_id = :bookId AND chapter = :chapter")
+    suspend fun getCommentaryCompressed(bookId: Int, chapter: Int): ByteArray?
+
     @Query("SELECT * FROM highlights WHERE book_id = :bookId AND chapter = :chapter")
     fun getHighlights(bookId: Int, chapter: Int): Flow<List<HighlightEntity>>
 
