@@ -1,10 +1,10 @@
 package com.ewbible.app.ui.screens
 
 import android.app.Application
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.ewbible.app.data.auth.GoogleAuth
 import com.ewbible.app.data.database.*
 import com.ewbible.app.data.sync.SyncManager
@@ -30,7 +30,7 @@ data class HomeUiState(
     val selectedChapter: Int = 1,
     val selectedVerse: Int? = null,
     val selectedTab: String = "Bible",
-    val darkMode: Boolean = false,
+    val darkMode: Boolean? = null,
     val fontSize: Float = 16f,
     val isLoggedIn: Boolean = false,
     val userName: String = "Guest",
@@ -92,8 +92,8 @@ class HomeViewModel(
         .flatMapLatest { bookId ->
             selectedChapter.flatMapLatest { chapter ->
                 dao.getHighlights(bookId, chapter).map { highlightList ->
-                    highlightList.associate {
-                        it.verse to parseHighlightColor(it.color)
+                    highlightList.associate { highlight ->
+                        highlight.verse to parseHighlightColor(highlight.color)
                     }
                 }
             }
@@ -101,47 +101,128 @@ class HomeViewModel(
 
     val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
 
-    val uiState: StateFlow<HomeUiState> = combine(
+    private data class ReadingState(
+        val books: List<BookEntity>,
+        val verses: List<VerseEntity>,
+        val highlights: Map<Int, Color>,
+        val notes: List<NoteEntity>,
+        val currentBookId: Int
+    )
+
+    private data class NavigationState(
+        val selectedBook: String,
+        val selectedChapter: Int,
+        val selectedVerse: Int?,
+        val selectedTab: String,
+        val commentaryHtml: String
+    )
+
+    private data class ContentState(
+        val commentaryError: Boolean,
+        val summary: SummaryEntity?,
+        val chapterCounts: Map<Int, Int>,
+        val searchResults: List<SearchResult>,
+        val dailyVerse: String
+    )
+
+    private data class UserSettingsState(
+        val darkMode: Boolean?,
+        val fontSize: Float,
+        val userName: String,
+        val userEmail: String,
+        val isLoggedIn: Boolean
+    )
+
+    private val readingState = combine(
         books,
         verses,
         highlights,
         notes,
-        currentBookId,
+        currentBookId
+    ) { books, verses, highlights, notes, currentBookId ->
+        ReadingState(
+            books = books,
+            verses = verses,
+            highlights = highlights,
+            notes = notes,
+            currentBookId = currentBookId
+        )
+    }
+
+    private val navigationState = combine(
         selectedBook,
         selectedChapter,
         selectedVerse,
         selectedTab,
-        commentary,
+        commentary
+    ) { selectedBook, selectedChapter, selectedVerse, selectedTab, commentaryHtml ->
+        NavigationState(
+            selectedBook = selectedBook,
+            selectedChapter = selectedChapter,
+            selectedVerse = selectedVerse,
+            selectedTab = selectedTab,
+            commentaryHtml = commentaryHtml
+        )
+    }
+
+    private val contentState = combine(
         commentaryError,
         summaryState,
         chapterCounts,
         searchResults,
-        dailyVerse,
+        dailyVerse
+    ) { commentaryError, summary, chapterCounts, searchResults, dailyVerse ->
+        ContentState(
+            commentaryError = commentaryError,
+            summary = summary,
+            chapterCounts = chapterCounts,
+            searchResults = searchResults,
+            dailyVerse = dailyVerse
+        )
+    }
+
+    private val userSettingsState = combine(
         prefs.isDarkMode,
         prefs.fontSize,
         prefs.userName,
         prefs.userEmail
-    ) { values ->
+    ) { darkMode, fontSize, userName, userEmail ->
+        UserSettingsState(
+            darkMode = darkMode,
+            fontSize = fontSize,
+            userName = userName,
+            userEmail = userEmail,
+            isLoggedIn = userName != "Guest" && userEmail.isNotBlank()
+        )
+    }
+
+    val uiState: StateFlow<HomeUiState> = combine(
+        readingState,
+        navigationState,
+        contentState,
+        userSettingsState
+    ) { reading, navigation, content, settings ->
         HomeUiState(
-            books = values[0] as List<BookEntity>,
-            verses = values[1] as List<VerseEntity>,
-            highlights = values[2] as Map<Int, Color>,
-            notes = values[3] as List<NoteEntity>,
-            currentBookId = values[4] as Int,
-            selectedBook = values[5] as String,
-            selectedChapter = values[6] as Int,
-            selectedVerse = values[7] as Int?,
-            selectedTab = values[8] as String,
-            commentaryHtml = values[9] as String,
-            commentaryError = values[10] as Boolean,
-            summary = values[11] as SummaryEntity?,
-            chapterCounts = values[12] as Map<Int, Int>,
-            searchResults = values[13] as List<SearchResult>,
-            dailyVerse = values[14] as String,
-            darkMode = values[15] as Boolean,
-            fontSize = values[16] as Float,
-            userName = values[17] as String,
-            userEmail = values[18] as String
+            books = reading.books,
+            verses = reading.verses,
+            highlights = reading.highlights,
+            notes = reading.notes,
+            currentBookId = reading.currentBookId,
+            selectedBook = navigation.selectedBook,
+            selectedChapter = navigation.selectedChapter,
+            selectedVerse = navigation.selectedVerse,
+            selectedTab = navigation.selectedTab,
+            commentaryHtml = navigation.commentaryHtml,
+            commentaryError = content.commentaryError,
+            summary = content.summary,
+            chapterCounts = content.chapterCounts,
+            searchResults = content.searchResults,
+            dailyVerse = content.dailyVerse,
+            darkMode = settings.darkMode,
+            fontSize = settings.fontSize,
+            isLoggedIn = settings.isLoggedIn,
+            userName = settings.userName,
+            userEmail = settings.userEmail
         )
     }.stateIn(
         scope = viewModelScope,
@@ -151,10 +232,16 @@ class HomeViewModel(
 
     init {
         viewModelScope.launch {
+            restoreSavedReading()
+        }
+
+        viewModelScope.launch {
             books.collect { bookList ->
                 if (bookList.isNotEmpty()) {
                     chapterCounts.value = dao.getChapterCounts()
-                        .associate { it.bookId to it.chapterCount }
+                        .associate { chapterCount ->
+                            chapterCount.bookId to chapterCount.chapterCount
+                        }
                 }
             }
         }
@@ -163,12 +250,20 @@ class HomeViewModel(
             searchQuery
                 .debounce(300)
                 .collectLatest { query ->
-                    val trimmed = query.trim()
+                    val trimmedQuery = query.trim()
 
-                    searchResults.value = if (trimmed.length < 2) {
+                    searchResults.value = if (trimmedQuery.length < 2) {
                         emptyList()
                     } else {
-                        dao.searchVerses(trimmed)
+                        dao.searchVerses(trimmedQuery).map { result ->
+                            SearchResult(
+                                bookName = result.bookName,
+                                bookId = result.bookId,
+                                chapter = result.chapter,
+                                verse = result.verse,
+                                text = result.text
+                            )
+                        }
                     }
                 }
         }
@@ -185,10 +280,10 @@ class HomeViewModel(
 
         viewModelScope.launch {
             prefs.saveReading(
-                translation = "World English Bible",
-                book = bookName,
-                chapter = chapter,
-                verse = 1
+                "World English Bible",
+                bookName,
+                chapter,
+                1
             )
             prefs.saveScroll(0, 0)
         }
@@ -214,6 +309,50 @@ class HomeViewModel(
         searchFilter.value = filter
     }
 
+    fun loadSummary() {
+        viewModelScope.launch {
+            summaryState.value = runCatching {
+                dao.getSummary(
+                    currentBookId.value,
+                    selectedChapter.value
+                )
+            }.getOrNull()
+        }
+    }
+
+    fun loadCommentary() {
+        viewModelScope.launch {
+            commentaryError.value = false
+
+            commentary.value = runCatching {
+                dao.getCommentary(
+                    currentBookId.value,
+                    selectedChapter.value
+                )?.getHtml().orEmpty()
+            }.onFailure {
+                commentaryError.value = true
+            }.getOrDefault("")
+        }
+    }
+
+    fun setDarkMode(enabled: Boolean) {
+        viewModelScope.launch {
+            prefs.saveSettings(
+                enabled,
+                prefs.fontSize.first()
+            )
+        }
+    }
+
+    fun setFontSize(size: Float) {
+        viewModelScope.launch {
+            prefs.saveSettings(
+                prefs.isDarkMode.first() ?: false,
+                size
+            )
+        }
+    }
+
     fun saveReadingProgress(
         verse: Int,
         scrollIndex: Int,
@@ -226,12 +365,23 @@ class HomeViewModel(
 
         viewModelScope.launch {
             prefs.saveReading(
-                translation = "World English Bible",
-                book = book,
-                chapter = selectedChapter.value,
-                verse = verse
+                "World English Bible",
+                book,
+                selectedChapter.value,
+                verse
             )
             prefs.saveScroll(scrollIndex, scrollOffset)
+
+            if (isLoggedIn()) {
+                syncManager.uploadProgress(
+                    "World English Bible",
+                    book,
+                    selectedChapter.value,
+                    verse,
+                    scrollIndex,
+                    scrollOffset
+                )
+            }
         }
     }
 
@@ -249,6 +399,15 @@ class HomeViewModel(
                     color = hex
                 )
             )
+
+            if (isLoggedIn()) {
+                syncManager.uploadHighlight(
+                    currentBookId.value,
+                    selectedChapter.value,
+                    verse,
+                    hex
+                )
+            }
         }
     }
 
@@ -257,10 +416,18 @@ class HomeViewModel(
 
         viewModelScope.launch {
             dao.deleteHighlight(
-                bookId = currentBookId.value,
-                chapter = selectedChapter.value,
-                verse = verse
+                currentBookId.value,
+                selectedChapter.value,
+                verse
             )
+
+            if (isLoggedIn()) {
+                syncManager.deleteHighlight(
+                    currentBookId.value,
+                    selectedChapter.value,
+                    verse
+                )
+            }
         }
     }
 
@@ -278,6 +445,119 @@ class HomeViewModel(
                     timestamp = System.currentTimeMillis()
                 )
             )
+
+            if (isLoggedIn()) {
+                syncManager.uploadNote(
+                    currentBookId.value,
+                    selectedChapter.value,
+                    verse,
+                    text
+                )
+            }
+        }
+    }
+
+    fun handleGoogleLogin() {
+        viewModelScope.launch {
+            googleAuth.signInWithGoogle()
+                .onSuccess { data ->
+                    val name = data.substringBefore('|').ifBlank { "User" }
+                    val email = data.substringAfter('|', "")
+
+                    prefs.saveUser(name, email)
+                    syncFromCloud()
+                }
+        }
+    }
+
+    fun handleGoogleLogout() {
+        viewModelScope.launch {
+            googleAuth.signOut()
+            prefs.saveUser("Guest", "")
+        }
+    }
+
+    fun syncFromCloud() {
+        viewModelScope.launch {
+            syncManager.getHighlights().forEach { cloudHighlight ->
+                dao.saveHighlight(
+                    HighlightEntity(
+                        bookId = cloudHighlight.bookId,
+                        chapter = cloudHighlight.chapter,
+                        verse = cloudHighlight.verse,
+                        color = cloudHighlight.color
+                    )
+                )
+            }
+
+            syncManager.getNotes().forEach { cloudNote ->
+                val existingNote = dao.getNoteAtVerse(
+                    cloudNote.bookId,
+                    cloudNote.chapter,
+                    cloudNote.verse
+                )
+
+                if (existingNote != null) {
+                    dao.updateNote(
+                        existingNote.copy(
+                            noteText = cloudNote.noteText,
+                            timestamp = cloudNote.timestamp
+                        )
+                    )
+                } else {
+                    dao.saveNote(
+                        NoteEntity(
+                            bookId = cloudNote.bookId,
+                            chapter = cloudNote.chapter,
+                            verse = cloudNote.verse,
+                            noteText = cloudNote.noteText,
+                            timestamp = cloudNote.timestamp
+                        )
+                    )
+                }
+            }
+
+            syncManager.getProgress()?.let { progress ->
+                val bookExists = books.first().any { book ->
+                    book.name == progress.book
+                }
+
+                if (bookExists) {
+                    selectedBook.value = progress.book
+                    selectedChapter.value = progress.chapter.coerceAtLeast(1)
+                    selectedVerse.value = progress.verse
+
+                    prefs.saveReading(
+                        progress.mode,
+                        progress.book,
+                        progress.chapter,
+                        progress.verse
+                    )
+                    prefs.saveScroll(
+                        progress.scrollIndex,
+                        progress.scrollOffset
+                    )
+                }
+            }
+        }
+    }
+
+    private fun isLoggedIn(): Boolean {
+        val userName = prefs.userName
+        val userEmail = prefs.userEmail
+
+        return false
+    }
+
+    private suspend fun restoreSavedReading() {
+        val savedBook = prefs.lastBook.first()
+        val savedChapter = prefs.lastChapter.first()
+        val savedVerse = prefs.lastVerse.first()
+
+        if (savedBook.isNotBlank()) {
+            selectedBook.value = savedBook
+            selectedChapter.value = savedChapter.coerceAtLeast(1)
+            selectedVerse.value = savedVerse.coerceAtLeast(1)
         }
     }
 
@@ -287,37 +567,50 @@ class HomeViewModel(
 
         val today = LocalDate.now().toString()
         val savedDate = prefs.dailyVerseDate.first()
-        val reference = prefs.dailyVerseReference.first()
+        val savedReference = prefs.dailyVerseReference.first()
 
-        if (savedDate == today && reference != null) {
-            val verse = dao.getVerses(reference.bookId, reference.chapter)
-                .first()
-                .firstOrNull { it.verse == reference.verse }
+        if (savedDate == today && savedReference != null) {
+            val savedVerse = dao.getVerses(
+                savedReference.bookId,
+                savedReference.chapter
+            ).first().firstOrNull { verse ->
+                verse.verse == savedReference.verse
+            }
 
-            if (verse != null) {
-                val book = bookList.first { it.id == reference.bookId }
+            if (savedVerse != null) {
+                val savedBook = bookList.first { book ->
+                    book.id == savedReference.bookId
+                }
 
                 dailyVerse.value =
-                    "${verse.text} - ${book.name} ${reference.chapter}:${reference.verse}"
+                    "${savedVerse.text} - ${savedBook.name} ${savedReference.chapter}:${savedReference.verse}"
                 return
             }
         }
 
         val random = kotlin.random.Random(today.hashCode())
-        val book = bookList.random(random)
-        val maxChapter = dao.getMaxChapter(book.id).coerceAtLeast(1)
-        val chapter = random.nextInt(maxChapter) + 1
-        val verseList = dao.getVerses(book.id, chapter).first()
+        val randomBook = bookList.random(random)
+        val maxChapter = dao.getMaxChapter(randomBook.id).coerceAtLeast(1)
+        val randomChapter = random.nextInt(maxChapter) + 1
+        val chapterVerses = dao.getVerses(
+            randomBook.id,
+            randomChapter
+        ).first()
 
-        if (verseList.isEmpty()) return
+        if (chapterVerses.isEmpty()) return
 
-        val verse = verseList.random(random)
+        val randomVerse = chapterVerses.random(random)
+
         dailyVerse.value =
-            "${verse.text} - ${book.name} $chapter:${verse.verse}"
+            "${randomVerse.text} - ${randomBook.name} $randomChapter:${randomVerse.verse}"
 
         prefs.saveDailyVerse(
             today,
-            DailyVerseReference(book.id, chapter, verse.verse)
+            DailyVerseReference(
+                bookId = randomBook.id,
+                chapter = randomChapter,
+                verse = randomVerse.verse
+            )
         )
     }
 }
