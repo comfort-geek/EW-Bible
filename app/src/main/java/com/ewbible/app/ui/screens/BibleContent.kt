@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -57,7 +58,12 @@ fun BibleContent(
                 Text("Loading verses...", color = textColor, fontSize = fontSize.sp)
             }
         } else {
-            LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+            // POINT 1 FIX: contentPadding bottom = last verse not cut under nav bar
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
+                contentPadding = PaddingValues(bottom = 80.dp)
+            ) {
                 summary?.let { item {
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
