@@ -17,20 +17,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            // Theme is handled inside HomeScreen for Dark Mode switch,
-            // but we keep EWBibleTheme here as base so Material3 works
             EWBibleTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    // This is your new layout:
-                    // Top Bar: ☰ left slides, ⋮ right slides
-                    // Header: EW Bible + Grow in the Word of God, every day.
-                    // Buttons: World English Bible, Commentary, Search
-                    // Left Drawer: Book -> Chapter -> Verse
-                    // Right Drawer: Settings, Login, Dark Mode, A- / A+, Daily Verse, Notes
-                    // Hold verse = Highlight colors
                     HomeScreen()
                 }
             }
