@@ -108,7 +108,6 @@ fun HomeScreen() {
     val highlightMap = remember(highlights) {
         highlights.associate { highlight -> highlight.verse to parseHighlightColor(highlight.color) }
     }
-    // FIX: Notes folder - all saved notes for Settings > Notes
     val allNotes by db.bibleDao().getAllNotes().collectAsState(initial = emptyList())
 
     var summary by remember(selectedBook, selectedChapter) { mutableStateOf<SummaryEntity?>(null) }
@@ -181,9 +180,9 @@ fun HomeScreen() {
         val bookById = booksList.associateBy { it.id }
         val gospelBooks = setOf("Matthew", "Mark", "Luke", "John")
         val prophecyBooks = setOf("Isaiah", "Jeremiah", "Ezekiel", "Daniel", "Hosea", "Joel", "Amos", "Obadiah", "Jonah", "Micah", "Nahum", "Habakkuk", "Zephaniah", "Haggai", "Zechariah", "Malachi", "Revelation")
-        val safeQuery = query.replace("%", "\\%").replace("_", "\\_")
-        val rows = runCatching { db.bibleDao().searchVerses("%$safeQuery%") }.getOrDefault(emptyList())
-        verseSearchResults = rows.mapNotNull { row ->
+        val allVerses = db.bibleDao().getAllVersesList()
+        verseSearchResults = allVerses.mapNotNull { row ->
+            if (!row.text.contains(query, ignoreCase = true)) return@mapNotNull null
             val book = bookById[row.bookId] ?: return@mapNotNull null
             val allowed = when (searchFilter) {
                 "Gospel" -> book.name in gospelBooks
@@ -193,7 +192,7 @@ fun HomeScreen() {
                 else -> true
             }
             if (!allowed) null else SearchResult(book.name, book.id, row.chapter, row.verse, row.text)
-        }
+        }.take(200)
     }
 
     LaunchedEffect(booksList, savedBook, savedChapter, savedVerse) {
@@ -370,7 +369,6 @@ fun HomeScreen() {
                     }
                 }
 
-                // FIX: Highlight + Add Note as OVERLAY - not below BibleContent, so they are visible
                 if (showNotes || showHighlightColors) {
                     Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).clickable { showNotes = false; showHighlightColors = false }, contentAlignment = Alignment.BottomCenter) {
                         Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -395,7 +393,6 @@ fun HomeScreen() {
                 if (settingsOpen) {
                     Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)).clickable { settingsOpen = false }) {
                         Column(
-                            // FIX: Settings scrollable + duplicate Daily Verse removed
                             modifier = Modifier.fillMaxHeight().fillMaxWidth(0.85f).align(Alignment.CenterEnd).background(background).clickable(enabled = false) { }
                                 .verticalScroll(rememberScrollState())
                                 .padding(16.dp),
@@ -436,12 +433,10 @@ fun HomeScreen() {
                                 Slider(value = fontSize, onValueChange = { fontSize = it }, valueRange = 12f..28f, modifier = Modifier.weight(1f).height(24.dp).padding(horizontal = 6.dp))
                                 Text("A+", color = textColor, fontSize = 13.sp)
                             }
-                            // FIX: Removed duplicate black-bold Text("Daily Verse") - only button below
                             Button(onClick = { settingsOpen = false; dailyVerseDialog = true }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
                                 Text("Daily Verse", color = textColor, fontSize = 14.sp)
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                // FIX: Notes now opens Notes Folder (all notes), not empty card
                                 Button(onClick = { settingsOpen = false; showAllNotes = true }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = panel)) {
                                     Text("Notes (${allNotes.size})", color = textColor, fontSize = 14.sp)
                                 }
@@ -456,7 +451,6 @@ fun HomeScreen() {
     if (dailyVerseDialog) {
         DailyVerseDialog(dailyVerseText = dailyVerseText, gold = gold, textColor = textColor, fontSize = fontSize, onDismiss = { dailyVerseDialog = false })
     }
-    // FIX: Notes Folder dialog - list of all saved notes
     if (showAllNotes) {
         AlertDialog(
             onDismissRequest = { showAllNotes = false },
