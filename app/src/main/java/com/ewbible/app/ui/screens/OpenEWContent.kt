@@ -1,17 +1,13 @@
 package com.ewbible.app.ui.screens
 
-import android.app.Activity
 import android.graphics.Color as AndroidColor
-import android.view.ViewGroup
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,12 +32,10 @@ fun OpenEWContent(
     chapter: Int = 1,
 ) {
     val context = LocalContext.current
-    // FIX 1: Use Activity context, not Application context - WebView crashes with Application context
-    val activity = context as? Activity ?: return
 
     var webViewFailed by remember { mutableStateOf(false) }
 
-    // FIX 2: Clean HTML safely - never crash on bad HTML
+    // Clean HTML safely - never crash on bad HTML
     val renderedHtml = remember(commentaryHtml) {
         runCatching {
             val t = commentaryHtml.trim()
@@ -54,7 +48,7 @@ fun OpenEWContent(
     val textColorCss = "#%06X".format(0xFFFFFF and textColor.toArgb())
     val secondaryColorCss = "#%06X".format(0xFFFFFF and secondaryText.toArgb())
 
-    // KEEP YOUR HTML + CSS - same look as before
+    // YOUR HTML + CSS - unchanged
     val html = remember(renderedHtml, textColorCss, secondaryColorCss, fontSize) {
         """
         <!doctype html>
@@ -71,46 +65,7 @@ fun OpenEWContent(
         """.trimIndent()
     }
 
-    // FIX 3: Create WebView ONCE and keep it - don't recreate on every recomposition / tab switch
-    val webView = remember(activity) {
-        runCatching {
-            WebView(activity).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                settings.javaScriptEnabled = false
-                settings.domStorageEnabled = false
-                settings.loadWithOverviewMode = true
-                settings.useWideViewPort = true
-                settings.builtInZoomControls = false
-                setBackgroundColor(AndroidColor.TRANSPARENT)
-                webViewClient = object : WebViewClient() {
-                    override fun onReceivedError(
-                        view: WebView?,
-                        errorCode: Int,
-                        description: String?,
-                        failingUrl: String?
-                    ) {
-                        webViewFailed = true
-                    }
-                }
-            }
-        }.getOrNull()
-    }
-
-    // FIX 4: Proper destroy - stop loading first, then destroy. This stops "keeps stopping"
-    DisposableEffect(webView) {
-        onDispose {
-            runCatching {
-                webView?.stopLoading()
-                webView?.removeAllViews()
-                webView?.destroy()
-            }
-        }
-    }
-
-    if (webView == null || webViewFailed || hasError) {
+    if (webViewFailed || hasError) {
         // Fallback - never show blank / crash, show text version
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
             if (bookName.isNotBlank()) {
@@ -145,11 +100,31 @@ fun OpenEWContent(
             )
         }
 
-        // FIX 5: Only load when html actually changes, on UI thread, in try/catch
         val lastLoaded = remember { mutableStateOf("") }
         AndroidView(
             modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
-            factory = { webView },
+            factory = { ctx ->
+                // FIX: Fresh WebView every time this screen opens.
+                // No remember + no reused destroyed WebView.
+                WebView(ctx).apply {
+                    settings.javaScriptEnabled = false
+                    settings.domStorageEnabled = false
+                    settings.loadWithOverviewMode = true
+                    settings.useWideViewPort = true
+                    settings.builtInZoomControls = false
+                    setBackgroundColor(AndroidColor.TRANSPARENT)
+                    webViewClient = object : WebViewClient() {
+                        override fun onReceivedError(
+                            view: WebView?,
+                            errorCode: Int,
+                            description: String?,
+                            failingUrl: String?
+                        ) {
+                            webViewFailed = true
+                        }
+                    }
+                }
+            },
             update = { wv ->
                 if (lastLoaded.value != html) {
                     lastLoaded.value = html
@@ -163,8 +138,12 @@ fun OpenEWContent(
                 }
             },
             onRelease = { wv ->
-                // Don't destroy here - DisposableEffect handles it, just stop loading
-                runCatching { wv.stopLoading() }
+                // FIX: Destroy cleanly when you leave Open EW
+                runCatching {
+                    wv.stopLoading()
+                    wv.removeAllViews()
+                    wv.destroy()
+                }
             }
         )
     }
