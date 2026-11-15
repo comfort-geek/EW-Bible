@@ -46,62 +46,62 @@ fun BibleContent(
     onVerseLongClick: (Int) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        Text(
-            text = "$selectedBook $selectedChapter",
-            color = textColor,
-            fontWeight = FontWeight.Bold,
-            fontSize = 20.sp,
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
-        )
-        if (versesList.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Loading verses...", color = textColor, fontSize = fontSize.sp)
-            }
-        } else {
-            // POINT 1 FIX: contentPadding bottom = last verse not cut under nav bar
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
-                contentPadding = PaddingValues(bottom = 80.dp)
-            ) {
-                summary?.let { item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                        colors = CardDefaults.cardColors(containerColor = panel),
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(summary.summary, color = textColor, fontSize = fontSize.sp)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(summary.whatHappened, color = textColor, fontSize = fontSize.sp)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(summary.application, color = textColor, fontSize = fontSize.sp)
-                        }
+        // FIX 2: Title is "2 Samuel 3" only - no suffix
+        // FIX 8: Don't show blank title while restoring - show nothing if book empty
+        if (selectedBook.isNotBlank()) {
+            Text(
+                text = "$selectedBook $selectedChapter",
+                color = textColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp,
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
+            )
+        }
+        // FIX 8: NO "Loading verses..." - show list directly, even if empty.
+        // HomeScreen already restores saved book before showing, so no Genesis 1 flash.
+        // FIX 1: bottom padding so last verse not cut
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
+            contentPadding = PaddingValues(bottom = 80.dp)
+        ) {
+            summary?.let { item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    colors = CardDefaults.cardColors(containerColor = panel),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(summary.summary, color = textColor, fontSize = fontSize.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(summary.whatHappened, color = textColor, fontSize = fontSize.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(summary.application, color = textColor, fontSize = fontSize.sp)
                     }
-                } }
-                itemsIndexed(versesList, key = { _, verse -> verse.verse }) { _, verse ->
-                    val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
-                    Row(
-                        modifier = Modifier.fillMaxWidth()
-                            .background(verseBackground, RoundedCornerShape(8.dp))
-                            .combinedClickable(
-                                onClick = { onVerseClick(verse.verse) },
-                                onLongClick = { onVerseLongClick(verse.verse) },
-                            )
-                            .padding(vertical = 10.dp, horizontal = 8.dp),
-                    ) {
-                        Text(
-                            text = "${verse.verse}",
-                            color = gold,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = fontSize.sp,
-                            modifier = Modifier.width(32.dp),
+                }
+            } }
+            itemsIndexed(versesList, key = { _, verse -> verse.verse }) { _, verse ->
+                val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(verseBackground, RoundedCornerShape(8.dp))
+                        .combinedClickable(
+                            onClick = { onVerseClick(verse.verse) },
+                            onLongClick = { onVerseLongClick(verse.verse) },
                         )
-                        Text(verse.text, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
-                    }
+                        .padding(vertical = 10.dp, horizontal = 8.dp),
+                ) {
+                    Text(
+                        text = "${verse.verse}",
+                        color = gold,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = fontSize.sp,
+                        modifier = Modifier.width(32.dp),
+                    )
+                    Text(verse.text, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
                 }
             }
         }
