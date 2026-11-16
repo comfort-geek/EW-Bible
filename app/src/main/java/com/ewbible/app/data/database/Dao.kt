@@ -22,6 +22,24 @@ interface BibleDao {
     @Query("SELECT * FROM books ORDER BY id")
     fun getAllBooks(): Flow<List<BookEntity>>
 
+    // FIXED: Added - HomeViewModel.restoreSavedReading() calls this
+    @Query("SELECT * FROM books ORDER BY id")
+    suspend fun getAllBooksSync(): List<BookEntity>
+
+    // FIXED: Added - HomeViewModel.loadDailyVerse() calls this
+    @Query("""
+        SELECT v.book_id AS bookId,
+               b.name AS bookName,
+               v.chapter,
+               v.verse,
+               v.text
+        FROM verses v
+        INNER JOIN books b ON b.id = v.book_id
+        ORDER BY RANDOM()
+        LIMIT 1
+    """)
+    suspend fun getRandomVerse(): VerseSearchResult?
+
     @Query("SELECT COALESCE(MAX(chapter), 1) FROM verses WHERE book_id = :bookId")
     suspend fun getMaxChapter(bookId: Int): Int
 
