@@ -64,7 +64,14 @@ fun SearchContent(
         Spacer(modifier = Modifier.height(12.dp))
         val showVerses = searchQuery.trim().length >= 2
         if (!showVerses) {
-            Box(Modifier.fillMaxSize())
+            // FIXED: Was empty Box() - looked broken. Now shows hint.
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    "Type at least 2 letters to search",
+                    color = textColor.copy(alpha = 0.6f),
+                    fontSize = 14.sp
+                )
+            }
         } else {
             if (verseResults.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
