@@ -51,7 +51,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val panel = if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9)
     val textColor = if (isDark) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
 
-    // FIXED: Hoisted WebView state out of `when` - remember() inside when() loses state
     var lastLoadedHtml by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(state.currentBookId, state.selectedChapter) { viewModel.loadSummary() }
@@ -132,7 +131,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
             }
 
-            // Book + Chapter header
+            // Book + Chapter header - keep this, BibleContent shows title too but this gives you +/- buttons
             if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -158,39 +157,25 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         ) { Text(">", color = textColor) }
                     }
                 }
-                if (state.summaryText.isNotBlank()) {
-                    Text(
-                        text = state.summaryText,
-                        color = textColor.copy(alpha = 0.8f),
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                    )
-                }
             }
 
             // Tab Content
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (state.selectedTab) {
-                    "Bible" -> LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                        items(state.verses, key = { it.verse }) { verse ->
-                            val isSelected = state.selectedVerse == verse.verse
-                            // FIXED: Was `it.verse` on a Map - Map has key/value, not .verse
-                            val isHighlighted = state.highlights.containsKey(verse.verse)
-                            Text(
-                                text = "${verse.verse}. ${verse.text}",
-                                color = if (isHighlighted) gold else textColor,
-                                fontSize = state.fontSize.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .combinedClickable(
-                                        onClick = { viewModel.selectVerse(verse.verse) },
-                                        onLongClick = { viewModel.selectVerse(verse.verse) }
-                                    )
-                                    .padding(vertical = 6.dp)
-                            )
-                        }
-                    }
+                    "Bible" -> BibleContent(
+                        selectedBook = state.currentBook,
+                        selectedChapter = state.selectedChapter,
+                        summary = state.summary,
+                        versesList = state.verses,
+                        currentHighlightMap = state.highlights,
+                        fontSize = state.fontSize,
+                        gold = gold,
+                        panel = panel,
+                        textColor = textColor,
+                        listState = listState,
+                        onVerseClick = { viewModel.selectVerse(it) },
+                        onVerseLongClick = { viewModel.selectVerse(it) }
+                    )
                     "Open EW" -> {
                         when {
                             state.commentaryError -> {
@@ -293,7 +278,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         }
     }
 
-    // Settings Dialog
     if (settingsOpen) {
         AlertDialog(
             onDismissRequest = { settingsOpen = false },
