@@ -40,8 +40,9 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var hasRestoredScroll by remember { mutableStateOf(false) }
     var lastScrollRestoreKey by remember { mutableStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
-    // NEW: For BookDrawer expansion
     var expandedBook by remember { mutableStateOf<String?>(null) }
+    // NEW: Highlight picker
+    var showHighlightPicker by remember { mutableStateOf(false) }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
@@ -82,7 +83,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            // WIRED: BookDrawer.kt replaces old simple list
             BookDrawer(
                 otBookEntities = state.books.filter { it.id <= 39 }.sortedBy { it.id },
                 ntBookEntities = state.books.filter { it.id >= 40 }.sortedBy { it.id },
@@ -219,7 +219,8 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     modifier = Modifier.fillMaxWidth().background(panel).padding(8.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    TextButton(onClick = { viewModel.toggleHighlight() }) { Text("Highlight", color = gold) }
+                    // CHANGED: Was toggleHighlight(), now opens picker
+                    TextButton(onClick = { showHighlightPicker = true }) { Text("Highlight", color = gold) }
                     TextButton(onClick = { viewModel.showNoteDialog() }) { Text("Note", color = gold) }
                     TextButton(onClick = { viewModel.clearSelection() }) { Text("Done", color = textColor) }
                 }
@@ -340,6 +341,32 @@ fun HomeScreen(viewModel: HomeViewModel) {
             confirmButton = {},
             dismissButton = {
                 TextButton(onClick = { viewModel.dismissNoteDialog() }) { Text("Cancel", color = textColor) }
+            }
+        )
+    }
+
+    // NEW: Highlight Picker Dialog
+    if (showHighlightPicker && state.selectedVerse != null) {
+        AlertDialog(
+            onDismissRequest = { showHighlightPicker = false },
+            containerColor = background,
+            title = { Text("Highlight", color = textColor) },
+            text = {
+                HighlightCard(
+                    selectedVerse = state.selectedVerse,
+                    panel = panel,
+                    gold = gold,
+                    textColor = textColor,
+                    onHighlightPicked = { color ->
+                        viewModel.setHighlight(color)
+                    },
+                    onRemoveHighlight = { viewModel.removeHighlight() },
+                    onDismiss = { showHighlightPicker = false }
+                )
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showHighlightPicker = false }) { Text("Cancel", color = textColor) }
             }
         )
     }
