@@ -752,8 +752,7 @@ fun HomeScreen(
                         color = gold
                     )
                 }
-            },
-            containerColor = background
+            }
         )
     }
 }
