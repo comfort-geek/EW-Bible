@@ -36,6 +36,8 @@ fun OpenEWContent(
     onVerseClick: (book: String, chapter: Int, verse: Int) -> Unit = { _, _, _ -> },
 ) {
     var webViewFailed by remember { mutableStateOf(false) }
+    // FIXED: Moved to top - remember inside Column{} can reset unexpectedly
+    val lastLoaded = remember(bookName, chapter) { mutableStateOf("") }
 
     LaunchedEffect(bookName, chapter) {
         webViewFailed = false
@@ -108,7 +110,6 @@ fun OpenEWContent(
             )
         }
 
-        val lastLoaded = remember(bookName, chapter) { mutableStateOf("") }
         AndroidView(
             modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
             factory = { ctx ->
@@ -191,8 +192,6 @@ private fun linkifyVerses(html: String, currentBook: String): String {
 
     var result = html
 
-    // FIXED: Removed (?<!href=[\"'][^\"']*) - variable-length lookbehind crashes Java Regex
-    // hrefs use &chapter= / &verse=, not "Book 1:2", so they can't be double-linked anyway
     val fullPattern = Regex("\\b($bookNames)\\s+(\\d+):(\\d+)\\b(?![^<]*</a>)")
     result = fullPattern.replace(result) { m ->
         val book = m.groupValues[1]
