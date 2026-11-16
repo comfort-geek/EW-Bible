@@ -43,26 +43,23 @@ fun BibleContent(
     panel: Color,
     textColor: Color,
     listState: LazyListState,
-    onVerseClick: (Int) -> Unit, // Receives verse number (Int)
-    onVerseLongClick: (Int) -> Unit, // Receives verse number (Int)
+    onVerseClick: (Int) -> Unit,
+    onVerseLongClick: (Int) -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
-    Column(modifier = Modifier.fillMaxSize()) {
-        if (selectedBook.isNotBlank()) {
-            Text(
-                text = "$selectedBook $selectedChapter",
-                color = textColor,
-                fontWeight = FontWeight.Bold,
-                fontSize = 20.sp,
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
-            )
-        }
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
-            contentPadding = PaddingValues(bottom = 80.dp)
-        ) {
-            summary?.let { item {
+
+    // FIXED: No Column + no duplicate title here.
+    // HomeScreen already shows "John 4". This file shows ONLY the list.
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
+        contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
+    ) {
+        // FIXED SHAKING CAUSE A: Always reserve the summary slot.
+        // Before: summary was null -> no item, then summary arrived -> whole list jumped down.
+        // Now: same slot exists from the start, we just fill it in. No jump.
+        item(key = "summary-$selectedBook-$selectedChapter") {
+            if (summary != null) {
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                     colors = CardDefaults.cardColors(containerColor = panel),
@@ -70,41 +67,59 @@ fun BibleContent(
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text(summary.summary, color = textColor, fontSize = fontSize.sp)
+                        Text(summary.summary, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
                         Spacer(modifier = Modifier.height(8.dp))
                         Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Text(summary.whatHappened, color = textColor, fontSize = fontSize.sp)
+                        Text(summary.whatHappened, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
                         Spacer(modifier = Modifier.height(8.dp))
                         Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Text(summary.application, color = textColor, fontSize = fontSize.sp)
+                        Text(summary.application, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
                     }
                 }
-            } }
-            itemsIndexed(versesList, key = { _, verse -> verse.verse }) { _, verse ->
-                val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(verseBackground, RoundedCornerShape(8.dp))
-                        .combinedClickable(
-                            onClick = { onVerseClick(verse.verse) },
-                            onLongClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onVerseLongClick(verse.verse)
-                            },
-                        )
-                        .padding(vertical = 8.dp, horizontal = 8.dp),
-                ) {
-                    Text(
-                        text = "${verse.verse}",
-                        color = gold,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = fontSize.sp,
-                        modifier = Modifier.width(32.dp),
+            } else {
+                // Placeholder keeps layout stable while summary loads - no jump
+                Spacer(modifier = Modifier.height(0.dp))
+            }
+        }
+
+        // FIXED SHAKING CAUSE C: Stable key with book + chapter + verse
+        // Before: key = verse only, so John 4:10 and John 5:10 looked identical to LazyColumn
+        itemsIndexed(
+            versesList,
+            key = { _, verse -> "${verse.bookId}-${verse.chapter}-${verse.verse}" }
+        ) { _, verse ->
+            val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(verseBackground, RoundedCornerShape(8.dp))
+                    .combinedClickable(
+                        onClick = { onVerseClick(verse.verse) },
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onVerseLongClick(verse.verse)
+                        },
                     )
-                    Text(verse.text, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
-                }
+                    .padding(vertical = 8.dp, horizontal = 8.dp),
+            ) {
+                Text(
+                    text = "${verse.verse}",
+                    color = gold,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = fontSize.sp,
+                    modifier = Modifier.width(32.dp),
+                )
+                // FIXED SHAKING CAUSE B: weight(1f) so text width is fixed.
+                // Before: no weight, so highlighting verse 10 re-measured the row and shook rows below.
+                Text(
+                    verse.text,
+                    color = textColor,
+                    fontSize = fontSize.sp,
+                    lineHeight = (fontSize + 6).sp,
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
