@@ -155,7 +155,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
             }
 
-            // Tab Content - ALL 3 NOW USE THEIR OWN FILES
+            // Tab Content
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (state.selectedTab) {
                     "Bible" -> BibleContent(
@@ -256,11 +256,13 @@ fun HomeScreen(viewModel: HomeViewModel) {
         )
     }
 
+    // FIXED: Now uses DailyVerseDialog.kt - added background param, removed duplicate at bottom
     if (dailyVerseDialog) {
         DailyVerseDialog(
             dailyVerseText = state.dailyVerse,
             gold = gold,
             textColor = textColor,
+            background = background,
             fontSize = state.fontSize,
             onDismiss = { dailyVerseDialog = false }
         )
@@ -306,48 +308,35 @@ fun HomeScreen(viewModel: HomeViewModel) {
         )
     }
 
+    // FIXED: Now uses NotesCard.kt instead of inline OutlinedTextField
     if (state.showNoteDialog) {
         var noteText by remember(state.selectedVerse) { mutableStateOf(state.currentNoteText) }
         AlertDialog(
             onDismissRequest = { viewModel.dismissNoteDialog() },
             containerColor = background,
-            title = { Text("Note - ${state.currentBook} ${state.selectedChapter}:${state.selectedVerse}", color = textColor) },
+            title = { Text("Note", color = textColor) },
             text = {
-                OutlinedTextField(
-                    value = noteText,
-                    onValueChange = { noteText = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 3
+                NotesCard(
+                    selectedBook = state.currentBook,
+                    selectedChapter = state.selectedChapter,
+                    selectedVerse = state.selectedVerse,
+                    noteText = noteText,
+                    panel = panel,
+                    gold = gold,
+                    textColor = textColor,
+                    fontSize = state.fontSize,
+                    onNoteTextChange = { noteText = it },
+                    onSaveNote = {
+                        viewModel.saveNote(noteText)
+                        viewModel.dismissNoteDialog()
+                    }
                 )
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.saveNote(noteText)
-                    viewModel.dismissNoteDialog()
-                }) { Text("Save", color = gold) }
-            },
+            confirmButton = {},
             dismissButton = {
                 TextButton(onClick = { viewModel.dismissNoteDialog() }) { Text("Cancel", color = textColor) }
             }
         )
     }
 }
-
-@Composable
-fun DailyVerseDialog(
-    dailyVerseText: String,
-    gold: Color,
-    textColor: Color,
-    fontSize: Float,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Color(0xFF2A2A30),
-        title = { Text("Daily Verse", color = gold, fontWeight = FontWeight.Bold) },
-        text = { Text(dailyVerseText, color = textColor, fontSize = fontSize.sp) },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close", color = gold) }
-        }
-    )
-}
+// NOTE: DailyVerseDialog duplicate REMOVED from here - it lives in DailyVerseDialog.kt now
