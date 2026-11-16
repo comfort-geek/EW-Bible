@@ -342,18 +342,14 @@ class HomeViewModel(
         viewModelScope.launch { prefs.setFontSize(size) }
     }
 
-    // FIXED: These were missing - HomeScreen calls them, so it wouldn't compile.
-    // Uses your real AppPreferences.saveUser() / clearUser() - NOT setUserName/setUserEmail.
+    // FIXED: These were missing - HomeScreen calls them for Google Login.
+    // Uses prefs.saveUser / clearUser from your AppPreferences, not setUserName.
     fun onUserSignedIn(name: String, email: String) {
-        viewModelScope.launch {
-            prefs.saveUser(name, email)
-        }
+        viewModelScope.launch { prefs.saveUser(name, email) }
     }
 
     fun onUserSignedOut() {
-        viewModelScope.launch {
-            prefs.clearUser()
-        }
+        viewModelScope.launch { prefs.clearUser() }
     }
 
     fun saveReadingProgress(verse: VerseEntity? = null, scrollIndex: Int = 0, scrollOffset: Int = 0) {
@@ -466,26 +462,6 @@ class HomeViewModel(
                 )
             }
             currentNoteText.value = noteText
-        }
-    }
-
-    fun toggleHighlight() {
-        val verseNum = selectedVerse.value ?: return
-        viewModelScope.launch {
-            val existing = dao.getHighlights(currentBookId.value, selectedChapter.value).first()
-                .firstOrNull { it.verse == verseNum }
-            if (existing != null) {
-                dao.deleteHighlight(currentBookId.value, selectedChapter.value, verseNum)
-            } else {
-                dao.saveHighlight(
-                    HighlightEntity(
-                        bookId = currentBookId.value,
-                        chapter = selectedChapter.value,
-                        verse = verseNum,
-                        color = Color(0xFFFFF176).toArgb().toString()
-                    )
-                )
-            }
         }
     }
 
