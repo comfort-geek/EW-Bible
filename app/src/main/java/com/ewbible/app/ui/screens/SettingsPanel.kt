@@ -19,11 +19,16 @@ import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 @Composable
 fun SettingsPanel(
@@ -45,7 +50,10 @@ fun SettingsPanel(
     onShowNotes: () -> Unit,
     onGoogleSignIn: () -> Unit,
     onSignOut: () -> Unit,
+    onOpenResource: () -> Unit = {},
 ) {
+    var resourcesExpanded by remember { mutableStateOf(false) }
+
     AnimatedVisibility(
         visible = visible,
         enter = slideInHorizontally(initialOffsetX = { -it }),
@@ -97,6 +105,60 @@ fun SettingsPanel(
                         Spacer(modifier = Modifier.width(12.dp))
                         IconButton(onClick = onSignOut) {
                             Icon(Icons.Default.ExitToApp, contentDescription = null, tint = textColor)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+                HorizontalDivider(color = textColor.copy(alpha = 0.15f))
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // --- RESOURCES DROPDOWN - BELOW LOG IN / LOG OUT ---
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { resourcesExpanded = !resourcesExpanded }
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Resources",
+                        color = textColor,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                    Text(
+                        text = if (resourcesExpanded) "▲" else "▼",
+                        color = gold,
+                        fontSize = 12.sp
+                    )
+                }
+
+                if (resourcesExpanded) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = panel),
+                        modifier = Modifier.fillMaxWidth().clickable { onOpenResource() }
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Bible.com",
+                                    color = textColor,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp
+                                )
+                                Text(
+                                    text = "YouVersion - Most used Bible in the world",
+                                    color = textColor.copy(alpha = 0.6f),
+                                    fontSize = 13.sp
+                                )
+                            }
+                            Text(text = "↗", color = gold, fontSize = 20.sp)
                         }
                     }
                 }
