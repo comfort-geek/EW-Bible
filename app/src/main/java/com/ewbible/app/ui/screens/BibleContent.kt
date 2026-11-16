@@ -1,8 +1,6 @@
 package com.ewbible.app.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,7 +20,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -46,8 +43,8 @@ fun BibleContent(
     panel: Color,
     textColor: Color,
     listState: LazyListState,
-    onVerseClick: (Int) -> Unit,
-    onVerseLongClick: (Int) -> Unit,
+    onVerseClick: (Int) -> Unit, // Receives verse number (Int)
+    onVerseLongClick: (Int) -> Unit, // Receives verse number (Int)
 ) {
     val haptic = LocalHapticFeedback.current
     Column(modifier = Modifier.fillMaxSize()) {
@@ -86,7 +83,6 @@ fun BibleContent(
             itemsIndexed(versesList, key = { _, verse -> verse.verse }) { _, verse ->
                 val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
                 Row(
-                    // FIX: Padding BEFORE clickable + clip before background = whole row is holdable
                     modifier = Modifier.fillMaxWidth()
                         .padding(vertical = 4.dp)
                         .clip(RoundedCornerShape(8.dp))
