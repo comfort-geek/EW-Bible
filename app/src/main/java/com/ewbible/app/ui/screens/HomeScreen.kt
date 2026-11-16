@@ -1,7 +1,6 @@
 package com.ewbible.app.ui.screens
 
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,10 +53,9 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val panel = if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9)
     val textColor = if (isDark) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
 
+    // FIXED: Only loadSummary here. loadCommentary is owned by ViewModel init + selectTab.
+    // Having it here too caused 2 loads that cancelled each other -> false "Could not load".
     LaunchedEffect(state.currentBookId, state.selectedChapter) { viewModel.loadSummary() }
-    LaunchedEffect(state.currentBookId, state.selectedChapter, state.selectedTab) {
-        if (state.selectedTab == "Open EW") viewModel.loadCommentary()
-    }
     LaunchedEffect(state.verses) {
         if (state.verses.isEmpty()) return@LaunchedEffect
         if (hasRestoredScroll) return@LaunchedEffect
@@ -76,20 +76,47 @@ fun HomeScreen(viewModel: HomeViewModel) {
         }
     }
 
-    // SWIPE LOGIC - swipe left = next, swipe right = previous
-    var totalDrag by remember { mutableStateOf(0f) }
-    val swipeModifier = Modifier.pointerInput(state.currentBook, state.selectedChapter) {
-        detectHorizontalDragGestures(
-            onDragStart = { totalDrag = 0f },
-            onHorizontalDrag = { _, dragAmount -> totalDrag += dragAmount },
-            onDragEnd = {
-                when {
-                    totalDrag < -120 -> viewModel.nextChapter() // swipe left
-                    totalDrag > 120 -> viewModel.previousChapter() // swipe right
+    // FIXED SWIPE: Pass.Initial sees swipe BEFORE LazyColumn eats it.
+    // Only fires if swipe is mostly horizontal, so vertical scroll still works.
+    val swipeModifier = Modifier.pointerInput(state.currentBook, state.selectedChapter, state.selectedTab) {
+        awaitPointerEventScope {
+            var downX = 0f
+            var downY = 0f
+            var totalX = 0f
+            var totalY = 0f
+            var tracking = false
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull() ?: continue
+                when (event.type) {
+                    androidx.compose.ui.input.pointer.PointerEventType.Press -> {
+                        downX = change.position.x
+                        downY = change.position.y
+                        totalX = 0f
+                        totalY = 0f
+                        tracking = true
+                    }
+                    androidx.compose.ui.input.pointer.PointerEventType.Move -> {
+                        if (!tracking) continue
+                        totalX += change.previousPosition.x.let { prevX -> change.position.x - prevX } * -1 * -1 // keep simple below
+                        // Simpler: accumulate from delta
+                        // We recompute from position delta:
+                        // (handled by tracking total below)
+                    }
+                    androidx.compose.ui.input.pointer.PointerEventType.Release -> {
+                        if (tracking) {
+                            val dx = change.position.x - downX
+                            val dy = change.position.y - downY
+                            if (abs(dx) > 120 && abs(dx) > abs(dy) * 1.5f) {
+                                if (dx < 0) viewModel.nextChapter() else viewModel.previousChapter()
+                            }
+                        }
+                        tracking = false
+                    }
                 }
-                totalDrag = 0f
+                // Keep tracking totals for move - we use downX/dy on Release, so no need for total
             }
-        )
+        }
     }
 
     ModalNavigationDrawer(
@@ -145,7 +172,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
             }
 
-            // HEADER - Title only, NO BUTTONS ANYMORE
+            // HEADER - Title only, NO BUTTONS - single source of truth
             if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") {
                 Text(
                     text = "${state.currentBook} ${state.selectedChapter}",
@@ -156,12 +183,12 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 )
             }
 
-            // CONTENT - with swipe
+            // CONTENT - with swipe (Bible only, Open EW handles swipe inside WebView, Search has no swipe)
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .then(if (state.selectedTab == "Search") Modifier else swipeModifier)
+                    .then(if (state.selectedTab == "Bible") swipeModifier else Modifier)
             ) {
                 when (state.selectedTab) {
                     "Bible" -> BibleContent(
@@ -190,7 +217,10 @@ fun HomeScreen(viewModel: HomeViewModel) {
                             openBook(book, chapter)
                             viewModel.selectTab("Bible")
                             viewModel.selectVerse(verse)
-                        }
+                        },
+                        // FIXED: This was missing - without it swipe on Open EW did nothing
+                        onNextChapter = { viewModel.nextChapter() },
+                        onPreviousChapter = { viewModel.previousChapter() }
                     )
                     "Search" -> SearchContent(
                         searchQuery = searchQuery,
