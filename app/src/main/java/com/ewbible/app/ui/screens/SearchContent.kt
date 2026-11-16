@@ -31,13 +31,12 @@ import com.ewbible.app.data.database.VerseSearchResult
 fun SearchContent(
     searchQuery: String,
     searchFilter: String,
-    filteredSearchResults: List<String> = emptyList(),
-    verseResults: List<VerseSearchResult>, // Using ViewModel's VerseSearchResult
+    verseResults: List<VerseSearchResult>,
     textColor: Color,
     gold: Color,
+    fontSize: Float,
     onQueryChange: (String) -> Unit,
     onFilterChange: (String) -> Unit,
-    onOpenBook: (String) -> Unit,
     onOpenVerse: (String, Int, Int) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 10.dp)) {
@@ -88,7 +87,7 @@ fun SearchContent(
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp
                             )
-                            Text(result.text, color = textColor, fontSize = 14.sp)
+                            Text(result.text, color = textColor, fontSize = fontSize.sp)
                         }
                     }
                 }
