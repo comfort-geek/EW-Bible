@@ -276,9 +276,8 @@ class HomeViewModel(
                     }
                 }
         }
-        viewModelScope.launch {
-            loadDailyVerse()
-        }
+        // WIRED: loadDailyVerse() already launches internally, call it directly
+        loadDailyVerse()
     }
 
     fun selectBook(bookName: String) {
@@ -458,7 +457,8 @@ class HomeViewModel(
         loadCommentary(currentBookId.value, selectedChapter.value)
     }
 
-    // FIXED: Public + not suspend, so HomeScreen can call it every open for a new random verse
+    // WIRED CORRECTLY: Public, not suspend, launches internally
+    // HomeScreen calls this every open -> new random verse every open
     fun loadDailyVerse() {
         viewModelScope.launch {
             runCatching {
