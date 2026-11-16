@@ -140,4 +140,47 @@ fun SettingsPanel(
 
             // 4. FONT SIZE
             Spacer(modifier = Modifier.height(16.dp))
-            Slider(value = fontSize, on
+            Slider(value = fontSize, onValueChange = onFontSizeChange)
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // 5. DARK MODE - with label + button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Dark Mode", fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Switch(checked = isDarkMode, onCheckedChange = onDarkModeChange)
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+            Divider()
+
+            // 6. DAILY VERSE - with label
+            Button(
+                onClick = onDailyVerseClick,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5EEDD)),
+                shape = RoundedCornerShape(24.dp)
+            ) {
+                Icon(Icons.Default.MenuBook, contentDescription = null, tint = Color.Black)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Daily Verse", color = Color.Black, fontSize = 16.sp)
+            }
+
+            // 7. NOTES - with label
+            Button(
+                onClick = onNotesClick,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5EEDD)),
+                shape = RoundedCornerShape(24.dp)
+            ) {
+                Icon(Icons.Default.Notes, contentDescription = null, tint = Color.Black)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Notes", color = Color.Black, fontSize = 16.sp)
+            }
+
+            Spacer(modifier = Modifier.height(40.dp))
+        }
+    }
+}
