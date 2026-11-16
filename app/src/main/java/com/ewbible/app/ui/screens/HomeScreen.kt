@@ -53,6 +53,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var searchQuery by remember { mutableStateOf("") }
     var expandedBook by remember { mutableStateOf<String?>(null) }
     var showHighlightPicker by remember { mutableStateOf(false) }
+    var showBibleCom by remember { mutableStateOf(false) }
     // NEW: Linked verse bottom sheet - stays in Open EW
     var showLinkedVerseSheet by remember { mutableStateOf(false) }
     var linkedVerseBook by remember { mutableStateOf("") }
@@ -211,7 +212,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         bookName = state.currentBook,
                         chapter = state.selectedChapter,
                         onVerseClick = { book, chapter, verse ->
-                            // NEW: Stay in Open EW - open bottom box instead of jumping
                             linkedVerseBook = book
                             linkedVerseChapter = chapter
                             linkedVerseNum = verse
@@ -255,7 +255,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         }
     }
 
-    // NEW: Linked Verse Bottom Sheet - scrollable, with X
     if (showLinkedVerseSheet) {
         ModalBottomSheet(
             onDismissRequest = { showLinkedVerseSheet = false },
@@ -283,7 +282,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor)
                     }
                 }
-                // Scrollable verse text
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -364,6 +362,10 @@ fun HomeScreen(viewModel: HomeViewModel) {
             googleAuth.signOut()
             viewModel.onUserSignedOut()
             settingsOpen = false
+        },
+        onOpenResource = {
+            settingsOpen = false
+            showBibleCom = true
         }
     )
 
@@ -469,6 +471,18 @@ fun HomeScreen(viewModel: HomeViewModel) {
             dismissButton = {
                 TextButton(onClick = { showHighlightPicker = false }) { Text("Cancel", color = textColor) }
             }
+        )
+    }
+
+    // Bible.com WebView - opens INSIDE app, no Chrome bar
+    if (showBibleCom) {
+        WebViewScreen(
+            url = "https://www.bible.com",
+            title = "Bible.com",
+            background = background,
+            textColor = textColor,
+            gold = gold,
+            onClose = { showBibleCom = false }
         )
     }
 }
