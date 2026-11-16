@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -23,15 +24,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ewbible.app.data.database.VerseSearchResult
 
-data class SearchResult(val bookName: String, val bookId: Int, val chapter: Int, val verse: Int, val text: String)
-
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchContent(
     searchQuery: String,
     searchFilter: String,
     filteredSearchResults: List<String> = emptyList(),
-    verseResults: List<SearchResult>,
+    verseResults: List<VerseSearchResult>, // Using ViewModel's VerseSearchResult
     textColor: Color,
     gold: Color,
     onQueryChange: (String) -> Unit,
