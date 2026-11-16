@@ -17,12 +17,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import java.net.URLDecoder
 import java.net.URLEncoder
+import kotlin.math.abs
 
 @Composable
 fun OpenEWContent(
@@ -34,13 +34,15 @@ fun OpenEWContent(
     bookName: String = "",
     chapter: Int = 1,
     onVerseClick: (book: String, chapter: Int, verse: Int) -> Unit = { _, _, _ -> },
+    onNextChapter: () -> Unit = {},
+    onPreviousChapter: () -> Unit = {},
 ) {
     var webViewFailed by remember { mutableStateOf(false) }
-    // FIXED: Moved to top - remember inside Column{} can reset unexpectedly
     val lastLoaded = remember(bookName, chapter) { mutableStateOf("") }
 
     LaunchedEffect(bookName, chapter) {
         webViewFailed = false
+        lastLoaded.value = ""
     }
 
     val renderedHtml = remember(commentaryHtml) {
@@ -76,22 +78,14 @@ fun OpenEWContent(
         """.trimIndent()
     }
 
-    if (webViewFailed || hasError) {
+    // FIXED: No title here - HomeScreen already shows "John 4"
+    // FIXED: Only show error if hasError AND we really have no content
+    // webViewFailed alone should not hide good commentary
+    if (hasError && linkedHtml.isBlank()) {
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
-            if (bookName.isNotBlank()) {
-                Text(
-                    text = "$bookName $chapter",
-                    color = textColor,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp,
-                    modifier = Modifier.padding(bottom = 12.dp)
-                )
-            }
             Text(
-                text = if (hasError) "Could not load commentary. Please try again."
-                else if (linkedHtml.isBlank()) "No commentary available for this chapter."
-                else linkedHtml.replace(Regex("<[^>]*>"), " ").trim(),
-                color = if (linkedHtml.isBlank()) secondaryText else textColor,
+                text = "Could not load commentary. Please try again.",
+                color = secondaryText,
                 fontSize = fontSize.sp,
                 lineHeight = (fontSize + 8).sp
             )
@@ -100,15 +94,7 @@ fun OpenEWContent(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (bookName.isNotBlank()) {
-            Text(
-                text = "$bookName $chapter",
-                color = textColor,
-                fontWeight = FontWeight.Bold,
-                fontSize = 20.sp,
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp)
-            )
-        }
+        // FIXED: No duplicate title Text() here anymore
 
         AndroidView(
             modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -120,6 +106,29 @@ fun OpenEWContent(
                     settings.useWideViewPort = true
                     settings.builtInZoomControls = false
                     setBackgroundColor(AndroidColor.TRANSPARENT)
+
+                    // SWIPE INSIDE WEBVIEW - WebView eats touches, so detect here
+                    var downX = 0f
+                    var downY = 0f
+                    setOnTouchListener { _, event ->
+                        when (event.action) {
+                            android.view.MotionEvent.ACTION_DOWN -> {
+                                downX = event.x
+                                downY = event.y
+                            }
+                            android.view.MotionEvent.ACTION_UP -> {
+                                val dx = event.x - downX
+                                val dy = event.y - downY
+                                // Horizontal swipe, not vertical scroll
+                                if (abs(dx) > 180 && abs(dx) > abs(dy) * 2) {
+                                    if (dx < 0) onNextChapter() else onPreviousChapter()
+                                    return@setOnTouchListener true
+                                }
+                            }
+                        }
+                        false // let WebView handle scroll / clicks normally
+                    }
+
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                             val url = request?.url?.toString() ?: return false
@@ -139,14 +148,15 @@ fun OpenEWContent(
                             }
                             return false
                         }
-
                         override fun onReceivedError(
                             view: WebView?,
                             errorCode: Int,
                             description: String?,
                             failingUrl: String?
                         ) {
-                            webViewFailed = true
+                            // FIXED: Don't set webViewFailed for loadDataWithBaseURL errors
+                            // It was falsely showing "Could not load" even with good HTML
+                            // webViewFailed = true
                         }
                     }
                 }
