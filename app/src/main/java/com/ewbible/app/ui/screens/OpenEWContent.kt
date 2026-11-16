@@ -17,12 +17,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import java.net.URLDecoder
+import java.net.URLEncoder
 
 @Composable
 fun OpenEWContent(
@@ -33,10 +33,8 @@ fun OpenEWContent(
     hasError: Boolean = false,
     bookName: String = "",
     chapter: Int = 1,
-    // FIX 12: Callback when a linked verse is tapped
     onVerseClick: (book: String, chapter: Int, verse: Int) -> Unit = { _, _, _ -> },
 ) {
-    val context = LocalContext.current
     var webViewFailed by remember { mutableStateOf(false) }
 
     LaunchedEffect(bookName, chapter) {
@@ -52,9 +50,8 @@ fun OpenEWContent(
         }.getOrDefault("")
     }
 
-    // FIX 12: Link ALL verses - full refs + bare chapter:verse in current book
-    val linkedHtml = remember(renderedHtml, bookName, chapter) {
-        linkifyVerses(renderedHtml, bookName, chapter)
+    val linkedHtml = remember(renderedHtml, bookName) {
+        linkifyVerses(renderedHtml, bookName)
     }
 
     val textColorCss = "#%06X".format(0xFFFFFF and textColor.toArgb())
@@ -103,7 +100,6 @@ fun OpenEWContent(
     Column(modifier = Modifier.fillMaxSize()) {
         if (bookName.isNotBlank()) {
             Text(
-                // FIX 2: Title is "2 Samuel 3" only - Open EW tab, same format as Bible tab
                 text = "$bookName $chapter",
                 color = textColor,
                 fontWeight = FontWeight.Bold,
@@ -126,23 +122,23 @@ fun OpenEWContent(
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                             val url = request?.url?.toString() ?: return false
-                            // FIX 12: Intercept our verse links
                             if (url.startsWith("ew://verse")) {
-                                try {
+                                runCatching {
                                     val query = url.substringAfter("?", "")
                                     val params = query.split("&").associate {
                                         val parts = it.split("=", limit = 2)
                                         if (parts.size == 2) parts[0] to URLDecoder.decode(parts[1], "UTF-8") else parts[0] to ""
                                     }
-                                    val b = params["book"] ?: bookName
+                                    val b = params["book"]?.takeIf { it.isNotBlank() } ?: bookName
                                     val c = params["chapter"]?.toIntOrNull() ?: chapter
                                     val v = params["verse"]?.toIntOrNull() ?: 1
                                     onVerseClick(b, c, v)
-                                } catch (e: Exception) { }
+                                }
                                 return true
                             }
                             return false
                         }
+
                         override fun onReceivedError(
                             view: WebView?,
                             errorCode: Int,
@@ -177,16 +173,13 @@ fun OpenEWContent(
     }
 }
 
-// FIX 12: Turn every plain verse reference into a clickable link
-// Handles: "2 Samuel 3:1", "1 Kings 2:3", "John 3:16", "Psalm 119:105", "3:1" (current book)
-private fun linkifyVerses(html: String, currentBook: String, currentChapter: Int): String {
+private fun linkifyVerses(html: String, currentBook: String): String {
     if (html.isBlank()) return html
-    // Don't double-link text already inside <a>...</a> - split by tags
-    // Simple safe approach: process only text outside tags
+
     val bookNames = listOf(
         "1 Samuel", "2 Samuel", "1 Kings", "2 Kings", "1 Chronicles", "2 Chronicles",
         "1 Corinthians", "2 Corinthians", "1 Thessalonians", "2 Thessalonians",
-        "1 Timothy", "2 Timothy", "1 Peter", "2 Peter", "1 John", "2 John", "3 John", "1 Samuel",
+        "1 Timothy", "2 Timothy", "1 Peter", "2 Peter", "1 John", "2 John", "3 John",
         "Genesis", "Exodus", "Leviticus", "Numbers", "Deuteronomy", "Joshua", "Judges", "Ruth",
         "Ezra", "Nehemiah", "Esther", "Job", "Psalm", "Psalms", "Proverbs", "Ecclesiastes",
         "Song of Solomon", "Song", "Isaiah", "Jeremiah", "Lamentations", "Ezekiel", "Daniel",
@@ -197,23 +190,25 @@ private fun linkifyVerses(html: String, currentBook: String, currentChapter: Int
     ).sortedByDescending { it.length }.joinToString("|") { Regex.escape(it) }
 
     var result = html
-    // 1. Full refs: "2 Samuel 3:1" or "John 3:16" or "Psalm 119:105" - skip if already inside <a
-    // We do a single pass with regex, avoiding already-linked parts by checking preceding "<a"
+
+    // 1. Full references: "2 Samuel 3:1", "John 3:16", "Psalm 119:105"
     val fullPattern = Regex("(?<!href=[\"'][^\"']*)\\b($bookNames)\\s+(\\d+):(\\d+)\\b(?![^<]*</a>)")
     result = fullPattern.replace(result) { m ->
         val book = m.groupValues[1]
         val ch = m.groupValues[2]
         val vs = m.groupValues[3]
-        """<a class="verse-link" href="ew://verse?book=${java.net.URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
+        """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
     }
-    // 2. Bare refs: "3:1" or "verse 5" in current book context - only if not already linked
-    // Bare chapter:verse like "3:1" - link to current book
-    val barePattern = Regex("(?<!href=[\"'][^\"']*)(?<![\\w:])\\b(\\d+):(\\d+)\\b(?![^<]*</a>)")
-    result = barePattern.replace(result) { m ->
-        // Skip if this was already part of a full ref we just linked (it will be inside <a> now, regex above avoids it via lookahead, but double-check)
-        val ch = m.groupValues[1]
-        val vs = m.groupValues[2]
-        """<a class="verse-link" href="ew://verse?book=${java.net.URLEncoder.encode(currentBook, "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
+
+    // 2. Bare references: "3:1" mapped to the current book (only when currentBook is known)
+    if (currentBook.isNotBlank()) {
+        val barePattern = Regex("(?<!href=[\"'][^\"']*)(?<![\\w:])\\b(\\d+):(\\d+)\\b(?![^<]*</a>)")
+        result = barePattern.replace(result) { m ->
+            val ch = m.groupValues[1]
+            val vs = m.groupValues[2]
+            """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(currentBook, "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
+        }
     }
+
     return result
 }
