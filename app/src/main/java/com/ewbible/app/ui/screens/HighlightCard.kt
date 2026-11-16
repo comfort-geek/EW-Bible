@@ -1,6 +1,7 @@
 package com.ewbible.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,27 +34,51 @@ fun HighlightCard(
     onRemoveHighlight: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth().padding(16.dp), colors = CardDefaults.cardColors(containerColor = panel)) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        colors = CardDefaults.cardColors(containerColor = panel)
+    ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Text("Highlight Verse ${selectedVerse ?: 1}", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                listOf(Color.Yellow, Color.Green, Color(0xFFFFB6C1), Color.Cyan, Color(0xFFFFA500)).forEach { color ->
+            Text(
+                "Highlight Verse ${selectedVerse ?: 1}",
+                color = gold,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                listOf(
+                    Color(0xFFFFEB3B), // Yellow
+                    Color(0xFF81C784), // Green
+                    Color(0xFFFFB6C1), // Pink
+                    Color(0xFF4FC3F7), // Blue
+                    Color(0xFFFFA500)  // Orange
+                ).forEach { color ->
                     Box(
-                        modifier = Modifier.size(34.dp).background(color, RoundedCornerShape(8.dp)).clickable {
-                            onHighlightPicked(color)
-                            onDismiss()
-                        },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(color, RoundedCornerShape(10.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+                            .clickable {
+                                onHighlightPicked(color)
+                                onDismiss()
+                            },
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 TextButton(onClick = {
                     onRemoveHighlight()
                     onDismiss()
                 }) { Text("Remove Highlight", color = textColor) }
-                TextButton(onClick = onDismiss) { Text("Cancel", color = textColor) }
+                TextButton(onClick = onDismiss) { Text("Cancel", color = gold) }
             }
         }
     }
