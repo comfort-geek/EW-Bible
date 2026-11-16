@@ -21,7 +21,12 @@ data class HomeUiState(
     val highlights: Map<Int, Color> = emptyMap(),
     val notes: List<NoteEntity> = emptyList(),
     val summary: SummaryEntity? = null,
+    // BIBLE TAB - NOT italic - all 3 parts
     val summaryText: String = "",
+    val summaryWhatHappened: String = "",
+    val summaryApplication: String = "",
+    // OPEN EW TAB - ITALIC - summary only, shown on top of commentary
+    val summaryItalicText: String = "",
     val commentaryHtml: String = "",
     val commentaryError: Boolean = false,
     val chapterCounts: Map<Int, Int> = emptyMap(),
@@ -203,7 +208,11 @@ class HomeViewModel(
             commentaryHtml = nav.commentaryHtml,
             commentaryError = content.commentaryError,
             summary = content.summary,
+            // FIXED: Bible tab - all 3, plain. Open EW - summary only, UI will make italic
             summaryText = content.summary?.summary ?: "",
+            summaryWhatHappened = content.summary?.whatHappened ?: "",
+            summaryApplication = content.summary?.application ?: "",
+            summaryItalicText = content.summary?.summary ?: "",
             chapterCounts = content.chapterCounts,
             searchResults = content.searchResults,
             searchFilter = content.searchFilter,
@@ -383,10 +392,6 @@ class HomeViewModel(
         loadSummary(currentBookId.value, selectedChapter.value)
     }
 
-    // FIXED: This is the only function changed.
-    // Old code swallowed null as success and always set error = false.
-    // New code: null / blank / getHtml crash = error = true, html = ""
-    // So OpenEWContent can show the real error, and real html shows when it exists.
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
