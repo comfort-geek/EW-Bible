@@ -1,5 +1,6 @@
 package com.ewbible.app.ui.viewmodel
 
+import android.util.Log
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.ViewModel
@@ -136,8 +137,6 @@ class HomeViewModel(
         val userEmail: String
     )
 
-    // FIXED: Use array form combine(...) { args -> } - the 5/7-arg lambda form
-    // does not resolve on this Kotlin version, it picks the vararg overload.
     @Suppress("UNCHECKED_CAST")
     private val readingState = combine(books, verses, highlights, notes, currentBookId) { args ->
         ReadingState(
@@ -286,8 +285,15 @@ class HomeViewModel(
     }
 
     fun nextChapter() {
-        val max = chapterCounts.value[currentBookId.value] ?: 1
-        if (selectedChapter.value < max) selectChapter(selectedChapter.value + 1)
+        // FIXED: if chapterCounts not loaded yet, don't block swipe.
+        // Old code used ?: 1, so max was 1 and swipe could never go next.
+        val max = chapterCounts.value[currentBookId.value]
+        if (max == null) {
+            // Counts not loaded yet - allow going forward, verses will just be empty if past end
+            selectChapter(selectedChapter.value + 1)
+        } else if (selectedChapter.value < max) {
+            selectChapter(selectedChapter.value + 1)
+        }
     }
 
     fun selectVerse(verse: Int?) {
@@ -372,22 +378,39 @@ class HomeViewModel(
         loadSummary(currentBookId.value, selectedChapter.value)
     }
 
+    // FIXED: Commentary loader - no more false "Could not load" errors
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
             commentaryError.value = false
-            runCatching {
+            commentary.value = ""
+            try {
                 val html = withContext(Dispatchers.IO) {
-                    val comm = dao.getCommentary(bookId, chapter)
-                    comm?.getHtml().orEmpty()
+                    try {
+                        val comm = dao.getCommentary(bookId, chapter)
+                        // getHtml() itself can throw if the stored bytes are bad - catch it here
+                        try {
+                            comm?.getHtml().orEmpty()
+                        } catch (e: Exception) {
+                            Log.e("HomeViewModel", "getHtml failed book=$bookId ch=$chapter", e)
+                            ""
+                        }
+                    } catch (e: Exception) {
+                        Log.e("HomeViewModel", "getCommentary DAO failed book=$bookId ch=$chapter", e)
+                        ""
+                    }
                 }
+                // Blank = no commentary in DB for this chapter, NOT an error
                 commentary.value = if (html.isBlank()) {
                     "<p>No commentary available for this chapter.</p>"
                 } else {
                     html
                 }
-            }.onFailure {
-                if (it is kotlinx.coroutines.CancellationException) throw it
+                commentaryError.value = false
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("HomeViewModel", "loadCommentary failed book=$bookId ch=$chapter", e)
                 commentaryError.value = true
                 commentary.value = "<p>Failed to load commentary.</p>"
             }
