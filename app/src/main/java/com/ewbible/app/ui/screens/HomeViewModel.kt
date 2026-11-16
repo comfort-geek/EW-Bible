@@ -68,7 +68,7 @@ class HomeViewModel(
     private val dailyVerse = MutableStateFlow("")
     private val scrollRestoreKey = MutableStateFlow(0)
 
-    // FIXED: Cancel old commentary load so fast taps don't overwrite new chapter
+    // FIX: Cancel old commentary load when user taps fast, so old chapter never overwrites new one
     private var commentaryJob: Job? = null
 
     val books: Flow<List<BookEntity>> = dao.getAllBooks()
@@ -256,9 +256,9 @@ class HomeViewModel(
             chapterCounts.value = dao.getChapterCounts().associate { it.bookId to it.chapterCount }
         }
 
-        // FIXED: Only load summary + commentary when needed.
-        // Before: commentary loaded on every chapter change even on Bible tab.
-        // Now: summary always, commentary only when tab == "Open EW"
+        // FIX: Only load summary + commentary when needed.
+        // Summary loads on every chapter change.
+        // Commentary loads ONLY when tab is "Open EW" - no wasted work on Bible tab.
         viewModelScope.launch {
             combine(currentBookId, selectedChapter, selectedTab) { bookId, chapter, tab ->
                 Triple(bookId, chapter, tab)
@@ -324,8 +324,7 @@ class HomeViewModel(
 
     fun selectTab(tab: String) {
         selectedTab.value = tab
-        // FIXED: Load commentary immediately when user taps Open EW,
-        // don't wait for chapter change
+        // If user just opened EW, load it now for current chapter
         if (tab == "Open EW") {
             loadCommentary(currentBookId.value, selectedChapter.value)
         }
@@ -384,16 +383,12 @@ class HomeViewModel(
         loadSummary(currentBookId.value, selectedChapter.value)
     }
 
-    // FIXED: Full rewrite
-    // 1. Cancels previous load
-    // 2. Runs DB + decompress on Dispatchers.IO (was on Main = jank)
-    // 3. Blank HTML now shows "No commentary" instead of blank screen
+    // FIXED: Cancel old job, run DB + decompress on IO, treat blank HTML as "No commentary"
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
             commentaryError.value = false
-            // Clear old HTML so user doesn't see previous chapter while loading
-            commentary.value = ""
+            // Keep old HTML while loading new one - no flicker to blank
             runCatching {
                 val html = withContext(Dispatchers.IO) {
                     val comm = dao.getCommentary(bookId, chapter)
@@ -405,6 +400,8 @@ class HomeViewModel(
                     html
                 }
             }.onFailure {
+                // Don't overwrite if this job was cancelled by a newer tap
+                if (it is kotlinx.coroutines.CancellationException) throw it
                 commentaryError.value = true
                 commentary.value = "<p>Failed to load commentary.</p>"
             }
