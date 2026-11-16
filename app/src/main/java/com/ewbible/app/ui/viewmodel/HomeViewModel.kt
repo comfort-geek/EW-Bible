@@ -21,15 +21,12 @@ data class HomeUiState(
     val highlights: Map<Int, Color> = emptyMap(),
     val notes: List<NoteEntity> = emptyList(),
     val summary: SummaryEntity? = null,
-    // BIBLE TAB - NOT italic - all 3 parts
     val summaryText: String = "",
     val summaryWhatHappened: String = "",
     val summaryApplication: String = "",
-    // OPEN EW TAB - ITALIC - summary only, shown on top of commentary
     val summaryItalicText: String = "",
     val commentaryHtml: String = "",
     val commentaryError: Boolean = false,
-    // LINKED VERSE BOTTOM SHEET - gold verse click in Open EW
     val linkedVerseText: String = "",
     val linkedVerseRef: String = "",
     val chapterCounts: Map<Int, Int> = emptyMap(),
@@ -74,7 +71,6 @@ class HomeViewModel(
     private val searchResults = MutableStateFlow<List<VerseSearchResult>>(emptyList())
     private val dailyVerse = MutableStateFlow("")
     private val scrollRestoreKey = MutableStateFlow(0)
-    // NEW: Linked verse for bottom sheet
     private val linkedVerseText = MutableStateFlow("")
     private val linkedVerseRef = MutableStateFlow("")
 
@@ -218,7 +214,6 @@ class HomeViewModel(
             commentaryHtml = nav.commentaryHtml,
             commentaryError = content.commentaryError,
             summary = content.summary,
-            // FIXED: Bible tab - all 3, plain. Open EW - summary only, UI will make italic
             summaryText = content.summary?.summary ?: "",
             summaryWhatHappened = content.summary?.whatHappened ?: "",
             summaryApplication = content.summary?.application ?: "",
@@ -404,22 +399,19 @@ class HomeViewModel(
         loadSummary(currentBookId.value, selectedChapter.value)
     }
 
-    // NEW: Load verse for bottom sheet - stays in Open EW, does NOT change current book
+    // FIXED: Load verse for bottom sheet
     fun loadLinkedVerse(bookName: String, chapter: Int, verse: Int) {
         viewModelScope.launch {
             linkedVerseRef.value = "$bookName $chapter:$verse"
             linkedVerseText.value = "Loading..."
             runCatching {
-                // Use books flow value if available, fallback to DB sync
                 val allBooks = try { books.first() } catch (e: Exception) { dao.getAllBooksSync() }
                 val bookId = allBooks.firstOrNull {
                     it.name.equals(bookName, ignoreCase = true) || it.key.equals(bookName, ignoreCase = true)
                 }?.id ?: currentBookId.value
-                val list = dao.getVerses(bookId, chapter).firstOrNull { it.verse == verse }
-                // dao.getVerses returns Flow in this project - handle both cases via first()
-                // If your dao.getVerses is suspend returning List, this still works because first() on List is not needed
-                // Fallback: if list is null, try direct lookup
-                linkedVerseText.value = list?.text ?: "Verse not found."
+                val versesList = dao.getVerses(bookId, chapter).first()
+                val found = versesList.firstOrNull { it.verse == verse }
+                linkedVerseText.value = found?.text ?: "Verse not found."
             }.onFailure {
                 linkedVerseText.value = "Could not load verse."
             }
