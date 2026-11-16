@@ -9,10 +9,13 @@ import com.ewbible.app.data.auth.GoogleAuth
 import com.ewbible.app.data.database.*
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.data.sync.SyncManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Calendar
 
 data class HomeUiState(
@@ -61,10 +64,12 @@ class HomeViewModel(
     private val commentary = MutableStateFlow("")
     private val commentaryError = MutableStateFlow(false)
     private val summaryState = MutableStateFlow<SummaryEntity?>(null)
-    private val chapterCounts = MutableStateFlow>(emptyMap())
+    private val chapterCounts = MutableStateFlow<Map<Int, Int>>(emptyMap())
     private val searchResults = MutableStateFlow<List<VerseSearchResult>>(emptyList())
     private val dailyVerse = MutableStateFlow("")
     private val scrollRestoreKey = MutableStateFlow(0)
+
+    private var commentaryJob: Job? = null
 
     val books: Flow<List<BookEntity>> = dao.getAllBooks()
 
@@ -91,7 +96,7 @@ class HomeViewModel(
             }
         }
 
-    val highlights: Flow> = currentBookId
+    val highlights: Flow<Map<Int, Color>> = currentBookId
         .flatMapLatest { bookId ->
             selectedChapter.flatMapLatest { chapter ->
                 dao.getHighlights(bookId, chapter).map { highlightList ->
@@ -251,12 +256,15 @@ class HomeViewModel(
             chapterCounts.value = dao.getChapterCounts().associate { it.bookId to it.chapterCount }
         }
 
+        // Load summary on every navigation, commentary ONLY when EW tab is active
         viewModelScope.launch {
-            combine(currentBookId, selectedChapter) { bookId, chapter ->
-                bookId to chapter
-            }.collectLatest { (bookId, chapter) ->
+            combine(currentBookId, selectedChapter, selectedTab) { bookId, chapter, tab ->
+                Triple(bookId, chapter, tab)
+            }.collectLatest { (bookId, chapter, tab) ->
                 loadSummary(bookId, chapter)
-                loadCommentary(bookId, chapter)
+                if (tab == "EW") {
+                    loadCommentary(bookId, chapter)
+                }
             }
         }
 
@@ -314,6 +322,10 @@ class HomeViewModel(
 
     fun selectTab(tab: String) {
         selectedTab.value = tab
+        // Force reload when user opens EW, so we never show stale chapter
+        if (tab == "EW") {
+            loadCommentary(currentBookId.value, selectedChapter.value)
+        }
     }
 
     fun setSearchQuery(query: String) {
@@ -370,11 +382,21 @@ class HomeViewModel(
     }
 
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
-        viewModelScope.launch {
+        // Cancel previous load so fast taps don't overwrite new chapter
+        commentaryJob?.cancel()
+        commentaryJob = viewModelScope.launch {
             commentaryError.value = false
             runCatching {
-                val comm = dao.getCommentary(bookId, chapter)
-                commentary.value = comm?.getHtml() ?: "<p>No commentary available for this chapter.</p>"
+                // DB + decompression on IO, not Main
+                val html = withContext(Dispatchers.IO) {
+                    val comm = dao.getCommentary(bookId, chapter)
+                    comm?.getHtml().orEmpty()
+                }
+                commentary.value = if (html.isBlank()) {
+                    "<p>No commentary available for this chapter.</p>"
+                } else {
+                    html
+                }
             }.onFailure {
                 commentaryError.value = true
                 commentary.value = "<p>Failed to load commentary.</p>"
