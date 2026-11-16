@@ -38,7 +38,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var showAllNotes by remember { mutableStateOf(false) }
     var dailyVerseDialog by remember { mutableStateOf(false) }
     var hasRestoredScroll by remember { mutableStateOf(false) }
-    var lastScrollRestoreKey by remember { mutableStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
     var expandedBook by remember { mutableStateOf<String?>(null) }
     var showHighlightPicker by remember { mutableStateOf(false) }
@@ -55,12 +54,11 @@ fun HomeScreen(viewModel: HomeViewModel) {
     LaunchedEffect(state.currentBookId, state.selectedChapter, state.selectedTab) {
         if (state.selectedTab == "Open EW") viewModel.loadCommentary()
     }
-    LaunchedEffect(state.verses, savedScrollIndex, savedScrollOffset, state.scrollRestoreKey) {
+    // FIXED: Restore scroll ONLY once on first launch.
+    // Do NOT listen to scrollRestoreKey - otherwise openBook()
+    // scrolling to top gets overridden by old saved position.
+    LaunchedEffect(state.verses) {
         if (state.verses.isEmpty()) return@LaunchedEffect
-        if (state.scrollRestoreKey != lastScrollRestoreKey) {
-            lastScrollRestoreKey = state.scrollRestoreKey
-            hasRestoredScroll = false
-        }
         if (hasRestoredScroll) return@LaunchedEffect
         if (savedScrollIndex > 0 || savedScrollOffset > 0) {
             val target = savedScrollIndex.coerceIn(0, (state.verses.size + 2).coerceAtLeast(0))
@@ -352,7 +350,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     gold = gold,
                     textColor = textColor,
                     onHighlightPicked = { color ->
-                        viewModel.saveHighlight(color) // FIXED: was setHighlight
+                        viewModel.saveHighlight(color)
                     },
                     onRemoveHighlight = { viewModel.removeHighlight() },
                     onDismiss = { showHighlightPicker = false }
