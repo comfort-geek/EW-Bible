@@ -12,7 +12,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import java.time.LocalDate
+import java.util.Calendar
 
 data class HomeUiState(
     val books: List<BookEntity> = emptyList(),
@@ -23,7 +23,7 @@ data class HomeUiState(
     val commentaryHtml: String = "",
     val commentaryError: Boolean = false,
     val chapterCounts: Map<Int, Int> = emptyMap(),
-    val searchResults: List<SearchResult> = emptyList(),
+    val searchResults: List<VerseSearchResult> = emptyList(),
     val dailyVerse: String = "",
     val currentBookId: Int = 1,
     val selectedBook: String = "",
@@ -61,7 +61,7 @@ class HomeViewModel(
     private val commentaryError = MutableStateFlow(false)
     private val summaryState = MutableStateFlow<SummaryEntity?>(null)
     private val chapterCounts = MutableStateFlow<Map<Int, Int>>(emptyMap())
-    private val searchResults = MutableStateFlow<List<SearchResult>>(emptyList())
+    private val searchResults = MutableStateFlow<List<VerseSearchResult>>(emptyList())
     private val dailyVerse = MutableStateFlow("")
     private val scrollRestoreKey = MutableStateFlow(0)
 
@@ -123,7 +123,7 @@ class HomeViewModel(
         val commentaryError: Boolean,
         val summary: SummaryEntity?,
         val chapterCounts: Map<Int, Int>,
-        val searchResults: List<SearchResult>,
+        val searchResults: List<VerseSearchResult>,
         val dailyVerse: String
     )
 
@@ -239,9 +239,6 @@ class HomeViewModel(
     init {
         viewModelScope.launch {
             restoreSavedReading()
-        }
-
-        viewModelScope.launch {
             books.collect { bookList ->
                 if (bookList.isNotEmpty() && selectedBook.value.isBlank()) {
                     selectedBook.value = bookList.first().name
@@ -250,10 +247,13 @@ class HomeViewModel(
         }
 
         viewModelScope.launch {
+            chapterCounts.value = dao.getChapterCounts().associate { it.bookId to it.chapterCount }
+        }
+
+        viewModelScope.launch {
             combine(currentBookId, selectedChapter) { bookId, chapter ->
                 bookId to chapter
             }.collectLatest { (bookId, chapter) ->
-                loadChapterCounts(bookId)
                 loadSummary(bookId, chapter)
                 loadCommentary(bookId, chapter)
             }
@@ -269,7 +269,12 @@ class HomeViewModel(
                 if (query.isBlank()) {
                     searchResults.value = emptyList()
                 } else {
-                    searchResults.value = dao.searchVerses(query, filter)
+                    val rawResults = dao.searchVerses(query)
+                    searchResults.value = when (filter) {
+                        "OT" -> rawResults.filter { it.bookId <= 39 }
+                        "NT" -> rawResults.filter { it.bookId >= 40 }
+                        else -> rawResults
+                    }
                 }
             }
         }
@@ -294,14 +299,3 @@ class HomeViewModel(
     }
 
     fun selectVerse(verse: Int?) {
-        selectedVerse.value = verse
-    }
-
-    fun selectTab(tab: String) {
-        selectedTab.value = tab
-    }
-
-    fun navigateToReference(bookName: String, chapter: Int, verse: Int? = null) {
-        selectedBook.value = bookName
-        selectedChapter.value = chapter
-        selectedVerse.value = verse
