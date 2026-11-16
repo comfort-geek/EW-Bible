@@ -6,6 +6,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -17,6 +18,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -27,6 +29,7 @@ import kotlin.math.abs
 @Composable
 fun OpenEWContent(
     commentaryHtml: String,
+    summaryText: String = "", // FIXED: Added - italic summary from HomeViewModel
     fontSize: Float,
     textColor: Color,
     secondaryText: Color,
@@ -81,7 +84,7 @@ fun OpenEWContent(
     // FIXED: No title here - HomeScreen already shows "John 4"
     // FIXED: Only show error if hasError AND we really have no content
     // webViewFailed alone should not hide good commentary
-    if (hasError && linkedHtml.isBlank()) {
+    if (hasError && linkedHtml.isBlank() && summaryText.isBlank()) {
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
             Text(
                 text = "Could not load commentary. Please try again.",
@@ -94,7 +97,20 @@ fun OpenEWContent(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // FIXED: No duplicate title Text() here anymore
+        // FIXED: Italic summary at top - Open EW style
+        // This is the SAME summary as Bible tab, but ITALIC here
+        if (summaryText.isNotBlank()) {
+            Text(
+                text = summaryText,
+                color = textColor,
+                fontSize = fontSize.sp,
+                fontStyle = FontStyle.Italic,
+                lineHeight = (fontSize + 8).sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            )
+        }
 
         AndroidView(
             modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
