@@ -1,14 +1,11 @@
-package com.ewbible.app.ui.screens
+package com.ewbible.app.ui.viewmodel
 
-import android.app.Application
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ewbible.app.data.auth.GoogleAuth
 import com.ewbible.app.data.database.*
 import com.ewbible.app.data.preferences.AppPreferences
-import com.ewbible.app.data.sync.SyncManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -23,13 +20,15 @@ data class HomeUiState(
     val highlights: Map<Int, Color> = emptyMap(),
     val notes: List<NoteEntity> = emptyList(),
     val summary: SummaryEntity? = null,
+    val summaryText: String = "",
     val commentaryHtml: String = "",
     val commentaryError: Boolean = false,
     val chapterCounts: Map<Int, Int> = emptyMap(),
     val searchResults: List<VerseSearchResult> = emptyList(),
     val dailyVerse: String = "",
     val currentBookId: Int = 1,
-    val selectedBook: String = "",
+    val currentBook: String = "Genesis",
+    val selectedBook: String = "Genesis",
     val selectedChapter: Int = 1,
     val selectedVerse: Int? = null,
     val selectedTab: String = "Bible",
@@ -38,27 +37,25 @@ data class HomeUiState(
     val isLoggedIn: Boolean = false,
     val userName: String = "Guest",
     val userEmail: String = "",
-    val scrollRestoreKey: Int = 0
+    val scrollRestoreKey: Int = 0,
+    val showNoteDialog: Boolean = false,
+    val currentNoteText: String = ""
 )
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class HomeViewModel(
-    application: Application
-) : AndroidViewModel(application) {
+    private val dao: BibleDao,
+    private val prefs: AppPreferences
+) : ViewModel() {
 
-    private val context = application.applicationContext
-    private val db = AppDatabase.getInstance(context)
-    private val prefs = AppPreferences(context)
-    private val googleAuth = GoogleAuth(context)
-    private val syncManager = SyncManager()
-    private val dao = db.bibleDao()
-
-    private val selectedBook = MutableStateFlow("")
+    private val selectedBook = MutableStateFlow("Genesis")
     private val selectedChapter = MutableStateFlow(1)
     private val selectedVerse = MutableStateFlow<Int?>(null)
     private val selectedTab = MutableStateFlow("Bible")
     private val searchQuery = MutableStateFlow("")
     private val searchFilter = MutableStateFlow("All")
+    private val showNoteDialog = MutableStateFlow(false)
+    private val currentNoteText = MutableStateFlow("")
 
     private val commentary = MutableStateFlow("")
     private val commentaryError = MutableStateFlow(false)
@@ -68,7 +65,6 @@ class HomeViewModel(
     private val dailyVerse = MutableStateFlow("")
     private val scrollRestoreKey = MutableStateFlow(0)
 
-    // FIX: Cancel old commentary load when user taps fast, so old chapter never overwrites new one
     private var commentaryJob: Job? = null
 
     val books: Flow<List<BookEntity>> = dao.getAllBooks()
@@ -79,10 +75,8 @@ class HomeViewModel(
     ) { bookList, bookName ->
         bookList.firstOrNull {
             it.name.equals(bookName, ignoreCase = true) ||
-                    it.key.equals(bookName, ignoreCase = true)
-        }?.id
-            ?: bookList.firstOrNull()?.id
-            ?: 1
+                it.key.equals(bookName, ignoreCase = true)
+        }?.id ?: bookList.firstOrNull()?.id ?: 1
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.Eagerly,
@@ -109,132 +103,63 @@ class HomeViewModel(
 
     val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
 
-    private data class ReadingState(
-        val books: List<BookEntity>,
-        val verses: List<VerseEntity>,
-        val highlights: Map<Int, Color>,
-        val notes: List<NoteEntity>,
-        val currentBookId: Int
-    )
-
-    private data class NavigationState(
-        val selectedBook: String,
-        val selectedChapter: Int,
-        val selectedVerse: Int?,
-        val selectedTab: String,
-        val commentaryHtml: String
-    )
-
-    private data class ContentState(
-        val commentaryError: Boolean,
-        val summary: SummaryEntity?,
-        val chapterCounts: Map<Int, Int>,
-        val searchResults: List<VerseSearchResult>,
-        val dailyVerse: String
-    )
-
-    private data class UserSettingsState(
-        val darkMode: Boolean?,
-        val fontSize: Float,
-        val userName: String,
-        val userEmail: String,
-        val isLoggedIn: Boolean
-    )
-
-    private val readingState = combine(
-        books,
-        verses,
-        highlights,
-        notes,
-        currentBookId
-    ) { books, verses, highlights, notes, currentBookId ->
-        ReadingState(
+    val uiState: StateFlow<HomeUiState> = combine(
+        books, verses, highlights, notes, currentBookId,
+        selectedBook, selectedChapter, selectedVerse, selectedTab,
+        commentary, commentaryError, summaryState, chapterCounts,
+        searchResults, dailyVerse, scrollRestoreKey,
+        showNoteDialog, currentNoteText,
+        prefs.isDarkMode, prefs.fontSize, prefs.userName, prefs.userEmail
+    ) { args ->
+        @Suppress("UNCHECKED_CAST")
+        val books = args[0] as List<BookEntity>
+        val verses = args[1] as List<VerseEntity>
+        val highlights = args[2] as Map<Int, Color>
+        val notes = args[3] as List<NoteEntity>
+        val bookId = args[4] as Int
+        val selBook = args[5] as String
+        val selChapter = args[6] as Int
+        val selVerse = args[7] as Int?
+        val selTab = args[8] as String
+        val comm = args[9] as String
+        val commErr = args[10] as Boolean
+        val summary = args[11] as SummaryEntity?
+        val counts = args[12] as Map<Int, Int>
+        val searchRes = args[13] as List<VerseSearchResult>
+        val daily = args[14] as String
+        val restoreKey = args[15] as Int
+        val showNote = args[16] as Boolean
+        val noteText = args[17] as String
+        val dark = args[18] as Boolean?
+        val font = args[19] as Float
+        val uName = args[20] as String
+        val uEmail = args[21] as String
+        HomeUiState(
             books = books,
             verses = verses,
             highlights = highlights,
             notes = notes,
-            currentBookId = currentBookId
-        )
-    }
-
-    private val navigationState = combine(
-        selectedBook,
-        selectedChapter,
-        selectedVerse,
-        selectedTab,
-        commentary
-    ) { selectedBook, selectedChapter, selectedVerse, selectedTab, commentaryHtml ->
-        NavigationState(
-            selectedBook = selectedBook,
-            selectedChapter = selectedChapter,
-            selectedVerse = selectedVerse,
-            selectedTab = selectedTab,
-            commentaryHtml = commentaryHtml
-        )
-    }
-
-    private val contentState = combine(
-        commentaryError,
-        summaryState,
-        chapterCounts,
-        searchResults,
-        dailyVerse
-    ) { commentaryError, summary, chapterCounts, searchResults, dailyVerse ->
-        ContentState(
-            commentaryError = commentaryError,
+            currentBookId = bookId,
+            currentBook = selBook,
+            selectedBook = selBook,
+            selectedChapter = selChapter,
+            selectedVerse = selVerse,
+            selectedTab = selTab,
+            commentaryHtml = comm,
+            commentaryError = commErr,
             summary = summary,
-            chapterCounts = chapterCounts,
-            searchResults = searchResults,
-            dailyVerse = dailyVerse
-        )
-    }
-
-    private val userSettingsState = combine(
-        prefs.isDarkMode,
-        prefs.fontSize,
-        prefs.userName,
-        prefs.userEmail
-    ) { darkMode, fontSize, userName, userEmail ->
-        UserSettingsState(
-            darkMode = darkMode,
-            fontSize = fontSize,
-            userName = userName,
-            userEmail = userEmail,
-            isLoggedIn = googleAuth.isLoggedIn() &&
-                    userName != "Guest" &&
-                    userEmail.isNotBlank()
-        )
-    }
-
-    val uiState: StateFlow<HomeUiState> = combine(
-        readingState,
-        navigationState,
-        contentState,
-        userSettingsState,
-        scrollRestoreKey
-    ) { reading, navigation, content, settings, restoreKey ->
-        HomeUiState(
-            books = reading.books,
-            verses = reading.verses,
-            highlights = reading.highlights,
-            notes = reading.notes,
-            currentBookId = reading.currentBookId,
-            selectedBook = navigation.selectedBook,
-            selectedChapter = navigation.selectedChapter,
-            selectedVerse = navigation.selectedVerse,
-            selectedTab = navigation.selectedTab,
-            commentaryHtml = navigation.commentaryHtml,
-            commentaryError = content.commentaryError,
-            summary = content.summary,
-            chapterCounts = content.chapterCounts,
-            searchResults = content.searchResults,
-            dailyVerse = content.dailyVerse,
-            darkMode = settings.darkMode,
-            fontSize = settings.fontSize,
-            isLoggedIn = settings.isLoggedIn,
-            userName = settings.userName,
-            userEmail = settings.userEmail,
-            scrollRestoreKey = restoreKey
+            summaryText = summary?.summaryText ?: summary?.text ?: "",
+            chapterCounts = counts,
+            searchResults = searchRes,
+            dailyVerse = daily,
+            darkMode = dark,
+            fontSize = font,
+            userName = uName,
+            userEmail = uEmail,
+            isLoggedIn = uName != "Guest" && uEmail.isNotBlank(),
+            scrollRestoreKey = restoreKey,
+            showNoteDialog = showNote,
+            currentNoteText = noteText
         )
     }.stateIn(
         scope = viewModelScope,
@@ -245,20 +170,10 @@ class HomeViewModel(
     init {
         viewModelScope.launch {
             restoreSavedReading()
-            books.collect { bookList ->
-                if (bookList.isNotEmpty() && selectedBook.value.isBlank()) {
-                    selectedBook.value = bookList.first().name
-                }
-            }
         }
-
         viewModelScope.launch {
             chapterCounts.value = dao.getChapterCounts().associate { it.bookId to it.chapterCount }
         }
-
-        // FIX: Only load summary + commentary when needed.
-        // Summary loads on every chapter change.
-        // Commentary loads ONLY when tab is "Open EW" - no wasted work on Bible tab.
         viewModelScope.launch {
             combine(currentBookId, selectedChapter, selectedTab) { bookId, chapter, tab ->
                 Triple(bookId, chapter, tab)
@@ -269,27 +184,24 @@ class HomeViewModel(
                 }
             }
         }
-
         viewModelScope.launch {
             combine(
                 searchQuery.debounce(300L).distinctUntilChanged(),
                 searchFilter
-            ) { query, filter ->
-                query to filter
-            }.collectLatest { (query, filter) ->
-                if (query.isBlank()) {
-                    searchResults.value = emptyList()
-                } else {
-                    val rawResults = dao.searchVerses(query)
-                    searchResults.value = when (filter) {
-                        "OT" -> rawResults.filter { it.bookId <= 39 }
-                        "NT" -> rawResults.filter { it.bookId >= 40 }
-                        else -> rawResults
+            ) { query, filter -> query to filter }
+                .collectLatest { (query, filter) ->
+                    if (query.isBlank()) {
+                        searchResults.value = emptyList()
+                    } else {
+                        val rawResults = dao.searchVerses(query)
+                        searchResults.value = when (filter) {
+                            "OT" -> rawResults.filter { it.bookId <= 39 }
+                            "NT" -> rawResults.filter { it.bookId >= 40 }
+                            else -> rawResults
+                        }
                     }
                 }
-            }
         }
-
         viewModelScope.launch {
             loadDailyVerse()
         }
@@ -310,8 +222,30 @@ class HomeViewModel(
         saveReadingProgress()
     }
 
+    // FIXED: Added - HomeScreen chapter +/- buttons call these
+    fun previousChapter() {
+        if (selectedChapter.value > 1) selectChapter(selectedChapter.value - 1)
+    }
+
+    fun nextChapter() {
+        val max = chapterCounts.value[currentBookId.value] ?: 1
+        if (selectedChapter.value < max) selectChapter(selectedChapter.value + 1)
+    }
+
     fun selectVerse(verse: Int?) {
         selectedVerse.value = verse
+        // Load existing note text for this verse so dialog shows it
+        if (verse != null) {
+            viewModelScope.launch {
+                val note = dao.getNoteAtVerse(currentBookId.value, selectedChapter.value, verse)
+                currentNoteText.value = note?.noteText ?: ""
+            }
+        }
+    }
+
+    // FIXED: Added - HomeScreen calls this to clear selection
+    fun clearSelection() {
+        selectedVerse.value = null
     }
 
     fun openBook(bookName: String, chapter: Int) {
@@ -324,10 +258,14 @@ class HomeViewModel(
 
     fun selectTab(tab: String) {
         selectedTab.value = tab
-        // If user just opened EW, load it now for current chapter
         if (tab == "Open EW") {
             loadCommentary(currentBookId.value, selectedChapter.value)
         }
+    }
+
+    // FIXED: Added - HomeScreen Search tab calls this directly
+    fun searchVerses(query: String) {
+        searchQuery.value = query
     }
 
     fun setSearchQuery(query: String) {
@@ -339,15 +277,11 @@ class HomeViewModel(
     }
 
     fun setDarkMode(enabled: Boolean) {
-        viewModelScope.launch {
-            prefs.setDarkMode(enabled)
-        }
+        viewModelScope.launch { prefs.setDarkMode(enabled) }
     }
 
     fun setFontSize(size: Float) {
-        viewModelScope.launch {
-            prefs.setFontSize(size)
-        }
+        viewModelScope.launch { prefs.setFontSize(size) }
     }
 
     fun saveReadingProgress(verse: VerseEntity? = null, scrollIndex: Int = 0, scrollOffset: Int = 0) {
@@ -383,12 +317,10 @@ class HomeViewModel(
         loadSummary(currentBookId.value, selectedChapter.value)
     }
 
-    // FIXED: Cancel old job, run DB + decompress on IO, treat blank HTML as "No commentary"
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
             commentaryError.value = false
-            // Keep old HTML while loading new one - no flicker to blank
             runCatching {
                 val html = withContext(Dispatchers.IO) {
                     val comm = dao.getCommentary(bookId, chapter)
@@ -400,7 +332,6 @@ class HomeViewModel(
                     html
                 }
             }.onFailure {
-                // Don't overwrite if this job was cancelled by a newer tap
                 if (it is kotlinx.coroutines.CancellationException) throw it
                 commentaryError.value = true
                 commentary.value = "<p>Failed to load commentary.</p>"
@@ -422,6 +353,16 @@ class HomeViewModel(
         }
     }
 
+    // FIXED: Added - Note dialog controls
+    fun showNoteDialog() {
+        if (selectedVerse.value == null) return
+        showNoteDialog.value = true
+    }
+
+    fun dismissNoteDialog() {
+        showNoteDialog.value = false
+    }
+
     fun saveNote(noteText: String) {
         val verseNum = selectedVerse.value ?: return
         viewModelScope.launch {
@@ -434,6 +375,28 @@ class HomeViewModel(
                     timestamp = System.currentTimeMillis()
                 )
             )
+            currentNoteText.value = noteText
+        }
+    }
+
+    // FIXED: Added - HomeScreen Highlight button calls this (toggle)
+    fun toggleHighlight() {
+        val verseNum = selectedVerse.value ?: return
+        viewModelScope.launch {
+            val existing = dao.getHighlights(currentBookId.value, selectedChapter.value).first()
+                .firstOrNull { it.verse == verseNum }
+            if (existing != null) {
+                dao.deleteHighlight(currentBookId.value, selectedChapter.value, verseNum)
+            } else {
+                dao.saveHighlight(
+                    HighlightEntity(
+                        bookId = currentBookId.value,
+                        chapter = selectedChapter.value,
+                        verse = verseNum,
+                        color = Color(0xFFFFF176).toArgb().toString()
+                    )
+                )
+            }
         }
     }
 
@@ -455,19 +418,6 @@ class HomeViewModel(
         val verseNum = selectedVerse.value ?: return
         viewModelScope.launch {
             dao.deleteHighlight(currentBookId.value, selectedChapter.value, verseNum)
-        }
-    }
-
-    fun handleGoogleLogin() {
-        viewModelScope.launch {
-            googleAuth.login()
-        }
-    }
-
-    fun handleGoogleLogout() {
-        viewModelScope.launch {
-            googleAuth.logout()
-            prefs.clearUser()
         }
     }
 
