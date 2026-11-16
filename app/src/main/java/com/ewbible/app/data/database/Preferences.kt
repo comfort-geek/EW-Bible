@@ -1,4 +1,4 @@
-package com.ewbible.app.data.database
+package com.ewbible.app.data.preferences
 
 import android.content.Context
 import androidx.datastore.core.DataStore
@@ -40,7 +40,7 @@ class AppPreferences(private val context: Context) {
     val lastScrollIndex: Flow<Int> = context.dataStore.data.map { it[LAST_SCROLL_INDEX] ?: 0 }
     val lastScrollOffset: Flow<Int> = context.dataStore.data.map { it[LAST_SCROLL_OFFSET] ?: 0 }
     val dailyVerseDate: Flow<String> = context.dataStore.data.map { it[DAILY_VERSE_DATE] ?: "" }
-    
+
     val dailyVerseReference: Flow<DailyVerseReference?> = context.dataStore.data.map { preferences ->
         val bookId = preferences[DAILY_VERSE_BOOK_ID]
         val chapter = preferences[DAILY_VERSE_CHAPTER]
@@ -63,7 +63,8 @@ class AppPreferences(private val context: Context) {
             prefs[LAST_CHAPTER] = chapter
             prefs[LAST_VERSE] = verse
             prefs[LAST_SCROLL_INDEX] = scrollIndex.coerceAtLeast(0)
-            prefs[LAST_SCROLL_OFFSET] = offset.coerceAtLeast(0)
+            // FIXED: was 'offset' - didn't exist, wouldn't compile
+            prefs[LAST_SCROLL_OFFSET] = scrollOffset.coerceAtLeast(0)
         }
     }
 
