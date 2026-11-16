@@ -1,5 +1,6 @@
 package com.ewbible.app.ui.screens
 
+import android.webkit.WebView
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ewbible.app.data.preferences.AppPreferences
 import kotlinx.coroutines.launch
@@ -141,8 +143,40 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                             )
                         }
                     }
-                    "Open EW" -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-                        Text(state.commentary ?: "No commentary available.", color = textColor, fontSize = state.fontSize.sp)
+                    // FIXED: Was Text(state.commentary) - did not compile + showed raw HTML tags
+                    // Now: WebView + uses commentaryHtml + handles error / loading
+                    "Open EW" -> {
+                        when {
+                            state.commentaryError -> {
+                                Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
+                                    Text("Failed to load commentary.", color = textColor, fontSize = state.fontSize.sp)
+                                }
+                            }
+                            state.commentaryHtml.isBlank() -> {
+                                Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
+                                    Text("Loading...", color = textColor, fontSize = state.fontSize.sp)
+                                }
+                            }
+                            else -> {
+                                AndroidView(
+                                    factory = { ctx ->
+                                        WebView(ctx).apply {
+                                            settings.javaScriptEnabled = false
+                                        }
+                                    },
+                                    update = { webView ->
+                                        webView.loadDataWithBaseURL(
+                                            null,
+                                            state.commentaryHtml,
+                                            "text/html",
+                                            "UTF-8",
+                                            null
+                                        )
+                                    },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
                     }
                     "Search" -> Column(Modifier.fillMaxSize().padding(16.dp)) {
                         Text("Search verses...", color = textColor)
@@ -215,3 +249,27 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
+                                        showAllNotes = false
+                                        openBook(bookName, note.chapter)
+                                        viewModel.selectVerse(note.verse)
+                                    }
+                                    .padding(vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = "$bookName ${note.chapter}:${note.verse}",
+                                    color = gold,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(text = note.noteText, color = textColor, fontSize = 14.sp)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAllNotes = false }) { Text("Close", color = gold) }
+            }
+        )
+    }
+}
