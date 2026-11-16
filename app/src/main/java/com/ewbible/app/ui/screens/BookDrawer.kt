@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -30,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.database.BookEntity
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BookDrawer(
     otBookEntities: List<BookEntity>,
@@ -76,6 +78,7 @@ fun BookDrawer(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BookDrawerRow(
     book: BookEntity,
