@@ -40,6 +40,8 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var hasRestoredScroll by remember { mutableStateOf(false) }
     var lastScrollRestoreKey by remember { mutableStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
+    // NEW: For BookDrawer expansion
+    var expandedBook by remember { mutableStateOf<String?>(null) }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
@@ -69,6 +71,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
 
     fun openBook(bookName: String, chapter: Int) {
         viewModel.openBook(bookName, chapter)
+        expandedBook = null
         hasRestoredScroll = true
         scope.launch {
             listState.scrollToItem(0)
@@ -79,21 +82,25 @@ fun HomeScreen(viewModel: HomeViewModel) {
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet(drawerContainerColor = panel) {
-                Text("Books", color = gold, fontWeight = FontWeight.Bold, modifier = Modifier.padding(16.dp))
-                LazyColumn {
-                    items(state.books.sortedBy { it.id }) { book ->
-                        Text(
-                            text = book.name,
-                            color = textColor,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { openBook(book.name, 1) }
-                                .padding(horizontal = 16.dp, vertical = 12.dp)
-                        )
-                    }
+            // WIRED: BookDrawer.kt replaces old simple list
+            BookDrawer(
+                otBookEntities = state.books.filter { it.id <= 39 }.sortedBy { it.id },
+                ntBookEntities = state.books.filter { it.id >= 40 }.sortedBy { it.id },
+                chapterCounts = state.chapterCounts,
+                selectedBook = state.currentBook,
+                selectedChapter = state.selectedChapter,
+                expandedBook = expandedBook,
+                background = background,
+                textColor = textColor,
+                panel = panel,
+                gold = gold,
+                secondaryText = textColor.copy(alpha = 0.6f),
+                onOpenBook = { book, chapter -> openBook(book, chapter) },
+                onSelectBook = { book -> viewModel.selectBook(book) },
+                onToggleBook = { book ->
+                    expandedBook = if (expandedBook == book) null else book
                 }
-            }
+            )
         }
     ) {
         Column(
@@ -256,7 +263,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         )
     }
 
-    // FIXED: Now uses DailyVerseDialog.kt - added background param, removed duplicate at bottom
     if (dailyVerseDialog) {
         DailyVerseDialog(
             dailyVerseText = state.dailyVerse,
@@ -308,7 +314,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         )
     }
 
-    // FIXED: Now uses NotesCard.kt instead of inline OutlinedTextField
     if (state.showNoteDialog) {
         var noteText by remember(state.selectedVerse) { mutableStateOf(state.currentNoteText) }
         AlertDialog(
@@ -339,4 +344,3 @@ fun HomeScreen(viewModel: HomeViewModel) {
         )
     }
 }
-// NOTE: DailyVerseDialog duplicate REMOVED from here - it lives in DailyVerseDialog.kt now
