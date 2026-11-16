@@ -41,7 +41,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var lastScrollRestoreKey by remember { mutableStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
     var expandedBook by remember { mutableStateOf<String?>(null) }
-    // NEW: Highlight picker
     var showHighlightPicker by remember { mutableStateOf(false) }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -110,7 +109,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
-            // Top Bar
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -134,7 +132,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
             }
 
-            // Book + Chapter header
             if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -162,7 +159,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
             }
 
-            // Tab Content
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (state.selectedTab) {
                     "Bible" -> BibleContent(
@@ -219,7 +215,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     modifier = Modifier.fillMaxWidth().background(panel).padding(8.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    // CHANGED: Was toggleHighlight(), now opens picker
                     TextButton(onClick = { showHighlightPicker = true }) { Text("Highlight", color = gold) }
                     TextButton(onClick = { viewModel.showNoteDialog() }) { Text("Note", color = gold) }
                     TextButton(onClick = { viewModel.clearSelection() }) { Text("Done", color = textColor) }
@@ -345,7 +340,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         )
     }
 
-    // NEW: Highlight Picker Dialog
     if (showHighlightPicker && state.selectedVerse != null) {
         AlertDialog(
             onDismissRequest = { showHighlightPicker = false },
@@ -358,7 +352,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     gold = gold,
                     textColor = textColor,
                     onHighlightPicked = { color ->
-                        viewModel.setHighlight(color)
+                        viewModel.saveHighlight(color) // FIXED: was setHighlight
                     },
                     onRemoveHighlight = { viewModel.removeHighlight() },
                     onDismiss = { showHighlightPicker = false }
