@@ -25,6 +25,7 @@ data class HomeUiState(
     val commentaryError: Boolean = false,
     val chapterCounts: Map<Int, Int> = emptyMap(),
     val searchResults: List<VerseSearchResult> = emptyList(),
+    val searchFilter: String = "All",
     val dailyVerse: String = "",
     val currentBookId: Int = 1,
     val currentBook: String = "Genesis",
@@ -103,7 +104,6 @@ class HomeViewModel(
 
     val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
 
-    // FIXED: Split into 4 small combines - old code had 22 flows in one combine, max is 20
     private data class ReadingState(
         val books: List<BookEntity>,
         val verses: List<VerseEntity>,
@@ -125,6 +125,7 @@ class HomeViewModel(
         val summary: SummaryEntity?,
         val chapterCounts: Map<Int, Int>,
         val searchResults: List<VerseSearchResult>,
+        val searchFilter: String,
         val dailyVerse: String,
         val scrollRestoreKey: Int
     )
@@ -141,8 +142,8 @@ class HomeViewModel(
     private val navState = combine(selectedBook, selectedChapter, selectedVerse, selectedTab, commentary, showNoteDialog, currentNoteText) { b, c, v, t, comm, show, note ->
         NavState(b, c, v, t, comm, show, note)
     }
-    private val contentState = combine(commentaryError, summaryState, chapterCounts, searchResults, dailyVerse, scrollRestoreKey) { err, sum, counts, search, daily, key ->
-        ContentState(err, sum, counts, search, daily, key)
+    private val contentState = combine(commentaryError, summaryState, chapterCounts, searchResults, searchFilter, dailyVerse, scrollRestoreKey) { err, sum, counts, search, filter, daily, key ->
+        ContentState(err, sum, counts, search, filter, daily, key)
     }
     private val settingsState = combine(prefs.isDarkMode, prefs.fontSize, prefs.userName, prefs.userEmail) { dark, font, name, email ->
         SettingsState(dark, font, name, email)
@@ -165,11 +166,10 @@ class HomeViewModel(
             commentaryHtml = nav.commentaryHtml,
             commentaryError = content.commentaryError,
             summary = content.summary,
-            // FIXED: Was summary?.summaryText ?: summary?.text - neither exists
-            // Real fields are summary / whatHappened / application
             summaryText = content.summary?.summary ?: "",
             chapterCounts = content.chapterCounts,
             searchResults = content.searchResults,
+            searchFilter = content.searchFilter,
             dailyVerse = content.dailyVerse,
             darkMode = settings.darkMode,
             fontSize = settings.fontSize,
@@ -214,8 +214,10 @@ class HomeViewModel(
                     } else {
                         val rawResults = dao.searchVerses(query)
                         searchResults.value = when (filter) {
-                            "OT" -> rawResults.filter { it.bookId <= 39 }
-                            "NT" -> rawResults.filter { it.bookId >= 40 }
+                            "Old Testament", "OT" -> rawResults.filter { it.bookId <= 39 }
+                            "New Testament", "NT" -> rawResults.filter { it.bookId >= 40 }
+                            "Gospel" -> rawResults.filter { it.bookId in 40..43 }
+                            "Prophecy" -> rawResults.filter { it.bookId in setOf(23, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 66) }
                             else -> rawResults
                         }
                     }
