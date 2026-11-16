@@ -38,8 +38,6 @@ class SyncManager {
 
     private fun userId(): String? = auth.currentUser?.uid
 
-    // FIX 1: Single source for paths - your old code repeated
-    // "users/{uid}/notes" etc 9 times. One typo = silent bug.
     private fun notesRef(uid: String) = db.collection("users").document(uid).collection("notes")
     private fun highlightsRef(uid: String) = db.collection("users").document(uid).collection("highlights")
     private fun progressRef(uid: String) = db.collection("users").document(uid).collection("progress")
@@ -48,9 +46,6 @@ class SyncManager {
 
     // --- NOTES ---
 
-    // FIX 2: Return Result<Boolean> instead of swallowing errors
-    // Old code: catch -> Log.e -> return nothing. Caller had NO idea sync failed.
-    // Now caller can do: uploadNote(...).onFailure { showToast("Sync failed, will retry") }
     suspend fun uploadNote(
         bookId: Int,
         chapter: Int,
@@ -67,10 +62,9 @@ class SyncManager {
                 timestamp = System.currentTimeMillis()
             )
             notesRef(uid).document(docId(bookId, chapter, verse))
-                // FIX 3: merge = true, so a future field added to CloudNote
-                // doesn't wipe the whole doc
                 .set(note, SetOptions.merge())
                 .await()
+            Unit // FIXED: await() returns Void, force Unit
         }.onFailure { Log.e("SyncManager", "uploadNote failed", it) }
     }
 
@@ -89,6 +83,7 @@ class SyncManager {
         val uid = userId() ?: return Result.failure(NotLoggedInException())
         return runCatching {
             notesRef(uid).document(docId(bookId, chapter, verse)).delete().await()
+            Unit // FIXED
         }.onFailure { Log.e("SyncManager", "deleteNote failed", it) }
     }
 
@@ -111,6 +106,7 @@ class SyncManager {
             highlightsRef(uid).document(docId(bookId, chapter, verse))
                 .set(highlight, SetOptions.merge())
                 .await()
+            Unit // FIXED
         }.onFailure { Log.e("SyncManager", "uploadHighlight failed", it) }
     }
 
@@ -129,6 +125,7 @@ class SyncManager {
         val uid = userId() ?: return Result.failure(NotLoggedInException())
         return runCatching {
             highlightsRef(uid).document(docId(bookId, chapter, verse)).delete().await()
+            Unit // FIXED
         }.onFailure { Log.e("SyncManager", "deleteHighlight failed", it) }
     }
 
@@ -156,6 +153,7 @@ class SyncManager {
             progressRef(uid).document("lastReading")
                 .set(progress, SetOptions.merge())
                 .await()
+            Unit // FIXED
         }.onFailure { Log.e("SyncManager", "uploadProgress failed", it) }
     }
 
@@ -167,9 +165,6 @@ class SyncManager {
         }.onFailure { Log.e("SyncManager", "getProgress failed", it) }
     }
 
-    // FIX 4: Batch sync - your old code would do 1 network call per note/highlight.
-    // 50 notes = 50 calls = slow + expensive. This does it in 1 batch.
-    // Call this on login / app start.
     suspend fun syncAll(
         localNotes: List<CloudNote>,
         localHighlights: List<CloudHighlight>
@@ -186,6 +181,7 @@ class SyncManager {
                 batch.set(ref, h, SetOptions.merge())
             }
             batch.commit().await()
+            Unit // FIXED
         }.onFailure { Log.e("SyncManager", "syncAll failed", it) }
     }
 
