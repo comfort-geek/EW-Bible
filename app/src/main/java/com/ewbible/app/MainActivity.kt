@@ -7,22 +7,42 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.ewbible.app.data.database.AppDatabase
+import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.ui.screens.HomeScreen
 import com.ewbible.app.ui.theme.EWBibleTheme
+import com.ewbible.app.ui.viewmodel.HomeViewModel
+import com.ewbible.app.ui.viewmodel.HomeViewModelFactory
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // FIXED: Create single instances here, not inside Composables
+        val database = AppDatabase.getInstance(applicationContext)
+        val preferences = AppPreferences(applicationContext)
+
         setContent {
-            EWBibleTheme {
+            // FIXED: Observe dark mode from DataStore so toggle actually works
+            val isDarkMode by preferences.isDarkMode.collectAsState(initial = null)
+            val useDarkTheme = isDarkMode ?: false
+
+            // FIXED: Create ViewModel with Factory so it gets DAO + Preferences
+            val homeViewModel: HomeViewModel = viewModel(
+                factory = HomeViewModelFactory(database.bibleDao(), preferences)
+            )
+
+            EWBibleTheme(darkTheme = useDarkTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    HomeScreen()
+                    HomeScreen(viewModel = homeViewModel)
                 }
             }
         }
