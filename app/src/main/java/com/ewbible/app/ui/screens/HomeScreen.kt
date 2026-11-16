@@ -1,5 +1,7 @@
 package com.ewbible.app.ui.screens
 
+import android.app.Activity
+import android.widget.Toast
 import androidx.compose.foundation.*
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -15,11 +17,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ewbible.app.data.auth.GoogleAuth
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
@@ -29,11 +33,13 @@ import kotlin.math.abs
 @Composable
 fun HomeScreen(viewModel: HomeViewModel) {
     val context = LocalContext.current
+    val activity = context as Activity
     val scope = rememberCoroutineScope()
     val state by viewModel.uiState.collectAsState()
     val isDark = state.darkMode ?: isSystemInDarkTheme()
 
     val prefs = remember { AppPreferences(context) }
+    val googleAuth = remember { GoogleAuth(context) }
     val savedScrollIndex by prefs.lastScrollIndex.collectAsState(initial = 0)
     val savedScrollOffset by prefs.lastScrollOffset.collectAsState(initial = 0)
 
@@ -53,8 +59,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val panel = if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9)
     val textColor = if (isDark) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
 
-    // FIXED: Only loadSummary here. loadCommentary is owned by ViewModel init + selectTab.
-    // Having it here too caused 2 loads that cancelled each other -> false "Could not load".
     LaunchedEffect(state.currentBookId, state.selectedChapter) { viewModel.loadSummary() }
     LaunchedEffect(state.verses) {
         if (state.verses.isEmpty()) return@LaunchedEffect
@@ -76,34 +80,23 @@ fun HomeScreen(viewModel: HomeViewModel) {
         }
     }
 
-    // FIXED SWIPE: Pass.Initial sees swipe BEFORE LazyColumn eats it.
-    // Only fires if swipe is mostly horizontal, so vertical scroll still works.
+    // FIXED SWIPE: clean down/up tracking. Old code had broken totalX math.
+    // Pass.Initial sees swipe BEFORE LazyColumn, only fires if mostly horizontal.
     val swipeModifier = Modifier.pointerInput(state.currentBook, state.selectedChapter, state.selectedTab) {
         awaitPointerEventScope {
             var downX = 0f
             var downY = 0f
-            var totalX = 0f
-            var totalY = 0f
             var tracking = false
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull() ?: continue
                 when (event.type) {
-                    androidx.compose.ui.input.pointer.PointerEventType.Press -> {
+                    PointerEventType.Press -> {
                         downX = change.position.x
                         downY = change.position.y
-                        totalX = 0f
-                        totalY = 0f
                         tracking = true
                     }
-                    androidx.compose.ui.input.pointer.PointerEventType.Move -> {
-                        if (!tracking) continue
-                        totalX += change.previousPosition.x.let { prevX -> change.position.x - prevX } * -1 * -1 // keep simple below
-                        // Simpler: accumulate from delta
-                        // We recompute from position delta:
-                        // (handled by tracking total below)
-                    }
-                    androidx.compose.ui.input.pointer.PointerEventType.Release -> {
+                    PointerEventType.Release -> {
                         if (tracking) {
                             val dx = change.position.x - downX
                             val dy = change.position.y - downY
@@ -113,8 +106,8 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         }
                         tracking = false
                     }
+                    else -> {}
                 }
-                // Keep tracking totals for move - we use downX/dy on Release, so no need for total
             }
         }
     }
@@ -172,7 +165,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
             }
 
-            // HEADER - Title only, NO BUTTONS - single source of truth
             if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") {
                 Text(
                     text = "${state.currentBook} ${state.selectedChapter}",
@@ -183,7 +175,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 )
             }
 
-            // CONTENT - with swipe (Bible only, Open EW handles swipe inside WebView, Search has no swipe)
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -218,7 +209,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                             viewModel.selectTab("Bible")
                             viewModel.selectVerse(verse)
                         },
-                        // FIXED: This was missing - without it swipe on Open EW did nothing
                         onNextChapter = { viewModel.nextChapter() },
                         onPreviousChapter = { viewModel.previousChapter() }
                     )
@@ -256,41 +246,49 @@ fun HomeScreen(viewModel: HomeViewModel) {
         }
     }
 
-    if (settingsOpen) {
-        AlertDialog(
-            onDismissRequest = { settingsOpen = false },
-            containerColor = background,
-            title = { Text("Settings", color = textColor, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("A-", color = textColor, fontSize = 13.sp)
-                        Slider(
-                            value = state.fontSize,
-                            onValueChange = { viewModel.setFontSize(it) },
-                            valueRange = 12f..28f,
-                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-                        )
-                        Text("A+", color = textColor, fontSize = 13.sp)
+    // FIXED: Settings is now LEFT PANEL, top to bottom, with X - not centered AlertDialog
+    SettingsPanel(
+        visible = settingsOpen,
+        isLoggedIn = state.isLoggedIn,
+        userName = state.userName,
+        userEmail = state.userEmail,
+        fontSize = state.fontSize,
+        darkMode = isDark,
+        notesCount = state.notes.size,
+        background = background,
+        panel = panel,
+        textColor = textColor,
+        gold = gold,
+        onClose = { settingsOpen = false },
+        onFontSizeChange = { viewModel.setFontSize(it) },
+        onDarkModeChange = { viewModel.setDarkMode(it) },
+        onDailyVerse = { settingsOpen = false; dailyVerseDialog = true },
+        onShowNotes = { settingsOpen = false; showAllNotes = true },
+        onGoogleSignIn = {
+            scope.launch {
+                val result = googleAuth.signInWithGoogle(activity)
+                result.onSuccess { nameAndEmail ->
+                    val parts = nameAndEmail.split("|", limit = 2)
+                    viewModel.onUserSignedIn(
+                        parts.getOrNull(0) ?: "User",
+                        parts.getOrNull(1) ?: ""
+                    )
+                    settingsOpen = false
+                }.onFailure { e ->
+                    if (e is GoogleAuth.UserCancelledException) {
+                        // Back pressed - do nothing
+                    } else {
+                        Toast.makeText(context, e.message ?: "Sign-in failed", Toast.LENGTH_SHORT).show()
                     }
-                    Button(
-                        onClick = { settingsOpen = false; dailyVerseDialog = true },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = panel)
-                    ) { Text("Daily Verse", color = textColor, fontSize = 14.sp) }
-
-                    Button(
-                        onClick = { settingsOpen = false; showAllNotes = true },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = panel)
-                    ) { Text("Notes (${state.notes.size})", color = textColor, fontSize = 14.sp) }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { settingsOpen = false }) { Text("Done", color = gold) }
             }
-        )
-    }
+        },
+        onSignOut = {
+            googleAuth.signOut()
+            viewModel.onUserSignedOut()
+            settingsOpen = false
+        }
+    )
 
     if (dailyVerseDialog) {
         DailyVerseDialog(
