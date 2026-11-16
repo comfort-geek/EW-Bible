@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.ewbible.app.data.auth.GoogleAuth
 import com.ewbible.app.data.database.*
+import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.data.sync.SyncManager
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -60,7 +61,7 @@ class HomeViewModel(
     private val commentary = MutableStateFlow("")
     private val commentaryError = MutableStateFlow(false)
     private val summaryState = MutableStateFlow<SummaryEntity?>(null)
-    private val chapterCounts = MutableStateFlow<Map<Int, Int>>(emptyMap())
+    private val chapterCounts = MutableStateFlow>(emptyMap())
     private val searchResults = MutableStateFlow<List<VerseSearchResult>>(emptyList())
     private val dailyVerse = MutableStateFlow("")
     private val scrollRestoreKey = MutableStateFlow(0)
@@ -90,7 +91,7 @@ class HomeViewModel(
             }
         }
 
-    val highlights: Flow<Map<Int, Color>> = currentBookId
+    val highlights: Flow> = currentBookId
         .flatMapLatest { bookId ->
             selectedChapter.flatMapLatest { chapter ->
                 dao.getHighlights(bookId, chapter).map { highlightList ->
@@ -288,6 +289,7 @@ class HomeViewModel(
         selectedBook.value = bookName
         selectedChapter.value = 1
         selectedVerse.value = null
+        scrollRestoreKey.update { it + 1 }
         saveReadingProgress()
     }
 
@@ -299,3 +301,154 @@ class HomeViewModel(
     }
 
     fun selectVerse(verse: Int?) {
+        selectedVerse.value = verse
+    }
+
+    fun openBook(bookName: String, chapter: Int) {
+        selectedBook.value = bookName
+        selectedChapter.value = chapter
+        selectedVerse.value = null
+        scrollRestoreKey.update { it + 1 }
+        saveReadingProgress()
+    }
+
+    fun selectTab(tab: String) {
+        selectedTab.value = tab
+    }
+
+    fun setSearchQuery(query: String) {
+        searchQuery.value = query
+    }
+
+    fun setSearchFilter(filter: String) {
+        searchFilter.value = filter
+    }
+
+    fun setDarkMode(enabled: Boolean) {
+        viewModelScope.launch {
+            prefs.setDarkMode(enabled)
+        }
+    }
+
+    fun setFontSize(size: Float) {
+        viewModelScope.launch {
+            prefs.setFontSize(size)
+        }
+    }
+
+    fun saveReadingProgress(verse: VerseEntity? = null, scrollIndex: Int = 0, scrollOffset: Int = 0) {
+        viewModelScope.launch {
+            prefs.saveLastReading(
+                bookId = currentBookId.value,
+                chapter = selectedChapter.value,
+                verse = verse?.verse ?: (selectedVerse.value ?: 1),
+                scrollIndex = scrollIndex,
+                scrollOffset = scrollOffset
+            )
+        }
+    }
+
+    private suspend fun restoreSavedReading() {
+        val lastBookId = prefs.getLastBookId()
+        val lastChapter = prefs.getLastChapter()
+        val allBooks = dao.getAllBooksSync()
+        val book = allBooks.firstOrNull { it.id == lastBookId }
+        if (book != null) {
+            selectedBook.value = book.name
+            selectedChapter.value = lastChapter
+        }
+    }
+
+    fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
+        viewModelScope.launch {
+            summaryState.value = dao.getSummary(bookId, chapter)
+        }
+    }
+
+    fun loadSummary() {
+        loadSummary(currentBookId.value, selectedChapter.value)
+    }
+
+    fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
+        viewModelScope.launch {
+            commentaryError.value = false
+            runCatching {
+                val comm = dao.getCommentary(bookId, chapter)
+                commentary.value = comm?.content ?: "<p>No commentary available for this chapter.</p>"
+            }.onFailure {
+                commentaryError.value = true
+                commentary.value = "<p>Failed to load commentary.</p>"
+            }
+        }
+    }
+
+    fun loadCommentary() {
+        loadCommentary(currentBookId.value, selectedChapter.value)
+    }
+
+    private suspend fun loadDailyVerse() {
+        runCatching {
+            val verse = dao.getRandomVerse()
+            dailyVerse.value = verse?.let { "${it.text} — ${it.bookName} ${it.chapter}:${it.verse}" }
+                ?: "Thy word is a lamp unto my feet, and a light unto my path. — Psalm 119:105"
+        }.onFailure {
+            dailyVerse.value = "Thy word is a lamp unto my feet, and a light unto my path. — Psalm 119:105"
+        }
+    }
+
+    fun saveNote(noteText: String) {
+        val verseNum = selectedVerse.value ?: return
+        viewModelScope.launch {
+            dao.insertNote(
+                NoteEntity(
+                    bookId = currentBookId.value,
+                    chapter = selectedChapter.value,
+                    verse = verseNum,
+                    noteText = noteText,
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    fun saveHighlight(color: Color) {
+        val verseNum = selectedVerse.value ?: return
+        viewModelScope.launch {
+            dao.insertHighlight(
+                HighlightEntity(
+                    bookId = currentBookId.value,
+                    chapter = selectedChapter.value,
+                    verse = verseNum,
+                    color = color.toArgb().toString()
+                )
+            )
+        }
+    }
+
+    fun removeHighlight() {
+        val verseNum = selectedVerse.value ?: return
+        viewModelScope.launch {
+            dao.deleteHighlight(currentBookId.value, selectedChapter.value, verseNum)
+        }
+    }
+
+    fun handleGoogleLogin() {
+        viewModelScope.launch {
+            googleAuth.login()
+            // Update prefs or trigger sync
+        }
+    }
+
+    fun handleGoogleLogout() {
+        viewModelScope.launch {
+            googleAuth.logout()
+            prefs.clearUser()
+        }
+    }
+
+    private fun parseHighlightColor(colorStr: String): Color {
+        return runCatching {
+            Color(colorStr.toInt())
+        }.getOrDefault(Color(0xFFFFF176)) // Default soft yellow highlight
+    }
+}
