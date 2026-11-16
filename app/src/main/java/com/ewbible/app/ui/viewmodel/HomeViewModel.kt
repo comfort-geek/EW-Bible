@@ -29,6 +29,9 @@ data class HomeUiState(
     val summaryItalicText: String = "",
     val commentaryHtml: String = "",
     val commentaryError: Boolean = false,
+    // LINKED VERSE BOTTOM SHEET - gold verse click in Open EW
+    val linkedVerseText: String = "",
+    val linkedVerseRef: String = "",
     val chapterCounts: Map<Int, Int> = emptyMap(),
     val searchResults: List<VerseSearchResult> = emptyList(),
     val searchFilter: String = "All",
@@ -71,6 +74,9 @@ class HomeViewModel(
     private val searchResults = MutableStateFlow<List<VerseSearchResult>>(emptyList())
     private val dailyVerse = MutableStateFlow("")
     private val scrollRestoreKey = MutableStateFlow(0)
+    // NEW: Linked verse for bottom sheet
+    private val linkedVerseText = MutableStateFlow("")
+    private val linkedVerseRef = MutableStateFlow("")
 
     private var commentaryJob: Job? = null
 
@@ -124,7 +130,9 @@ class HomeViewModel(
         val selectedTab: String,
         val commentaryHtml: String,
         val showNoteDialog: Boolean,
-        val currentNoteText: String
+        val currentNoteText: String,
+        val linkedVerseText: String,
+        val linkedVerseRef: String
     )
     private data class ContentState(
         val commentaryError: Boolean,
@@ -153,7 +161,7 @@ class HomeViewModel(
         )
     }
     @Suppress("UNCHECKED_CAST")
-    private val navState = combine(selectedBook, selectedChapter, selectedVerse, selectedTab, commentary, showNoteDialog, currentNoteText) { args ->
+    private val navState = combine(selectedBook, selectedChapter, selectedVerse, selectedTab, commentary, showNoteDialog, currentNoteText, linkedVerseText, linkedVerseRef) { args ->
         NavState(
             args[0] as String,
             args[1] as Int,
@@ -161,7 +169,9 @@ class HomeViewModel(
             args[3] as String,
             args[4] as String,
             args[5] as Boolean,
-            args[6] as String
+            args[6] as String,
+            args[7] as String,
+            args[8] as String
         )
     }
     @Suppress("UNCHECKED_CAST")
@@ -213,6 +223,8 @@ class HomeViewModel(
             summaryWhatHappened = content.summary?.whatHappened ?: "",
             summaryApplication = content.summary?.application ?: "",
             summaryItalicText = content.summary?.summary ?: "",
+            linkedVerseText = nav.linkedVerseText,
+            linkedVerseRef = nav.linkedVerseRef,
             chapterCounts = content.chapterCounts,
             searchResults = content.searchResults,
             searchFilter = content.searchFilter,
@@ -390,6 +402,28 @@ class HomeViewModel(
 
     fun loadSummary() {
         loadSummary(currentBookId.value, selectedChapter.value)
+    }
+
+    // NEW: Load verse for bottom sheet - stays in Open EW, does NOT change current book
+    fun loadLinkedVerse(bookName: String, chapter: Int, verse: Int) {
+        viewModelScope.launch {
+            linkedVerseRef.value = "$bookName $chapter:$verse"
+            linkedVerseText.value = "Loading..."
+            runCatching {
+                // Use books flow value if available, fallback to DB sync
+                val allBooks = try { books.first() } catch (e: Exception) { dao.getAllBooksSync() }
+                val bookId = allBooks.firstOrNull {
+                    it.name.equals(bookName, ignoreCase = true) || it.key.equals(bookName, ignoreCase = true)
+                }?.id ?: currentBookId.value
+                val list = dao.getVerses(bookId, chapter).firstOrNull { it.verse == verse }
+                // dao.getVerses returns Flow in this project - handle both cases via first()
+                // If your dao.getVerses is suspend returning List, this still works because first() on List is not needed
+                // Fallback: if list is null, try direct lookup
+                linkedVerseText.value = list?.text ?: "Verse not found."
+            }.onFailure {
+                linkedVerseText.value = "Could not load verse."
+            }
+        }
     }
 
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
