@@ -37,18 +37,6 @@ class SyncManager {
 
     private fun userId(): String? = auth.currentUser?.uid
 
-    private fun notesCollection() = db.collection("users")
-        .document(userId().orEmpty())
-        .collection("notes")
-
-    private fun highlightsCollection() = db.collection("users")
-        .document(userId().orEmpty())
-        .collection("highlights")
-
-    private fun progressCollection() = db.collection("users")
-        .document(userId().orEmpty())
-        .collection("progress")
-
     // --- NOTES ---
 
     suspend fun uploadNote(
