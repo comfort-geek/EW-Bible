@@ -285,11 +285,8 @@ class HomeViewModel(
     }
 
     fun nextChapter() {
-        // FIXED: if chapterCounts not loaded yet, don't block swipe.
-        // Old code used ?: 1, so max was 1 and swipe could never go next.
         val max = chapterCounts.value[currentBookId.value]
         if (max == null) {
-            // Counts not loaded yet - allow going forward, verses will just be empty if past end
             selectChapter(selectedChapter.value + 1)
         } else if (selectedChapter.value < max) {
             selectChapter(selectedChapter.value + 1)
@@ -345,6 +342,20 @@ class HomeViewModel(
         viewModelScope.launch { prefs.setFontSize(size) }
     }
 
+    // FIXED: These were missing - HomeScreen calls them, so it wouldn't compile.
+    // Uses your real AppPreferences.saveUser() / clearUser() - NOT setUserName/setUserEmail.
+    fun onUserSignedIn(name: String, email: String) {
+        viewModelScope.launch {
+            prefs.saveUser(name, email)
+        }
+    }
+
+    fun onUserSignedOut() {
+        viewModelScope.launch {
+            prefs.clearUser()
+        }
+    }
+
     fun saveReadingProgress(verse: VerseEntity? = null, scrollIndex: Int = 0, scrollOffset: Int = 0) {
         viewModelScope.launch {
             prefs.saveLastReading(
@@ -378,7 +389,6 @@ class HomeViewModel(
         loadSummary(currentBookId.value, selectedChapter.value)
     }
 
-    // FIXED: Commentary loader - no more false "Could not load" errors
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
@@ -388,7 +398,6 @@ class HomeViewModel(
                 val html = withContext(Dispatchers.IO) {
                     try {
                         val comm = dao.getCommentary(bookId, chapter)
-                        // getHtml() itself can throw if the stored bytes are bad - catch it here
                         try {
                             comm?.getHtml().orEmpty()
                         } catch (e: Exception) {
@@ -400,7 +409,6 @@ class HomeViewModel(
                         ""
                     }
                 }
-                // Blank = no commentary in DB for this chapter, NOT an error
                 commentary.value = if (html.isBlank()) {
                     "<p>No commentary available for this chapter.</p>"
                 } else {
