@@ -8,7 +8,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
@@ -50,6 +53,11 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var searchQuery by remember { mutableStateOf("") }
     var expandedBook by remember { mutableStateOf<String?>(null) }
     var showHighlightPicker by remember { mutableStateOf(false) }
+    // NEW: Linked verse bottom sheet - stays in Open EW
+    var showLinkedVerseSheet by remember { mutableStateOf(false) }
+    var linkedVerseBook by remember { mutableStateOf("") }
+    var linkedVerseChapter by remember { mutableStateOf(1) }
+    var linkedVerseNum by remember { mutableStateOf(1) }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
@@ -59,9 +67,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val panel = if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9)
     val textColor = if (isDark) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
 
-    // FIXED: DELETED LaunchedEffect loadSummary here.
-    // ViewModel.init already loads summary on book/chapter change.
-    // Having it here too caused double load + flicker.
     LaunchedEffect(state.verses) {
         if (state.verses.isEmpty()) return@LaunchedEffect
         if (hasRestoredScroll) return@LaunchedEffect
@@ -198,7 +203,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     )
                     "Open EW" -> OpenEWContent(
                         commentaryHtml = state.commentaryHtml,
-                        summaryText = state.summaryText, // FIXED: Pass summary for italic display
+                        summaryText = state.summaryText,
                         fontSize = state.fontSize,
                         textColor = textColor,
                         secondaryText = textColor.copy(alpha = 0.6f),
@@ -206,9 +211,12 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         bookName = state.currentBook,
                         chapter = state.selectedChapter,
                         onVerseClick = { book, chapter, verse ->
-                            openBook(book, chapter)
-                            viewModel.selectTab("Bible")
-                            viewModel.selectVerse(verse)
+                            // NEW: Stay in Open EW - open bottom box instead of jumping
+                            linkedVerseBook = book
+                            linkedVerseChapter = chapter
+                            linkedVerseNum = verse
+                            viewModel.loadLinkedVerse(book, chapter, verse)
+                            showLinkedVerseSheet = true
                         },
                         onNextChapter = { viewModel.nextChapter() },
                         onPreviousChapter = { viewModel.previousChapter() }
@@ -242,6 +250,76 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     TextButton(onClick = { showHighlightPicker = true }) { Text("Highlight", color = gold) }
                     TextButton(onClick = { viewModel.showNoteDialog() }) { Text("Note", color = gold) }
                     TextButton(onClick = { viewModel.clearSelection() }) { Text("Done", color = textColor) }
+                }
+            }
+        }
+    }
+
+    // NEW: Linked Verse Bottom Sheet - scrollable, with X
+    if (showLinkedVerseSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showLinkedVerseSheet = false },
+            containerColor = background,
+            contentColor = textColor
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(bottom = 24.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = state.linkedVerseRef.ifBlank { "$linkedVerseBook $linkedVerseChapter:$linkedVerseNum" },
+                        color = gold,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                    IconButton(onClick = { showLinkedVerseSheet = false }) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor)
+                    }
+                }
+                // Scrollable verse text
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 300.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = 8.dp)
+                ) {
+                    Text(
+                        text = state.linkedVerseText.ifBlank { "Loading..." },
+                        color = textColor,
+                        fontSize = state.fontSize.sp,
+                        lineHeight = (state.fontSize + 8).sp
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            showLinkedVerseSheet = false
+                            openBook(linkedVerseBook, linkedVerseChapter)
+                            viewModel.selectTab("Bible")
+                            viewModel.selectVerse(linkedVerseNum)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = gold),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Open in Bible", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = { showLinkedVerseSheet = false },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Close", color = textColor)
+                    }
                 }
             }
         }
