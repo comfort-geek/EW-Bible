@@ -382,15 +382,20 @@ class HomeViewModel(
     fun saveNote(noteText: String) {
         val verseNum = selectedVerse.value ?: return
         viewModelScope.launch {
-            dao.saveNote(
-                NoteEntity(
-                    bookId = currentBookId.value,
-                    chapter = selectedChapter.value,
-                    verse = verseNum,
-                    noteText = noteText,
-                    timestamp = System.currentTimeMillis()
+            val existing = dao.getNoteAtVerse(currentBookId.value, selectedChapter.value, verseNum)
+            if (existing != null) {
+                dao.updateNote(existing.copy(noteText = noteText, timestamp = System.currentTimeMillis()))
+            } else {
+                dao.saveNote(
+                    NoteEntity(
+                        bookId = currentBookId.value,
+                        chapter = selectedChapter.value,
+                        verse = verseNum,
+                        noteText = noteText,
+                        timestamp = System.currentTimeMillis()
+                    )
                 )
-            )
+            }
             currentNoteText.value = noteText
         }
     }
