@@ -374,7 +374,7 @@ class HomeViewModel(
             commentaryError.value = false
             runCatching {
                 val comm = dao.getCommentary(bookId, chapter)
-                commentary.value = comm?.content ?: "<p>No commentary available for this chapter.</p>"
+                commentary.value = comm?.getHtml() ?: "<p>No commentary available for this chapter.</p>"
             }.onFailure {
                 commentaryError.value = true
                 commentary.value = "<p>Failed to load commentary.</p>"
@@ -399,7 +399,7 @@ class HomeViewModel(
     fun saveNote(noteText: String) {
         val verseNum = selectedVerse.value ?: return
         viewModelScope.launch {
-            dao.insertNote(
+            dao.saveNote(
                 NoteEntity(
                     bookId = currentBookId.value,
                     chapter = selectedChapter.value,
@@ -414,7 +414,7 @@ class HomeViewModel(
     fun saveHighlight(color: Color) {
         val verseNum = selectedVerse.value ?: return
         viewModelScope.launch {
-            dao.insertHighlight(
+            dao.saveHighlight(
                 HighlightEntity(
                     bookId = currentBookId.value,
                     chapter = selectedChapter.value,
@@ -435,7 +435,6 @@ class HomeViewModel(
     fun handleGoogleLogin() {
         viewModelScope.launch {
             googleAuth.login()
-            // Update prefs or trigger sync
         }
     }
 
@@ -449,6 +448,6 @@ class HomeViewModel(
     private fun parseHighlightColor(colorStr: String): Color {
         return runCatching {
             Color(colorStr.toInt())
-        }.getOrDefault(Color(0xFFFFF176)) // Default soft yellow highlight
+        }.getOrDefault(Color(0xFFFFF176))
     }
 }
