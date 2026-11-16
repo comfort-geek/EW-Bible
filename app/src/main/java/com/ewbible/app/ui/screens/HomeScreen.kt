@@ -1,6 +1,7 @@
 package com.ewbible.app.ui.screens
 
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -14,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -74,6 +76,22 @@ fun HomeScreen(viewModel: HomeViewModel) {
         }
     }
 
+    // SWIPE LOGIC - swipe left = next, swipe right = previous
+    var totalDrag by remember { mutableStateOf(0f) }
+    val swipeModifier = Modifier.pointerInput(state.currentBook, state.selectedChapter) {
+        detectHorizontalDragGestures(
+            onDragStart = { totalDrag = 0f },
+            onHorizontalDrag = { _, dragAmount -> totalDrag += dragAmount },
+            onDragEnd = {
+                when {
+                    totalDrag < -120 -> viewModel.nextChapter() // swipe left
+                    totalDrag > 120 -> viewModel.previousChapter() // swipe right
+                }
+                totalDrag = 0f
+            }
+        )
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -127,34 +145,24 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
             }
 
+            // HEADER - Title only, NO BUTTONS ANYMORE
             if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "${state.currentBook} ${state.selectedChapter}",
-                        color = textColor,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    )
-                    Row {
-                        Button(
-                            onClick = { viewModel.previousChapter() },
-                            enabled = state.selectedChapter > 1,
-                            colors = ButtonDefaults.buttonColors(containerColor = panel)
-                        ) { Text("<", color = textColor) }
-                        Spacer(Modifier.width(8.dp))
-                        Button(
-                            onClick = { viewModel.nextChapter() },
-                            colors = ButtonDefaults.buttonColors(containerColor = panel)
-                        ) { Text(">", color = textColor) }
-                    }
-                }
+                Text(
+                    text = "${state.currentBook} ${state.selectedChapter}",
+                    color = textColor,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
             }
 
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            // CONTENT - with swipe
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .then(if (state.selectedTab == "Search") Modifier else swipeModifier)
+            ) {
                 when (state.selectedTab) {
                     "Bible" -> BibleContent(
                         selectedBook = state.currentBook,
