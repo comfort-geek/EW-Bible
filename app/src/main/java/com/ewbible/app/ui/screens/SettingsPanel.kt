@@ -4,20 +4,26 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 
 @Composable
 fun SettingsPanel(
@@ -45,17 +51,16 @@ fun SettingsPanel(
         enter = slideInHorizontally(initialOffsetX = { -it }),
         exit = slideOutHorizontally(targetOffsetX = { -it })
     ) {
-        // Scrim + panel: panel is left side, top to bottom
         Box(modifier = Modifier.fillMaxSize()) {
-            // Tap outside to close
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.4f))
-            ) {
-                // Empty - click handled by panel below via Box clickable
-            }
-            // LEFT PANEL - top to bottom
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onClose() }
+            )
             Column(
                 modifier = Modifier
                     .fillMaxHeight()
@@ -64,61 +69,13 @@ fun SettingsPanel(
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp)
             ) {
-                // TOP ROW: Title + X to close
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Settings", color = textColor, fontWeight = FontWeight.Bold, fontSize = 22.sp)
                     IconButton(onClick = onClose) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // --- ACCOUNT SECTION ---
-                Text("Account", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-
-                if (!isLoggedIn) {
-                    Text(
-                        "Sign in to sync your notes and highlights across devices.",
-                        color = textColor.copy(alpha = 0.7f),
-                        fontSize = 14.sp
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Button(
-                        onClick = onGoogleSignIn,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = panel)
-                    ) {
-                        Text("Login with Google", color = textColor, fontSize = 15.sp)
-                    }
-                } else {
-                    // Show name + email
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.AccountCircle, contentDescription = null, tint = gold, modifier = Modifier.size(48.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(userName, color = textColor, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            Text(userEmail, color = textColor.copy(alpha = 0.7f), fontSize = 13.sp)
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Syncing notes & highlights to $userEmail",
-                        color = gold,
-                        fontSize = 12.sp
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = onSignOut,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = textColor)
-                    ) {
-                        Text("Sign Out", color = textColor, fontSize = 15.sp)
+                        Icon(Icons.Default.Close, contentDescription = null, tint = textColor)
                     }
                 }
 
@@ -126,24 +83,42 @@ fun SettingsPanel(
                 HorizontalDivider(color = textColor.copy(alpha = 0.15f))
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // --- READING ---
-                Text("Reading", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                Spacer(modifier = Modifier.height(12.dp))
+                if (!isLoggedIn) {
+                    Button(
+                        onClick = onGoogleSignIn,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = panel)
+                    ) {
+                        Icon(Icons.Default.AccountCircle, contentDescription = null, tint = textColor)
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.AccountCircle, contentDescription = null, tint = gold, modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        IconButton(onClick = onSignOut) {
+                            Icon(Icons.Default.ExitToApp, contentDescription = null, tint = textColor)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+                HorizontalDivider(color = textColor.copy(alpha = 0.15f))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("A-", color = textColor, fontSize = 13.sp)
+                    Icon(Icons.Default.FormatSize, contentDescription = null, tint = textColor)
                     Slider(
                         value = fontSize,
                         onValueChange = onFontSizeChange,
                         valueRange = 12f..28f,
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                     )
-                    Text("A+", color = textColor, fontSize = 13.sp)
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Dark Mode", color = textColor, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                    Icon(Icons.Default.DarkMode, contentDescription = null, tint = textColor, modifier = Modifier.weight(1f))
                     Switch(checked = darkMode, onCheckedChange = onDarkModeChange)
                 }
 
@@ -155,7 +130,9 @@ fun SettingsPanel(
                     onClick = onDailyVerse,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = panel)
-                ) { Text("Daily Verse", color = textColor, fontSize = 14.sp) }
+                ) {
+                    Icon(Icons.Default.Book, contentDescription = null, tint = textColor)
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -163,7 +140,9 @@ fun SettingsPanel(
                     onClick = onShowNotes,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = panel)
-                ) { Text("Notes ($notesCount)", color = textColor, fontSize = 14.sp) }
+                ) {
+                    Icon(Icons.Default.EditNote, contentDescription = null, tint = textColor)
+                }
             }
         }
     }
