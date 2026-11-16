@@ -54,9 +54,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     LaunchedEffect(state.currentBookId, state.selectedChapter, state.selectedTab) {
         if (state.selectedTab == "Open EW") viewModel.loadCommentary()
     }
-    // FIXED: Restore scroll ONLY once on first launch.
-    // Do NOT listen to scrollRestoreKey - otherwise openBook()
-    // scrolling to top gets overridden by old saved position.
     LaunchedEffect(state.verses) {
         if (state.verses.isEmpty()) return@LaunchedEffect
         if (hasRestoredScroll) return@LaunchedEffect
@@ -263,7 +260,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
             gold = gold,
             textColor = textColor,
             background = background,
-            fontSize = state.fontSize,
             onDismiss = { dailyVerseDialog = false }
         )
     }
