@@ -1,453 +1,327 @@
-package com.ewbible.app.ui.screens
 
-import android.app.Application
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
-import com.ewbible.app.data.auth.GoogleAuth
-import com.ewbible.app.data.database.*
-import com.ewbible.app.data.preferences.AppPreferences
-import com.ewbible.app.data.sync.SyncManager
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
-import java.util.Calendar
+package com.ewbible.app.data.auth
 
-data class HomeUiState(
-    val books: List<BookEntity> = emptyList(),
-    val verses: List<VerseEntity> = emptyList(),
-    val highlights: Map<Int, Color> = emptyMap(),
-    val notes: List<NoteEntity> = emptyList(),
-    val summary: SummaryEntity? = null,
-    val commentaryHtml: String = "",
-    val commentaryError: Boolean = false,
-    val chapterCounts: Map<Int, Int> = emptyMap(),
-    val searchResults: List<VerseSearchResult> = emptyList(),
-    val dailyVerse: String = "",
-    val currentBookId: Int = 1,
-    val selectedBook: String = "",
-    val selectedChapter: Int = 1,
-    val selectedVerse: Int? = null,
-    val selectedTab: String = "Bible",
-    val darkMode: Boolean? = null,
-    val fontSize: Float = 16f,
-    val isLoggedIn: Boolean = false,
-    val userName: String = "Guest",
-    val userEmail: String = "",
-    val scrollRestoreKey: Int = 0
+import android.content.Context
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.GoogleAuthProvider
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.tasks.await
+
+class GoogleAuth(private val context: Context) {
+
+    private val auth = FirebaseAuth.getInstance()
+    private val credentialManager = CredentialManager.create(context)
+
+    private val WEB_CLIENT_ID =
+        "449427316381-tqtci4os3eqilpvj8ubmvm72ocjp2ff4.apps.googleusercontent.com"
+
+    val authState: Flow<FirebaseUser?> = callbackFlow {
+        val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+            trySend(firebaseAuth.currentUser)
+        }
+
+        auth.addAuthStateListener(listener)
+
+        awaitClose {
+            auth.removeAuthStateListener(listener)
+        }
+    }
+
+    fun currentUser(): FirebaseUser? = auth.currentUser
+
+    fun isLoggedIn(): Boolean = auth.currentUser != null
+
+    suspend fun signInWithGoogle(): Result<String> {
+        return try {
+            val googleIdOption = GetGoogleIdOption.Builder()
+                .setFilterByAuthorizedAccounts(false)
+                .setServerClientId(WEB_CLIENT_ID)
+                .build()
+
+            val request = GetCredentialRequest.Builder()
+                .addCredentialOption(googleIdOption)
+                .build()
+
+            val result = credentialManager.getCredential(
+                context,
+                request
+            )
+
+            val credential = result.credential
+
+            if (credential is CustomCredential &&
+                credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+            ) {
+                val googleCredential =
+                    GoogleIdTokenCredential.createFrom(credential.data)
+
+                val firebaseCredential = GoogleAuthProvider.getCredential(
+                    googleCredential.idToken,
+                    null
+                )
+
+                val authResult = auth
+                    .signInWithCredential(firebaseCredential)
+                    .await()
+
+                val user = authResult.user
+
+                val name = user?.displayName ?: "User"
+                val email = user?.email ?: ""
+
+                Result.success("$name|$email")
+            } else {
+                Result.failure(
+                    IllegalStateException("Unexpected credential type")
+                )
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun signOut() {
+        auth.signOut()
+    }
+}
+
+package com.ewbible.app.data.sync
+
+import android.util.Log
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.tasks.await
+
+data class CloudNote(
+    val bookId: Int = 0,
+    val chapter: Int = 0,
+    val verse: Int = 0,
+    val noteText: String = "",
+    val timestamp: Long = 0
 )
 
-@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
-class HomeViewModel(
-    application: Application
-) : AndroidViewModel(application) {
+data class CloudHighlight(
+    val bookId: Int = 0,
+    val chapter: Int = 0,
+    val verse: Int = 0,
+    val color: String = ""
+)
 
-    private val context = application.applicationContext
-    private val db = AppDatabase.getInstance(context)
-    private val prefs = AppPreferences(context)
-    private val googleAuth = GoogleAuth(context)
-    private val syncManager = SyncManager()
-    private val dao = db.bibleDao()
+data class CloudProgress(
+    val mode: String = "World English Bible",
+    val book: String = "Genesis",
+    val chapter: Int = 1,
+    val verse: Int = 1,
+    val scrollIndex: Int = 0,
+    val scrollOffset: Int = 0,
+    val updatedAt: Long = 0
+)
 
-    private val selectedBook = MutableStateFlow("")
-    private val selectedChapter = MutableStateFlow(1)
-    private val selectedVerse = MutableStateFlow<Int?>(null)
-    private val selectedTab = MutableStateFlow("Bible")
-    private val searchQuery = MutableStateFlow("")
-    private val searchFilter = MutableStateFlow("All")
+class SyncManager {
 
-    private val commentary = MutableStateFlow("")
-    private val commentaryError = MutableStateFlow(false)
-    private val summaryState = MutableStateFlow<SummaryEntity?>(null)
-    private val chapterCounts = MutableStateFlow>(emptyMap())
-    private val searchResults = MutableStateFlow<List<VerseSearchResult>>(emptyList())
-    private val dailyVerse = MutableStateFlow("")
-    private val scrollRestoreKey = MutableStateFlow(0)
+    private val auth = FirebaseAuth.getInstance()
+    private val db = FirebaseFirestore.getInstance()
 
-    val books: Flow<List<BookEntity>> = dao.getAllBooks()
+    private fun userId(): String? = auth.currentUser?.uid
 
-    val currentBookId: StateFlow<Int> = combine(
-        books,
-        selectedBook
-    ) { bookList, bookName ->
-        bookList.firstOrNull {
-            it.name.equals(bookName, ignoreCase = true) ||
-                    it.key.equals(bookName, ignoreCase = true)
-        }?.id
-            ?: bookList.firstOrNull()?.id
-            ?: 1
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.Eagerly,
-        initialValue = 1
-    )
+    private fun notesCollection() = db.collection("users")
+        .document(userId().orEmpty())
+        .collection("notes")
 
-    val verses: Flow<List<VerseEntity>> = currentBookId
-        .flatMapLatest { bookId ->
-            selectedChapter.flatMapLatest { chapter ->
-                dao.getVerses(bookId, chapter)
-            }
-        }
+    private fun highlightsCollection() = db.collection("users")
+        .document(userId().orEmpty())
+        .collection("highlights")
 
-    val highlights: Flow> = currentBookId
-        .flatMapLatest { bookId ->
-            selectedChapter.flatMapLatest { chapter ->
-                dao.getHighlights(bookId, chapter).map { highlightList ->
-                    highlightList.associate { highlight ->
-                        highlight.verse to parseHighlightColor(highlight.color)
-                    }
-                }
-            }
-        }
+    private fun progressCollection() = db.collection("users")
+        .document(userId().orEmpty())
+        .collection("progress")
 
-    val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
+    // --- NOTES ---
 
-    private data class ReadingState(
-        val books: List<BookEntity>,
-        val verses: List<VerseEntity>,
-        val highlights: Map<Int, Color>,
-        val notes: List<NoteEntity>,
-        val currentBookId: Int
-    )
+    suspend fun uploadNote(
+        bookId: Int,
+        chapter: Int,
+        verse: Int,
+        text: String
+    ) {
+        try {
+            val uid = userId() ?: return
 
-    private data class NavigationState(
-        val selectedBook: String,
-        val selectedChapter: Int,
-        val selectedVerse: Int?,
-        val selectedTab: String,
-        val commentaryHtml: String
-    )
+            val note = CloudNote(
+                bookId = bookId,
+                chapter = chapter,
+                verse = verse,
+                noteText = text,
+                timestamp = System.currentTimeMillis()
+            )
 
-    private data class ContentState(
-        val commentaryError: Boolean,
-        val summary: SummaryEntity?,
-        val chapterCounts: Map<Int, Int>,
-        val searchResults: List<VerseSearchResult>,
-        val dailyVerse: String
-    )
-
-    private data class UserSettingsState(
-        val darkMode: Boolean?,
-        val fontSize: Float,
-        val userName: String,
-        val userEmail: String,
-        val isLoggedIn: Boolean
-    )
-
-    private val readingState = combine(
-        books,
-        verses,
-        highlights,
-        notes,
-        currentBookId
-    ) { books, verses, highlights, notes, currentBookId ->
-        ReadingState(
-            books = books,
-            verses = verses,
-            highlights = highlights,
-            notes = notes,
-            currentBookId = currentBookId
-        )
-    }
-
-    private val navigationState = combine(
-        selectedBook,
-        selectedChapter,
-        selectedVerse,
-        selectedTab,
-        commentary
-    ) { selectedBook, selectedChapter, selectedVerse, selectedTab, commentaryHtml ->
-        NavigationState(
-            selectedBook = selectedBook,
-            selectedChapter = selectedChapter,
-            selectedVerse = selectedVerse,
-            selectedTab = selectedTab,
-            commentaryHtml = commentaryHtml
-        )
-    }
-
-    private val contentState = combine(
-        commentaryError,
-        summaryState,
-        chapterCounts,
-        searchResults,
-        dailyVerse
-    ) { commentaryError, summary, chapterCounts, searchResults, dailyVerse ->
-        ContentState(
-            commentaryError = commentaryError,
-            summary = summary,
-            chapterCounts = chapterCounts,
-            searchResults = searchResults,
-            dailyVerse = dailyVerse
-        )
-    }
-
-    private val userSettingsState = combine(
-        prefs.isDarkMode,
-        prefs.fontSize,
-        prefs.userName,
-        prefs.userEmail
-    ) { darkMode, fontSize, userName, userEmail ->
-        UserSettingsState(
-            darkMode = darkMode,
-            fontSize = fontSize,
-            userName = userName,
-            userEmail = userEmail,
-            isLoggedIn = googleAuth.isLoggedIn() &&
-                    userName != "Guest" &&
-                    userEmail.isNotBlank()
-        )
-    }
-
-    val uiState: StateFlow<HomeUiState> = combine(
-        readingState,
-        navigationState,
-        contentState,
-        userSettingsState,
-        scrollRestoreKey
-    ) { reading, navigation, content, settings, restoreKey ->
-        HomeUiState(
-            books = reading.books,
-            verses = reading.verses,
-            highlights = reading.highlights,
-            notes = reading.notes,
-            currentBookId = reading.currentBookId,
-            selectedBook = navigation.selectedBook,
-            selectedChapter = navigation.selectedChapter,
-            selectedVerse = navigation.selectedVerse,
-            selectedTab = navigation.selectedTab,
-            commentaryHtml = navigation.commentaryHtml,
-            commentaryError = content.commentaryError,
-            summary = content.summary,
-            chapterCounts = content.chapterCounts,
-            searchResults = content.searchResults,
-            dailyVerse = content.dailyVerse,
-            darkMode = settings.darkMode,
-            fontSize = settings.fontSize,
-            isLoggedIn = settings.isLoggedIn,
-            userName = settings.userName,
-            userEmail = settings.userEmail,
-            scrollRestoreKey = restoreKey
-        )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = HomeUiState()
-    )
-
-    init {
-        viewModelScope.launch {
-            restoreSavedReading()
-            books.collect { bookList ->
-                if (bookList.isNotEmpty() && selectedBook.value.isBlank()) {
-                    selectedBook.value = bookList.first().name
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            chapterCounts.value = dao.getChapterCounts().associate { it.bookId to it.chapterCount }
-        }
-
-        viewModelScope.launch {
-            combine(currentBookId, selectedChapter) { bookId, chapter ->
-                bookId to chapter
-            }.collectLatest { (bookId, chapter) ->
-                loadSummary(bookId, chapter)
-                loadCommentary(bookId, chapter)
-            }
-        }
-
-        viewModelScope.launch {
-            combine(
-                searchQuery.debounce(300L).distinctUntilChanged(),
-                searchFilter
-            ) { query, filter ->
-                query to filter
-            }.collectLatest { (query, filter) ->
-                if (query.isBlank()) {
-                    searchResults.value = emptyList()
-                } else {
-                    val rawResults = dao.searchVerses(query)
-                    searchResults.value = when (filter) {
-                        "OT" -> rawResults.filter { it.bookId <= 39 }
-                        "NT" -> rawResults.filter { it.bookId >= 40 }
-                        else -> rawResults
-                    }
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            loadDailyVerse()
+            db.collection("users")
+                .document(uid)
+                .collection("notes")
+                .document("${bookId}_${chapter}_${verse}")
+                .set(note)
+                .await()
+        } catch (e: Exception) {
+            Log.e("SyncManager", "uploadNote failed", e)
         }
     }
 
-    fun selectBook(bookName: String) {
-        selectedBook.value = bookName
-        selectedChapter.value = 1
-        selectedVerse.value = null
-        scrollRestoreKey.update { it + 1 }
-        saveReadingProgress()
-    }
+    suspend fun getNotes(): List<CloudNote> {
+        return try {
+            val uid = userId() ?: return emptyList()
 
-    fun selectChapter(chapter: Int) {
-        selectedChapter.value = chapter
-        selectedVerse.value = null
-        scrollRestoreKey.update { it + 1 }
-        saveReadingProgress()
-    }
-
-    fun selectVerse(verse: Int?) {
-        selectedVerse.value = verse
-    }
-
-    fun openBook(bookName: String, chapter: Int) {
-        selectedBook.value = bookName
-        selectedChapter.value = chapter
-        selectedVerse.value = null
-        scrollRestoreKey.update { it + 1 }
-        saveReadingProgress()
-    }
-
-    fun selectTab(tab: String) {
-        selectedTab.value = tab
-    }
-
-    fun setSearchQuery(query: String) {
-        searchQuery.value = query
-    }
-
-    fun setSearchFilter(filter: String) {
-        searchFilter.value = filter
-    }
-
-    fun setDarkMode(enabled: Boolean) {
-        viewModelScope.launch {
-            prefs.setDarkMode(enabled)
+            db.collection("users")
+                .document(uid)
+                .collection("notes")
+                .get()
+                .await()
+                .toObjects(CloudNote::class.java)
+        } catch (e: Exception) {
+            Log.e("SyncManager", "getNotes failed", e)
+            emptyList()
         }
     }
 
-    fun setFontSize(size: Float) {
-        viewModelScope.launch {
-            prefs.setFontSize(size)
+    suspend fun deleteNote(
+        bookId: Int,
+        chapter: Int,
+        verse: Int
+    ) {
+        try {
+            val uid = userId() ?: return
+
+            db.collection("users")
+                .document(uid)
+                .collection("notes")
+                .document("${bookId}_${chapter}_${verse}")
+                .delete()
+                .await()
+        } catch (e: Exception) {
+            Log.e("SyncManager", "deleteNote failed", e)
         }
     }
 
-    fun saveReadingProgress(verse: VerseEntity? = null, scrollIndex: Int = 0, scrollOffset: Int = 0) {
-        viewModelScope.launch {
-            prefs.saveLastReading(
-                bookId = currentBookId.value,
-                chapter = selectedChapter.value,
-                verse = verse?.verse ?: (selectedVerse.value ?: 1),
+    // --- HIGHLIGHTS ---
+
+    suspend fun uploadHighlight(
+        bookId: Int,
+        chapter: Int,
+        verse: Int,
+        color: String
+    ) {
+        try {
+            val uid = userId() ?: return
+
+            val highlight = CloudHighlight(
+                bookId = bookId,
+                chapter = chapter,
+                verse = verse,
+                color = color
+            )
+
+            db.collection("users")
+                .document(uid)
+                .collection("highlights")
+                .document("${bookId}_${chapter}_${verse}")
+                .set(highlight)
+                .await()
+        } catch (e: Exception) {
+            Log.e("SyncManager", "uploadHighlight failed", e)
+        }
+    }
+
+    suspend fun getHighlights(): List<CloudHighlight> {
+        return try {
+            val uid = userId() ?: return emptyList()
+
+            db.collection("users")
+                .document(uid)
+                .collection("highlights")
+                .get()
+                .await()
+                .toObjects(CloudHighlight::class.java)
+        } catch (e: Exception) {
+            Log.e("SyncManager", "getHighlights failed", e)
+            emptyList()
+        }
+    }
+
+    suspend fun deleteHighlight(
+        bookId: Int,
+        chapter: Int,
+        verse: Int
+    ) {
+        try {
+            val uid = userId() ?: return
+
+            db.collection("users")
+                .document(uid)
+                .collection("highlights")
+                .document("${bookId}_${chapter}_${verse}")
+                .delete()
+                .await()
+        } catch (e: Exception) {
+            Log.e("SyncManager", "deleteHighlight failed", e)
+        }
+    }
+
+    // --- READING PROGRESS ---
+
+    suspend fun uploadProgress(
+        mode: String,
+        book: String,
+        chapter: Int,
+        verse: Int,
+        scrollIndex: Int,
+        scrollOffset: Int
+    ) {
+        try {
+            val uid = userId() ?: return
+
+            val progress = CloudProgress(
+                mode = mode,
+                book = book,
+                chapter = chapter,
+                verse = verse,
                 scrollIndex = scrollIndex,
-                scrollOffset = scrollOffset
+                scrollOffset = scrollOffset,
+                updatedAt = System.currentTimeMillis()
             )
+
+            db.collection("users")
+                .document(uid)
+                .collection("progress")
+                .document("lastReading")
+                .set(progress)
+                .await()
+        } catch (e: Exception) {
+            Log.e("SyncManager", "uploadProgress failed", e)
         }
     }
 
-    private suspend fun restoreSavedReading() {
-        val lastBookId = prefs.getLastBookId()
-        val lastChapter = prefs.getLastChapter()
-        val allBooks = dao.getAllBooksSync()
-        val book = allBooks.firstOrNull { it.id == lastBookId }
-        if (book != null) {
-            selectedBook.value = book.name
-            selectedChapter.value = lastChapter
+    suspend fun getProgress(): CloudProgress? {
+        return try {
+            val uid = userId() ?: return null
+
+            db.collection("users")
+                .document(uid)
+                .collection("progress")
+                .document("lastReading")
+                .get()
+                .await()
+                .toObject(CloudProgress::class.java)
+        } catch (e: Exception) {
+            Log.e("SyncManager", "getProgress failed", e)
+            null
         }
-    }
-
-    fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
-        viewModelScope.launch {
-            summaryState.value = dao.getSummary(bookId, chapter)
-        }
-    }
-
-    fun loadSummary() {
-        loadSummary(currentBookId.value, selectedChapter.value)
-    }
-
-    fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
-        viewModelScope.launch {
-            commentaryError.value = false
-            runCatching {
-                val comm = dao.getCommentary(bookId, chapter)
-                commentary.value = comm?.getHtml() ?: "<p>No commentary available for this chapter.</p>"
-            }.onFailure {
-                commentaryError.value = true
-                commentary.value = "<p>Failed to load commentary.</p>"
-            }
-        }
-    }
-
-    fun loadCommentary() {
-        loadCommentary(currentBookId.value, selectedChapter.value)
-    }
-
-    private suspend fun loadDailyVerse() {
-        runCatching {
-            val verse = dao.getRandomVerse()
-            dailyVerse.value = verse?.let { "${it.text} — ${it.bookName} ${it.chapter}:${it.verse}" }
-                ?: "Thy word is a lamp unto my feet, and a light unto my path. — Psalm 119:105"
-        }.onFailure {
-            dailyVerse.value = "Thy word is a lamp unto my feet, and a light unto my path. — Psalm 119:105"
-        }
-    }
-
-    fun saveNote(noteText: String) {
-        val verseNum = selectedVerse.value ?: return
-        viewModelScope.launch {
-            dao.saveNote(
-                NoteEntity(
-                    bookId = currentBookId.value,
-                    chapter = selectedChapter.value,
-                    verse = verseNum,
-                    noteText = noteText,
-                    timestamp = System.currentTimeMillis()
-                )
-            )
-        }
-    }
-
-    fun saveHighlight(color: Color) {
-        val verseNum = selectedVerse.value ?: return
-        viewModelScope.launch {
-            dao.saveHighlight(
-                HighlightEntity(
-                    bookId = currentBookId.value,
-                    chapter = selectedChapter.value,
-                    verse = verseNum,
-                    color = color.toArgb().toString()
-                )
-            )
-        }
-    }
-
-    fun removeHighlight() {
-        val verseNum = selectedVerse.value ?: return
-        viewModelScope.launch {
-            dao.deleteHighlight(currentBookId.value, selectedChapter.value, verseNum)
-        }
-    }
-
-    fun handleGoogleLogin() {
-        viewModelScope.launch {
-            googleAuth.login()
-        }
-    }
-
-    fun handleGoogleLogout() {
-        viewModelScope.launch {
-            googleAuth.logout()
-            prefs.clearUser()
-        }
-    }
-
-    private fun parseHighlightColor(colorStr: String): Color {
-        return runCatching {
-            Color(colorStr.toInt())
-        }.getOrDefault(Color(0xFFFFF176))
     }
 }
