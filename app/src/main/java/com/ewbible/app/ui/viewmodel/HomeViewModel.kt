@@ -136,22 +136,60 @@ class HomeViewModel(
         val userEmail: String
     )
 
-    private val readingState = combine(books, verses, highlights, notes, currentBookId) { b, v, h, n, id ->
-        ReadingState(b, v, h, n, id)
+    // FIXED: Use array form combine(...) { args -> } - the 5/7-arg lambda form
+    // does not resolve on this Kotlin version, it picks the vararg overload.
+    @Suppress("UNCHECKED_CAST")
+    private val readingState = combine(books, verses, highlights, notes, currentBookId) { args ->
+        ReadingState(
+            args[0] as List<BookEntity>,
+            args[1] as List<VerseEntity>,
+            args[2] as Map<Int, Color>,
+            args[3] as List<NoteEntity>,
+            args[4] as Int
+        )
     }
-    private val navState = combine(selectedBook, selectedChapter, selectedVerse, selectedTab, commentary, showNoteDialog, currentNoteText) { b, c, v, t, comm, show, note ->
-        NavState(b, c, v, t, comm, show, note)
+    @Suppress("UNCHECKED_CAST")
+    private val navState = combine(selectedBook, selectedChapter, selectedVerse, selectedTab, commentary, showNoteDialog, currentNoteText) { args ->
+        NavState(
+            args[0] as String,
+            args[1] as Int,
+            args[2] as Int?,
+            args[3] as String,
+            args[4] as String,
+            args[5] as Boolean,
+            args[6] as String
+        )
     }
-    private val contentState = combine(commentaryError, summaryState, chapterCounts, searchResults, searchFilter, dailyVerse, scrollRestoreKey) { err, sum, counts, search, filter, daily, key ->
-        ContentState(err, sum, counts, search, filter, daily, key)
+    @Suppress("UNCHECKED_CAST")
+    private val contentState = combine(commentaryError, summaryState, chapterCounts, searchResults, searchFilter, dailyVerse, scrollRestoreKey) { args ->
+        ContentState(
+            args[0] as Boolean,
+            args[1] as SummaryEntity?,
+            args[2] as Map<Int, Int>,
+            args[3] as List<VerseSearchResult>,
+            args[4] as String,
+            args[5] as String,
+            args[6] as Int
+        )
     }
-    private val settingsState = combine(prefs.isDarkMode, prefs.fontSize, prefs.userName, prefs.userEmail) { dark, font, name, email ->
-        SettingsState(dark, font, name, email)
+    @Suppress("UNCHECKED_CAST")
+    private val settingsState = combine(prefs.isDarkMode, prefs.fontSize, prefs.userName, prefs.userEmail) { args ->
+        SettingsState(
+            args[0] as Boolean?,
+            args[1] as Float,
+            args[2] as String,
+            args[3] as String
+        )
     }
 
+    @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<HomeUiState> = combine(
         readingState, navState, contentState, settingsState
-    ) { reading, nav, content, settings ->
+    ) { args ->
+        val reading = args[0] as ReadingState
+        val nav = args[1] as NavState
+        val content = args[2] as ContentState
+        val settings = args[3] as SettingsState
         HomeUiState(
             books = reading.books,
             verses = reading.verses,
