@@ -14,13 +14,25 @@ fun DailyVerseDialog(
     dailyVerseText: String,
     gold: Color,
     textColor: Color,
+    background: Color,
     fontSize: Float,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = background,
         title = { Text("Daily Verse", color = gold, fontWeight = FontWeight.Bold) },
-        text = { Text(dailyVerseText, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 8).sp, textAlign = TextAlign.Center) },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        text = {
+            Text(
+                dailyVerseText,
+                color = textColor,
+                fontSize = fontSize.sp,
+                lineHeight = (fontSize + 8).sp,
+                textAlign = TextAlign.Center
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close", color = gold) }
+        },
     )
 }
