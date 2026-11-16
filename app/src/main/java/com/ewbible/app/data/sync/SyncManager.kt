@@ -3,6 +3,7 @@ package com.ewbible.app.data.sync
 import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.tasks.await
 
 data class CloudNote(
@@ -37,17 +38,27 @@ class SyncManager {
 
     private fun userId(): String? = auth.currentUser?.uid
 
+    // FIX 1: Single source for paths - your old code repeated
+    // "users/{uid}/notes" etc 9 times. One typo = silent bug.
+    private fun notesRef(uid: String) = db.collection("users").document(uid).collection("notes")
+    private fun highlightsRef(uid: String) = db.collection("users").document(uid).collection("highlights")
+    private fun progressRef(uid: String) = db.collection("users").document(uid).collection("progress")
+
+    private fun docId(bookId: Int, chapter: Int, verse: Int) = "${bookId}_${chapter}_${verse}"
+
     // --- NOTES ---
 
+    // FIX 2: Return Result<Boolean> instead of swallowing errors
+    // Old code: catch -> Log.e -> return nothing. Caller had NO idea sync failed.
+    // Now caller can do: uploadNote(...).onFailure { showToast("Sync failed, will retry") }
     suspend fun uploadNote(
         bookId: Int,
         chapter: Int,
         verse: Int,
         text: String
-    ) {
-        try {
-            val uid = userId() ?: return
-
+    ): Result<Unit> {
+        val uid = userId() ?: return Result.failure(NotLoggedInException())
+        return runCatching {
             val note = CloudNote(
                 bookId = bookId,
                 chapter = chapter,
@@ -55,51 +66,30 @@ class SyncManager {
                 noteText = text,
                 timestamp = System.currentTimeMillis()
             )
-
-            db.collection("users")
-                .document(uid)
-                .collection("notes")
-                .document("${bookId}_${chapter}_${verse}")
-                .set(note)
+            notesRef(uid).document(docId(bookId, chapter, verse))
+                // FIX 3: merge = true, so a future field added to CloudNote
+                // doesn't wipe the whole doc
+                .set(note, SetOptions.merge())
                 .await()
-        } catch (e: Exception) {
-            Log.e("SyncManager", "uploadNote failed", e)
-        }
+        }.onFailure { Log.e("SyncManager", "uploadNote failed", it) }
     }
 
-    suspend fun getNotes(): List<CloudNote> {
-        return try {
-            val uid = userId() ?: return emptyList()
-
-            db.collection("users")
-                .document(uid)
-                .collection("notes")
-                .get()
-                .await()
-                .toObjects(CloudNote::class.java)
-        } catch (e: Exception) {
-            Log.e("SyncManager", "getNotes failed", e)
-            emptyList()
-        }
+    suspend fun getNotes(): Result<List<CloudNote>> {
+        val uid = userId() ?: return Result.failure(NotLoggedInException())
+        return runCatching {
+            notesRef(uid).get().await().toObjects(CloudNote::class.java)
+        }.onFailure { Log.e("SyncManager", "getNotes failed", it) }
     }
 
     suspend fun deleteNote(
         bookId: Int,
         chapter: Int,
         verse: Int
-    ) {
-        try {
-            val uid = userId() ?: return
-
-            db.collection("users")
-                .document(uid)
-                .collection("notes")
-                .document("${bookId}_${chapter}_${verse}")
-                .delete()
-                .await()
-        } catch (e: Exception) {
-            Log.e("SyncManager", "deleteNote failed", e)
-        }
+    ): Result<Unit> {
+        val uid = userId() ?: return Result.failure(NotLoggedInException())
+        return runCatching {
+            notesRef(uid).document(docId(bookId, chapter, verse)).delete().await()
+        }.onFailure { Log.e("SyncManager", "deleteNote failed", it) }
     }
 
     // --- HIGHLIGHTS ---
@@ -109,61 +99,37 @@ class SyncManager {
         chapter: Int,
         verse: Int,
         color: String
-    ) {
-        try {
-            val uid = userId() ?: return
-
+    ): Result<Unit> {
+        val uid = userId() ?: return Result.failure(NotLoggedInException())
+        return runCatching {
             val highlight = CloudHighlight(
                 bookId = bookId,
                 chapter = chapter,
                 verse = verse,
                 color = color
             )
-
-            db.collection("users")
-                .document(uid)
-                .collection("highlights")
-                .document("${bookId}_${chapter}_${verse}")
-                .set(highlight)
+            highlightsRef(uid).document(docId(bookId, chapter, verse))
+                .set(highlight, SetOptions.merge())
                 .await()
-        } catch (e: Exception) {
-            Log.e("SyncManager", "uploadHighlight failed", e)
-        }
+        }.onFailure { Log.e("SyncManager", "uploadHighlight failed", it) }
     }
 
-    suspend fun getHighlights(): List<CloudHighlight> {
-        return try {
-            val uid = userId() ?: return emptyList()
-
-            db.collection("users")
-                .document(uid)
-                .collection("highlights")
-                .get()
-                .await()
-                .toObjects(CloudHighlight::class.java)
-        } catch (e: Exception) {
-            Log.e("SyncManager", "getHighlights failed", e)
-            emptyList()
-        }
+    suspend fun getHighlights(): Result<List<CloudHighlight>> {
+        val uid = userId() ?: return Result.failure(NotLoggedInException())
+        return runCatching {
+            highlightsRef(uid).get().await().toObjects(CloudHighlight::class.java)
+        }.onFailure { Log.e("SyncManager", "getHighlights failed", it) }
     }
 
     suspend fun deleteHighlight(
         bookId: Int,
         chapter: Int,
         verse: Int
-    ) {
-        try {
-            val uid = userId() ?: return
-
-            db.collection("users")
-                .document(uid)
-                .collection("highlights")
-                .document("${bookId}_${chapter}_${verse}")
-                .delete()
-                .await()
-        } catch (e: Exception) {
-            Log.e("SyncManager", "deleteHighlight failed", e)
-        }
+    ): Result<Unit> {
+        val uid = userId() ?: return Result.failure(NotLoggedInException())
+        return runCatching {
+            highlightsRef(uid).document(docId(bookId, chapter, verse)).delete().await()
+        }.onFailure { Log.e("SyncManager", "deleteHighlight failed", it) }
     }
 
     // --- READING PROGRESS ---
@@ -175,10 +141,9 @@ class SyncManager {
         verse: Int,
         scrollIndex: Int,
         scrollOffset: Int
-    ) {
-        try {
-            val uid = userId() ?: return
-
+    ): Result<Unit> {
+        val uid = userId() ?: return Result.failure(NotLoggedInException())
+        return runCatching {
             val progress = CloudProgress(
                 mode = mode,
                 book = book,
@@ -188,32 +153,41 @@ class SyncManager {
                 scrollOffset = scrollOffset,
                 updatedAt = System.currentTimeMillis()
             )
-
-            db.collection("users")
-                .document(uid)
-                .collection("progress")
-                .document("lastReading")
-                .set(progress)
+            progressRef(uid).document("lastReading")
+                .set(progress, SetOptions.merge())
                 .await()
-        } catch (e: Exception) {
-            Log.e("SyncManager", "uploadProgress failed", e)
-        }
+        }.onFailure { Log.e("SyncManager", "uploadProgress failed", it) }
     }
 
-    suspend fun getProgress(): CloudProgress? {
-        return try {
-            val uid = userId() ?: return null
-
-            db.collection("users")
-                .document(uid)
-                .collection("progress")
-                .document("lastReading")
-                .get()
-                .await()
+    suspend fun getProgress(): Result<CloudProgress?> {
+        val uid = userId() ?: return Result.failure(NotLoggedInException())
+        return runCatching {
+            progressRef(uid).document("lastReading").get().await()
                 .toObject(CloudProgress::class.java)
-        } catch (e: Exception) {
-            Log.e("SyncManager", "getProgress failed", e)
-            null
-        }
+        }.onFailure { Log.e("SyncManager", "getProgress failed", it) }
     }
+
+    // FIX 4: Batch sync - your old code would do 1 network call per note/highlight.
+    // 50 notes = 50 calls = slow + expensive. This does it in 1 batch.
+    // Call this on login / app start.
+    suspend fun syncAll(
+        localNotes: List<CloudNote>,
+        localHighlights: List<CloudHighlight>
+    ): Result<Unit> {
+        val uid = userId() ?: return Result.failure(NotLoggedInException())
+        return runCatching {
+            val batch = db.batch()
+            localNotes.forEach { note ->
+                val ref = notesRef(uid).document(docId(note.bookId, note.chapter, note.verse))
+                batch.set(ref, note, SetOptions.merge())
+            }
+            localHighlights.forEach { h ->
+                val ref = highlightsRef(uid).document(docId(h.bookId, h.chapter, h.verse))
+                batch.set(ref, h, SetOptions.merge())
+            }
+            batch.commit().await()
+        }.onFailure { Log.e("SyncManager", "syncAll failed", it) }
+    }
+
+    class NotLoggedInException : Exception("Not logged in - sync skipped")
 }
