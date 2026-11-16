@@ -1,6 +1,5 @@
 package com.ewbible.app.ui.screens
 
-import android.webkit.WebView
 import androidx.compose.foundation.*
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -19,7 +18,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
@@ -50,8 +48,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val background = if (isDark) Color(0xFF1E1E22) else Color(0xFFFDF8EF)
     val panel = if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9)
     val textColor = if (isDark) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
-
-    var lastLoadedHtml by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(state.currentBookId, state.selectedChapter) { viewModel.loadSummary() }
     LaunchedEffect(state.currentBookId, state.selectedChapter, state.selectedTab) {
@@ -131,7 +127,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
             }
 
-            // Book + Chapter header - keep this, BibleContent shows title too but this gives you +/- buttons
+            // Book + Chapter header
             if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -159,7 +155,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
             }
 
-            // Tab Content
+            // Tab Content - ALL 3 NOW USE THEIR OWN FILES
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (state.selectedTab) {
                     "Bible" -> BibleContent(
@@ -176,92 +172,38 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         onVerseClick = { viewModel.selectVerse(it) },
                         onVerseLongClick = { viewModel.selectVerse(it) }
                     )
-                    "Open EW" -> {
-                        when {
-                            state.commentaryError -> {
-                                Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text("Failed to load commentary.", color = textColor, fontSize = state.fontSize.sp)
-                                        Spacer(Modifier.height(12.dp))
-                                        Button(onClick = { viewModel.loadCommentary() }) { Text("Retry") }
-                                    }
-                                }
-                            }
-                            state.commentaryHtml.isBlank() -> {
-                                Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-                                    CircularProgressIndicator(color = gold)
-                                }
-                            }
-                            else -> {
-                                AndroidView(
-                                    factory = { ctx ->
-                                        WebView(ctx).apply {
-                                            settings.javaScriptEnabled = false
-                                        }
-                                    },
-                                    update = { webView ->
-                                        if (lastLoadedHtml != state.commentaryHtml) {
-                                            lastLoadedHtml = state.commentaryHtml
-                                            webView.loadDataWithBaseURL(
-                                                null,
-                                                state.commentaryHtml,
-                                                "text/html",
-                                                "UTF-8",
-                                                null
-                                            )
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
+                    "Open EW" -> OpenEWContent(
+                        commentaryHtml = state.commentaryHtml,
+                        fontSize = state.fontSize,
+                        textColor = textColor,
+                        secondaryText = textColor.copy(alpha = 0.6f),
+                        hasError = state.commentaryError,
+                        bookName = state.currentBook,
+                        chapter = state.selectedChapter,
+                        onVerseClick = { book, chapter, verse ->
+                            openBook(book, chapter)
+                            viewModel.selectTab("Bible")
+                            viewModel.selectVerse(verse)
                         }
-                    }
-                    "Search" -> Column(Modifier.fillMaxSize().padding(16.dp)) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = {
-                                searchQuery = it
-                                viewModel.searchVerses(it)
-                            },
-                            label = { Text("Search verses...") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = textColor,
-                                unfocusedTextColor = textColor
-                            )
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        if (searchQuery.isBlank()) {
-                            Text("Type to search across the Bible.", color = textColor.copy(alpha = 0.7f))
-                        } else if (state.searchResults.isEmpty()) {
-                            Text("No results for \"$searchQuery\"", color = textColor)
-                        } else {
-                            LazyColumn {
-                                items(state.searchResults, key = { "${it.bookId}-${it.chapter}-${it.verse}" }) { result ->
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                openBook(result.bookName, result.chapter)
-                                                viewModel.selectTab("Bible")
-                                                viewModel.selectVerse(result.verse)
-                                            }
-                                            .padding(vertical = 8.dp)
-                                    ) {
-                                        Text(
-                                            text = "${result.bookName} ${result.chapter}:${result.verse}",
-                                            color = gold,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 13.sp
-                                        )
-                                        Text(text = result.text, color = textColor, fontSize = state.fontSize.sp)
-                                    }
-                                    HorizontalDivider(color = textColor.copy(alpha = 0.1f))
-                                }
-                            }
+                    )
+                    "Search" -> SearchContent(
+                        searchQuery = searchQuery,
+                        searchFilter = state.searchFilter,
+                        verseResults = state.searchResults,
+                        textColor = textColor,
+                        gold = gold,
+                        fontSize = state.fontSize,
+                        onQueryChange = {
+                            searchQuery = it
+                            viewModel.searchVerses(it)
+                        },
+                        onFilterChange = { viewModel.setSearchFilter(it) },
+                        onOpenVerse = { book, chapter, verse ->
+                            openBook(book, chapter)
+                            viewModel.selectTab("Bible")
+                            viewModel.selectVerse(verse)
                         }
-                    }
+                    )
                 }
             }
 
