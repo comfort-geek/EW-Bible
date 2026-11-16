@@ -338,7 +338,12 @@ fun HomeScreen(viewModel: HomeViewModel) {
         onClose = { settingsOpen = false },
         onFontSizeChange = { viewModel.setFontSize(it) },
         onDarkModeChange = { viewModel.setDarkMode(it) },
-        onDailyVerse = { settingsOpen = false; dailyVerseDialog = true },
+        // FIXED: Random every open - load a new random verse BEFORE opening dialog
+        onDailyVerse = {
+            settingsOpen = false
+            viewModel.loadDailyVerse()
+            dailyVerseDialog = true
+        },
         onShowNotes = { settingsOpen = false; showAllNotes = true },
         onGoogleSignIn = {
             scope.launch {
