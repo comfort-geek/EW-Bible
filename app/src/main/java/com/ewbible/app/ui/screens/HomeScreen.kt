@@ -59,7 +59,9 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val panel = if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9)
     val textColor = if (isDark) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
 
-    LaunchedEffect(state.currentBookId, state.selectedChapter) { viewModel.loadSummary() }
+    // FIXED: DELETED LaunchedEffect loadSummary here.
+    // ViewModel.init already loads summary on book/chapter change.
+    // Having it here too caused double load + flicker.
     LaunchedEffect(state.verses) {
         if (state.verses.isEmpty()) return@LaunchedEffect
         if (hasRestoredScroll) return@LaunchedEffect
@@ -80,8 +82,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         }
     }
 
-    // FIXED SWIPE: clean down/up tracking. Old code had broken totalX math.
-    // Pass.Initial sees swipe BEFORE LazyColumn, only fires if mostly horizontal.
     val swipeModifier = Modifier.pointerInput(state.currentBook, state.selectedChapter, state.selectedTab) {
         awaitPointerEventScope {
             var downX = 0f
@@ -246,7 +246,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         }
     }
 
-    // FIXED: Settings is now LEFT PANEL, top to bottom, with X - not centered AlertDialog
     SettingsPanel(
         visible = settingsOpen,
         isLoggedIn = state.isLoggedIn,
@@ -276,7 +275,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     settingsOpen = false
                 }.onFailure { e ->
                     if (e is GoogleAuth.UserCancelledException) {
-                        // Back pressed - do nothing
                     } else {
                         Toast.makeText(context, e.message ?: "Sign-in failed", Toast.LENGTH_SHORT).show()
                     }
