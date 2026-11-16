@@ -19,13 +19,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ewbible.app.data.preferences.AppPreferences
+import com.ewbible.app.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
+fun HomeScreen(viewModel: HomeViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.uiState.collectAsState()
@@ -40,6 +40,7 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
     var dailyVerseDialog by remember { mutableStateOf(false) }
     var hasRestoredScroll by remember { mutableStateOf(false) }
     var lastScrollRestoreKey by remember { mutableStateOf(0) }
+    var searchQuery by remember { mutableStateOf("") }
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
@@ -127,37 +128,84 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                 }
             }
 
+            // Book + Chapter header - FIXED: Was missing, user had no way to change chapter
+            if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "${state.currentBook} ${state.selectedChapter}",
+                        color = textColor,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                    Row {
+                        Button(
+                            onClick = { viewModel.previousChapter() },
+                            enabled = state.selectedChapter > 1,
+                            colors = ButtonDefaults.buttonColors(containerColor = panel)
+                        ) { Text("<", color = textColor) }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = { viewModel.nextChapter() },
+                            colors = ButtonDefaults.buttonColors(containerColor = panel)
+                        ) { Text(">", color = textColor) }
+                    }
+                }
+                // Summary - show if loaded
+                if (state.summaryText.isNotBlank()) {
+                    Text(
+                        text = state.summaryText,
+                        color = textColor.copy(alpha = 0.8f),
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
             // Tab Content
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (state.selectedTab) {
                     "Bible" -> LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                        items(state.verses) { verse ->
+                        items(state.verses, key = { it.verse }) { verse ->
+                            val isSelected = state.selectedVerse == verse.verse
+                            val isHighlighted = state.highlights.any { it.verse == verse.verse }
                             Text(
                                 text = "${verse.verse}. ${verse.text}",
-                                color = textColor,
+                                color = if (isHighlighted) gold else textColor,
                                 fontSize = state.fontSize.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { viewModel.selectVerse(verse) }
+                                    .combinedClickable(
+                                        onClick = { viewModel.selectVerse(verse.verse) },
+                                        onLongClick = { viewModel.selectVerse(verse.verse) }
+                                    )
                                     .padding(vertical = 6.dp)
                             )
                         }
                     }
-                    // FIXED: Was Text(state.commentary) - did not compile + showed raw HTML tags
-                    // Now: WebView + uses commentaryHtml + handles error / loading
                     "Open EW" -> {
                         when {
                             state.commentaryError -> {
                                 Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-                                    Text("Failed to load commentary.", color = textColor, fontSize = state.fontSize.sp)
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("Failed to load commentary.", color = textColor, fontSize = state.fontSize.sp)
+                                        Spacer(Modifier.height(12.dp))
+                                        Button(onClick = { viewModel.loadCommentary() }) { Text("Retry") }
+                                    }
                                 }
                             }
                             state.commentaryHtml.isBlank() -> {
                                 Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-                                    Text("Loading...", color = textColor, fontSize = state.fontSize.sp)
+                                    CircularProgressIndicator(color = gold)
                                 }
                             }
                             else -> {
+                                // FIXED: Only reload WebView when HTML actually changes, not on every recomposition
+                                var lastLoadedHtml by remember { mutableStateOf<String?>(null) }
                                 AndroidView(
                                     factory = { ctx ->
                                         WebView(ctx).apply {
@@ -165,22 +213,81 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                                         }
                                     },
                                     update = { webView ->
-                                        webView.loadDataWithBaseURL(
-                                            null,
-                                            state.commentaryHtml,
-                                            "text/html",
-                                            "UTF-8",
-                                            null
-                                        )
+                                        if (lastLoadedHtml != state.commentaryHtml) {
+                                            lastLoadedHtml = state.commentaryHtml
+                                            webView.loadDataWithBaseURL(
+                                                null,
+                                                state.commentaryHtml,
+                                                "text/html",
+                                                "UTF-8",
+                                                null
+                                            )
+                                        }
                                     },
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
                         }
                     }
+                    // FIXED: Was just Text("Search verses...") - now real search
                     "Search" -> Column(Modifier.fillMaxSize().padding(16.dp)) {
-                        Text("Search verses...", color = textColor)
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = {
+                                searchQuery = it
+                                viewModel.searchVerses(it)
+                            },
+                            label = { Text("Search verses...") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = textColor,
+                                unfocusedTextColor = textColor
+                            )
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        if (searchQuery.isBlank()) {
+                            Text("Type to search across the Bible.", color = textColor.copy(alpha = 0.7f))
+                        } else if (state.searchResults.isEmpty()) {
+                            Text("No results for \"$searchQuery\"", color = textColor)
+                        } else {
+                            LazyColumn {
+                                items(state.searchResults, key = { "${it.bookId}-${it.chapter}-${it.verse}" }) { result ->
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                openBook(result.bookName, result.chapter)
+                                                viewModel.selectTab("Bible")
+                                                viewModel.selectVerse(result.verse)
+                                            }
+                                            .padding(vertical = 8.dp)
+                                    ) {
+                                        Text(
+                                            text = "${result.bookName} ${result.chapter}:${result.verse}",
+                                            color = gold,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp
+                                        )
+                                        Text(text = result.text, color = textColor, fontSize = state.fontSize.sp)
+                                    }
+                                    HorizontalDivider(color = textColor.copy(alpha = 0.1f))
+                                }
+                            }
+                        }
                     }
+                }
+            }
+
+            // FIXED: Selected verse bar - was missing, so notes/highlights had no UI
+            if (state.selectedVerse != null && state.selectedTab == "Bible") {
+                Row(
+                    modifier = Modifier.fillMaxWidth().background(panel).padding(8.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    TextButton(onClick = { viewModel.toggleHighlight() }) { Text("Highlight", color = gold) }
+                    TextButton(onClick = { viewModel.showNoteDialog() }) { Text("Note", color = gold) }
+                    TextButton(onClick = { viewModel.clearSelection() }) { Text("Done", color = textColor) }
                 }
             }
         }
@@ -272,4 +379,50 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
             }
         )
     }
+
+    // FIXED: Note dialog - was missing entirely
+    if (state.showNoteDialog) {
+        var noteText by remember(state.selectedVerse) { mutableStateOf(state.currentNoteText) }
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissNoteDialog() },
+            containerColor = background,
+            title = { Text("Note - ${state.currentBook} ${state.selectedChapter}:${state.selectedVerse}", color = textColor) },
+            text = {
+                OutlinedTextField(
+                    value = noteText,
+                    onValueChange = { noteText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.saveNote(noteText)
+                    viewModel.dismissNoteDialog()
+                }) { Text("Save", color = gold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissNoteDialog() }) { Text("Cancel", color = textColor) }
+            }
+        )
+    }
+}
+
+@Composable
+fun DailyVerseDialog(
+    dailyVerseText: String,
+    gold: Color,
+    textColor: Color,
+    fontSize: Float,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF2A2A30),
+        title = { Text("Daily Verse", color = gold, fontWeight = FontWeight.Bold) },
+        text = { Text(dailyVerseText, color = textColor, fontSize = fontSize.sp) },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close", color = gold) }
+        }
+    )
 }
