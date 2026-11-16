@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 
-class GoogleAuth(private val context: Context) {
+class GoogleAuth(context: Context) { // Removed stored application context to prevent context leaks
 
     private val auth = FirebaseAuth.getInstance()
     private val credentialManager = CredentialManager.create(context)
@@ -39,7 +39,8 @@ class GoogleAuth(private val context: Context) {
 
     fun isLoggedIn(): Boolean = auth.currentUser != null
 
-    suspend fun signInWithGoogle(): Result<String> {
+    // CRITICAL FIX: Accept activity context (e.g. LocalContext.current) so Credential Manager can launch UI
+    suspend fun signInWithGoogle(context: Context): Result<String> {
         return try {
             val googleIdOption = GetGoogleIdOption.Builder()
                 .setFilterByAuthorizedAccounts(false)
@@ -51,8 +52,8 @@ class GoogleAuth(private val context: Context) {
                 .build()
 
             val result = credentialManager.getCredential(
-                context,
-                request
+                context = context,
+                request = request
             )
 
             val credential = result.credential
