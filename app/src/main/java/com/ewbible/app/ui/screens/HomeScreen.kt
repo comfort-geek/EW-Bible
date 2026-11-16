@@ -2,6 +2,7 @@ package com.ewbible.app.ui.screens
 
 import android.webkit.WebView
 import androidx.compose.foundation.*
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -49,6 +50,9 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val background = if (isDark) Color(0xFF1E1E22) else Color(0xFFFDF8EF)
     val panel = if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9)
     val textColor = if (isDark) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
+
+    // FIXED: Hoisted WebView state out of `when` - remember() inside when() loses state
+    var lastLoadedHtml by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(state.currentBookId, state.selectedChapter) { viewModel.loadSummary() }
     LaunchedEffect(state.currentBookId, state.selectedChapter, state.selectedTab) {
@@ -128,7 +132,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
             }
 
-            // Book + Chapter header - FIXED: Was missing, user had no way to change chapter
+            // Book + Chapter header
             if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -154,7 +158,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         ) { Text(">", color = textColor) }
                     }
                 }
-                // Summary - show if loaded
                 if (state.summaryText.isNotBlank()) {
                     Text(
                         text = state.summaryText,
@@ -171,7 +174,8 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     "Bible" -> LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
                         items(state.verses, key = { it.verse }) { verse ->
                             val isSelected = state.selectedVerse == verse.verse
-                            val isHighlighted = state.highlights.any { it.verse == verse.verse }
+                            // FIXED: Was `it.verse` on a Map - Map has key/value, not .verse
+                            val isHighlighted = state.highlights.containsKey(verse.verse)
                             Text(
                                 text = "${verse.verse}. ${verse.text}",
                                 color = if (isHighlighted) gold else textColor,
@@ -204,8 +208,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                                 }
                             }
                             else -> {
-                                // FIXED: Only reload WebView when HTML actually changes, not on every recomposition
-                                var lastLoadedHtml by remember { mutableStateOf<String?>(null) }
                                 AndroidView(
                                     factory = { ctx ->
                                         WebView(ctx).apply {
@@ -229,7 +231,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                             }
                         }
                     }
-                    // FIXED: Was just Text("Search verses...") - now real search
                     "Search" -> Column(Modifier.fillMaxSize().padding(16.dp)) {
                         OutlinedTextField(
                             value = searchQuery,
@@ -279,7 +280,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
             }
 
-            // FIXED: Selected verse bar - was missing, so notes/highlights had no UI
             if (state.selectedVerse != null && state.selectedTab == "Bible") {
                 Row(
                     modifier = Modifier.fillMaxWidth().background(panel).padding(8.dp),
@@ -380,7 +380,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         )
     }
 
-    // FIXED: Note dialog - was missing entirely
     if (state.showNoteDialog) {
         var noteText by remember(state.selectedVerse) { mutableStateOf(state.currentNoteText) }
         AlertDialog(
