@@ -458,13 +458,16 @@ class HomeViewModel(
         loadCommentary(currentBookId.value, selectedChapter.value)
     }
 
-    private suspend fun loadDailyVerse() {
-        runCatching {
-            val verse = dao.getRandomVerse()
-            dailyVerse.value = verse?.let { "${it.text} — ${it.bookName} ${it.chapter}:${it.verse}" }
-                ?: "Thy word is a lamp unto my feet, and a light unto my path. — Psalm 119:105"
-        }.onFailure {
-            dailyVerse.value = "Thy word is a lamp unto my feet, and a light unto my path. — Psalm 119:105"
+    // FIXED: Public + not suspend, so HomeScreen can call it every open for a new random verse
+    fun loadDailyVerse() {
+        viewModelScope.launch {
+            runCatching {
+                val verse = dao.getRandomVerse()
+                dailyVerse.value = verse?.let { "${it.text}\n— ${it.bookName} ${it.chapter}:${it.verse}" }
+                    ?: "Thy word is a lamp unto my feet, and a light unto my path.\n— Psalm 119:105"
+            }.onFailure {
+                dailyVerse.value = "Thy word is a lamp unto my feet, and a light unto my path.\n— Psalm 119:105"
+            }
         }
     }
 
