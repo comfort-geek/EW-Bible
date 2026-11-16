@@ -26,13 +26,8 @@ interface BibleDao {
     @Query("SELECT * FROM books ORDER BY id")
     suspend fun getAllBooksSync(): List<BookEntity>
 
-    // --- CORRECT DAILY VERSE - FIRST FIX ---
-    // Old getRandomVerse() = new verse every open. Deleted.
-    // New: 1 verse by date. Same all day, next verse tomorrow, from YOUR Bible.
-
-    @Query("SELECT COUNT(*) FROM verses")
-    suspend fun getVerseCount(): Int
-
+    // FIXED: Random every open - what you want
+    // Called by HomeViewModel.loadDailyVerse() every time you open Daily Verse dialog
     @Query("""
         SELECT v.book_id AS bookId,
                b.name AS bookName,
@@ -41,10 +36,10 @@ interface BibleDao {
                v.text
         FROM verses v
         INNER JOIN books b ON b.id = v.book_id
-        ORDER BY v.book_id, v.chapter, v.verse
-        LIMIT 1 OFFSET :offset
+        ORDER BY RANDOM()
+        LIMIT 1
     """)
-    suspend fun getDailyVerse(offset: Int): VerseSearchResult?
+    suspend fun getRandomVerse(): VerseSearchResult?
 
     @Query("SELECT COALESCE(MAX(chapter), 1) FROM verses WHERE book_id = :bookId")
     suspend fun getMaxChapter(bookId: Int): Int
