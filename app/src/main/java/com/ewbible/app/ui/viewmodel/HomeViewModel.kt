@@ -342,7 +342,6 @@ class HomeViewModel(
         viewModelScope.launch { prefs.setFontSize(size) }
     }
 
-    // FIXED: ADDED - HomeScreen calls these, they were missing so build failed
     fun onUserSignedIn(name: String, email: String) {
         viewModelScope.launch { prefs.saveUser(name, email) }
     }
@@ -384,6 +383,10 @@ class HomeViewModel(
         loadSummary(currentBookId.value, selectedChapter.value)
     }
 
+    // FIXED: This is the only function changed.
+    // Old code swallowed null as success and always set error = false.
+    // New code: null / blank / getHtml crash = error = true, html = ""
+    // So OpenEWContent can show the real error, and real html shows when it exists.
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
@@ -391,31 +394,31 @@ class HomeViewModel(
             commentary.value = ""
             try {
                 val html = withContext(Dispatchers.IO) {
+                    val comm = dao.getCommentary(bookId, chapter)
+                    if (comm == null) {
+                        Log.e("HomeViewModel", "getCommentary returned NULL book=$bookId ch=$chapter - no row in DB")
+                        return@withContext null
+                    }
                     try {
-                        val comm = dao.getCommentary(bookId, chapter)
-                        try {
-                            comm?.getHtml().orEmpty()
-                        } catch (e: Exception) {
-                            Log.e("HomeViewModel", "getHtml failed book=$bookId ch=$chapter", e)
-                            ""
-                        }
+                        comm.getHtml()
                     } catch (e: Exception) {
-                        Log.e("HomeViewModel", "getCommentary DAO failed book=$bookId ch=$chapter", e)
-                        ""
+                        Log.e("HomeViewModel", "getHtml failed book=$bookId ch=$chapter", e)
+                        null
                     }
                 }
-                commentary.value = if (html.isBlank()) {
-                    "<p>No commentary available for this chapter.</p>"
+                if (html.isNullOrBlank()) {
+                    commentary.value = ""
+                    commentaryError.value = true
                 } else {
-                    html
+                    commentary.value = html
+                    commentaryError.value = false
                 }
-                commentaryError.value = false
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e("HomeViewModel", "loadCommentary failed book=$bookId ch=$chapter", e)
                 commentaryError.value = true
-                commentary.value = "<p>Failed to load commentary.</p>"
+                commentary.value = ""
             }
         }
     }
@@ -463,9 +466,6 @@ class HomeViewModel(
             currentNoteText.value = noteText
         }
     }
-
-    // FIXED: DELETED toggleHighlight() - dead code, nothing called it, and .first() on Flow could hang.
-    // Use saveHighlight() / removeHighlight() below.
 
     fun saveHighlight(color: Color) {
         val verseNum = selectedVerse.value ?: return
