@@ -260,6 +260,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
             gold = gold,
             textColor = textColor,
             background = background,
+            fontSize = state.fontSize,
             onDismiss = { dailyVerseDialog = false }
         )
     }
@@ -319,7 +320,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     panel = panel,
                     gold = gold,
                     textColor = textColor,
-                    fontSize = state.fontSize,
                     onNoteTextChange = { noteText = it },
                     onSaveNote = {
                         viewModel.saveNote(noteText)
