@@ -9,20 +9,26 @@ import androidx.room.*
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun bibleDao(): BibleDao
+
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
-                    context.applicationContext,
-                    AppDatabase::class.java,
-                    "ewbible.db"
-                ).createFromAsset("ewbible.db")
-                .fallbackToDestructiveMigration().build()
-                // Force Room to create the file now
-                instance.openHelper.writableDatabase
-                INSTANCE = instance
-                instance
+                INSTANCE ?: run {
+                    val instance = Room.databaseBuilder(
+                        context.applicationContext,
+                        AppDatabase::class.java,
+                        "ewbible.db"
+                    )
+                        .createFromAsset("ewbible.db")
+                        // FIXED: Removed .fallbackToDestructiveMigration()
+                        // It was deleting your pre-populated DB with commentary
+                        // and replacing it with empty tables = blank EW tab
+                        .build()
+                    INSTANCE = instance
+                    instance
+                }
             }
         }
     }
