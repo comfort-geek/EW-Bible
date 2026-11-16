@@ -243,69 +243,57 @@ class HomeViewModel(
 
         viewModelScope.launch {
             books.collect { bookList ->
-                if (bookList.isNotEmpty()) {
-                    chapterCounts.value = dao.getChapterCounts()
-                        .associate { chapterCount ->
-                            chapterCount.bookId to chapterCount.chapterCount
-                        }
+                if (bookList.isNotEmpty() && selectedBook.value.isBlank()) {
+                    selectedBook.value = bookList.first().name
                 }
             }
         }
 
         viewModelScope.launch {
-            searchQuery
-                .debounce(300)
-                .collectLatest { query ->
-                    val trimmedQuery = query.trim()
+            combine(currentBookId, selectedChapter) { bookId, chapter ->
+                bookId to chapter
+            }.collectLatest { (bookId, chapter) ->
+                loadChapterCounts(bookId)
+                loadSummary(bookId, chapter)
+                loadCommentary(bookId, chapter)
+            }
+        }
 
-                    searchResults.value = if (trimmedQuery.length < 2) {
-                        emptyList()
-                    } else {
-                        dao.searchVerses(trimmedQuery).map { result ->
-                            SearchResult(
-                                bookName = result.bookName,
-                                bookId = result.bookId,
-                                chapter = result.chapter,
-                                verse = result.verse,
-                                text = result.text
-                            )
-                        }
-                    }
+        viewModelScope.launch {
+            combine(
+                searchQuery.debounce(300L).distinctUntilChanged(),
+                searchFilter
+            ) { query, filter ->
+                query to filter
+            }.collectLatest { (query, filter) ->
+                if (query.isBlank()) {
+                    searchResults.value = emptyList()
+                } else {
+                    searchResults.value = dao.searchVerses(query, filter)
                 }
+            }
         }
 
         viewModelScope.launch {
             loadDailyVerse()
         }
-
-        viewModelScope.launch {
-            if (isLoggedIn()) {
-                syncFromCloud()
-            }
-        }
     }
 
-    fun openBook(bookName: String, chapter: Int) {
+    fun selectBook(bookName: String) {
         selectedBook.value = bookName
-        selectedChapter.value = chapter.coerceAtLeast(1)
-        selectedVerse.value = 1
-
-        viewModelScope.launch {
-            prefs.saveReading(
-                "World English Bible",
-                bookName,
-                chapter,
-                1
-            )
-            prefs.saveScroll(0, 0)
-        }
+        selectedChapter.value = 1
+        selectedVerse.value = null
+        saveReadingProgress()
     }
 
     fun selectChapter(chapter: Int) {
-        selectedChapter.value = chapter.coerceAtLeast(1)
+        selectedChapter.value = chapter
+        selectedVerse.value = null
+        scrollRestoreKey.update { it + 1 }
+        saveReadingProgress()
     }
 
-    fun selectVerse(verse: Int) {
+    fun selectVerse(verse: Int?) {
         selectedVerse.value = verse
     }
 
@@ -313,335 +301,7 @@ class HomeViewModel(
         selectedTab.value = tab
     }
 
-    fun setSearchQuery(query: String) {
-        searchQuery.value = query
-    }
-
-    fun setSearchFilter(filter: String) {
-        searchFilter.value = filter
-    }
-
-    fun loadSummary() {
-        viewModelScope.launch {
-            summaryState.value = runCatching {
-                dao.getSummary(
-                    currentBookId.value,
-                    selectedChapter.value
-                )
-            }.getOrNull()
-        }
-    }
-
-    fun loadCommentary() {
-        viewModelScope.launch {
-            commentaryError.value = false
-
-            commentary.value = runCatching {
-                dao.getCommentary(
-                    currentBookId.value,
-                    selectedChapter.value
-                )?.getHtml().orEmpty()
-            }.onFailure {
-                commentaryError.value = true
-            }.getOrDefault("")
-        }
-    }
-
-    fun setDarkMode(enabled: Boolean) {
-        viewModelScope.launch {
-            prefs.saveSettings(
-                enabled,
-                prefs.fontSize.first()
-            )
-        }
-    }
-
-    fun setFontSize(size: Float) {
-        viewModelScope.launch {
-            prefs.saveSettings(
-                prefs.isDarkMode.first() ?: false,
-                size
-            )
-        }
-    }
-
-    fun saveReadingProgress(
-        verse: Int,
-        scrollIndex: Int,
-        scrollOffset: Int
-    ) {
-        val book = selectedBook.value
-        if (book.isBlank()) return
-
+    fun navigateToReference(bookName: String, chapter: Int, verse: Int? = null) {
+        selectedBook.value = bookName
+        selectedChapter.value = chapter
         selectedVerse.value = verse
-
-        viewModelScope.launch {
-            prefs.saveReading(
-                "World English Bible",
-                book,
-                selectedChapter.value,
-                verse
-            )
-            prefs.saveScroll(scrollIndex, scrollOffset)
-
-            if (isLoggedIn()) {
-                syncManager.uploadProgress(
-                    "World English Bible",
-                    book,
-                    selectedChapter.value,
-                    verse,
-                    scrollIndex,
-                    scrollOffset
-                )
-            }
-        }
-    }
-
-    fun saveHighlight(color: Color) {
-        val verse = selectedVerse.value ?: return
-
-        viewModelScope.launch {
-            val hex = "#%08X".format(color.toArgb())
-
-            dao.saveHighlight(
-                HighlightEntity(
-                    bookId = currentBookId.value,
-                    chapter = selectedChapter.value,
-                    verse = verse,
-                    color = hex
-                )
-            )
-
-            if (isLoggedIn()) {
-                syncManager.uploadHighlight(
-                    currentBookId.value,
-                    selectedChapter.value,
-                    verse,
-                    hex
-                )
-            }
-        }
-    }
-
-    fun removeHighlight() {
-        val verse = selectedVerse.value ?: return
-
-        viewModelScope.launch {
-            dao.deleteHighlight(
-                currentBookId.value,
-                selectedChapter.value,
-                verse
-            )
-
-            if (isLoggedIn()) {
-                syncManager.deleteHighlight(
-                    currentBookId.value,
-                    selectedChapter.value,
-                    verse
-                )
-            }
-        }
-    }
-
-    fun saveNote(text: String) {
-        val verse = selectedVerse.value ?: return
-        if (text.isBlank()) return
-
-        viewModelScope.launch {
-            dao.saveNote(
-                NoteEntity(
-                    bookId = currentBookId.value,
-                    chapter = selectedChapter.value,
-                    verse = verse,
-                    noteText = text,
-                    timestamp = System.currentTimeMillis()
-                )
-            )
-
-            if (isLoggedIn()) {
-                syncManager.uploadNote(
-                    currentBookId.value,
-                    selectedChapter.value,
-                    verse,
-                    text
-                )
-            }
-        }
-    }
-
-    fun handleGoogleLogin() {
-        viewModelScope.launch {
-            googleAuth.signInWithGoogle()
-                .onSuccess { data ->
-                    val name = data.substringBefore('|').ifBlank { "User" }
-                    val email = data.substringAfter('|', "")
-
-                    prefs.saveUser(name, email)
-                    syncFromCloud()
-                }
-        }
-    }
-
-    fun handleGoogleLogout() {
-        viewModelScope.launch {
-            googleAuth.signOut()
-            prefs.saveUser("Guest", "")
-        }
-    }
-
-    fun syncFromCloud() {
-        viewModelScope.launch {
-            syncManager.getHighlights().forEach { cloudHighlight ->
-                dao.saveHighlight(
-                    HighlightEntity(
-                        bookId = cloudHighlight.bookId,
-                        chapter = cloudHighlight.chapter,
-                        verse = cloudHighlight.verse,
-                        color = cloudHighlight.color
-                    )
-                )
-            }
-
-            syncManager.getNotes().forEach { cloudNote ->
-                val existingNote = dao.getNoteAtVerse(
-                    cloudNote.bookId,
-                    cloudNote.chapter,
-                    cloudNote.verse
-                )
-
-                if (existingNote != null) {
-                    dao.updateNote(
-                        existingNote.copy(
-                            noteText = cloudNote.noteText,
-                            timestamp = cloudNote.timestamp
-                        )
-                    )
-                } else {
-                    dao.saveNote(
-                        NoteEntity(
-                            bookId = cloudNote.bookId,
-                            chapter = cloudNote.chapter,
-                            verse = cloudNote.verse,
-                            noteText = cloudNote.noteText,
-                            timestamp = cloudNote.timestamp
-                        )
-                    )
-                }
-            }
-
-            syncManager.getProgress()?.let { progress ->
-                val bookList = books.first()
-                val bookExists = bookList.any { book ->
-                    book.name == progress.book ||
-                            book.key == progress.book
-                }
-
-                if (bookExists) {
-                    selectedBook.value = progress.book
-                    selectedChapter.value = progress.chapter.coerceAtLeast(1)
-                    selectedVerse.value = progress.verse
-
-                    prefs.saveReading(
-                        progress.mode,
-                        progress.book,
-                        progress.chapter,
-                        progress.verse
-                    )
-                    prefs.saveScroll(
-                        progress.scrollIndex,
-                        progress.scrollOffset
-                    )
-
-                    scrollRestoreKey.value += 1
-                }
-            }
-        }
-    }
-
-    private suspend fun isLoggedIn(): Boolean {
-    val userName = prefs.userName.first()
-    val userEmail = prefs.userEmail.first()
-
-    return googleAuth.isLoggedIn() &&
-            userName != "Guest" &&
-            userEmail.isNotBlank()
-}
-    }
-
-    private suspend fun restoreSavedReading() {
-        val savedBook = prefs.lastBook.first()
-        val savedChapter = prefs.lastChapter.first()
-        val savedVerse = prefs.lastVerse.first()
-
-        if (savedBook.isNotBlank()) {
-            selectedBook.value = savedBook
-            selectedChapter.value = savedChapter.coerceAtLeast(1)
-            selectedVerse.value = savedVerse.coerceAtLeast(1)
-        }
-    }
-
-    private suspend fun loadDailyVerse() {
-        val bookList = books.first()
-        if (bookList.isEmpty()) return
-
-        val today = LocalDate.now().toString()
-        val savedDate = prefs.dailyVerseDate.first()
-        val savedReference = prefs.dailyVerseReference.first()
-
-        if (savedDate == today && savedReference != null) {
-            val savedVerse = dao.getVerses(
-                savedReference.bookId,
-                savedReference.chapter
-            ).first().firstOrNull { verse ->
-                verse.verse == savedReference.verse
-            }
-
-            if (savedVerse != null) {
-                val savedBook = bookList.first { book ->
-                    book.id == savedReference.bookId
-                }
-
-                dailyVerse.value =
-                    "${savedVerse.text} - ${savedBook.name} ${savedReference.chapter}:${savedReference.verse}"
-                return
-            }
-        }
-
-        val random = kotlin.random.Random(today.hashCode())
-        val randomBook = bookList.random(random)
-        val maxChapter = dao.getMaxChapter(randomBook.id).coerceAtLeast(1)
-        val randomChapter = random.nextInt(maxChapter) + 1
-        val chapterVerses = dao.getVerses(
-            randomBook.id,
-            randomChapter
-        ).first()
-
-        if (chapterVerses.isEmpty()) return
-
-        val randomVerse = chapterVerses.random(random)
-
-        dailyVerse.value =
-            "${randomVerse.text} - ${randomBook.name} $randomChapter:${randomVerse.verse}"
-
-        prefs.saveDailyVerse(
-            today,
-            DailyVerseReference(
-                bookId = randomBook.id,
-                chapter = randomChapter,
-                verse = randomVerse.verse
-            )
-        )
-    }
-}
-
-private fun parseHighlightColor(raw: String): Color {
-    val cleaned = raw.trim().removePrefix("#")
-    val parsed = runCatching { cleaned.toLong(16) }.getOrNull()
-        ?: return Color.Yellow
-
-    return when (cleaned.length) {
-        8 -> Color(parsed.toInt())
-        6 -> Color((0xFF000000L or parsed).toInt())
-        else -> Color.Yellow
-    }
-}
