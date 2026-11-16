@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "ewbible_settings")
@@ -12,6 +13,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 class AppPreferences(private val context: Context) {
     companion object {
         val LAST_MODE = stringPreferencesKey("last_mode")
+        val LAST_BOOK_ID = intPreferencesKey("last_book_id")
         val LAST_BOOK = stringPreferencesKey("last_book")
         val LAST_CHAPTER = intPreferencesKey("last_chapter")
         val LAST_VERSE = intPreferencesKey("last_verse")
@@ -31,7 +33,6 @@ class AppPreferences(private val context: Context) {
     val lastBook: Flow<String> = context.dataStore.data.map { it[LAST_BOOK] ?: "Genesis" }
     val lastChapter: Flow<Int> = context.dataStore.data.map { it[LAST_CHAPTER] ?: 1 }
     val lastVerse: Flow<Int> = context.dataStore.data.map { it[LAST_VERSE] ?: 1 }
-    // FIX: Nullable - null = user never picked, use System theme
     val isDarkMode: Flow<Boolean?> = context.dataStore.data.map { it[IS_DARK_MODE] }
     val fontSize: Flow<Float> = context.dataStore.data.map { it[FONT_SIZE] ?: 16f }
     val userName: Flow<String> = context.dataStore.data.map { it[USER_NAME] ?: "Guest" }
@@ -39,6 +40,7 @@ class AppPreferences(private val context: Context) {
     val lastScrollIndex: Flow<Int> = context.dataStore.data.map { it[LAST_SCROLL_INDEX] ?: 0 }
     val lastScrollOffset: Flow<Int> = context.dataStore.data.map { it[LAST_SCROLL_OFFSET] ?: 0 }
     val dailyVerseDate: Flow<String> = context.dataStore.data.map { it[DAILY_VERSE_DATE] ?: "" }
+    
     val dailyVerseReference: Flow<DailyVerseReference?> = context.dataStore.data.map { preferences ->
         val bookId = preferences[DAILY_VERSE_BOOK_ID]
         val chapter = preferences[DAILY_VERSE_CHAPTER]
@@ -52,6 +54,36 @@ class AppPreferences(private val context: Context) {
             prefs[LAST_BOOK] = book
             prefs[LAST_CHAPTER] = chapter
             prefs[LAST_VERSE] = verse
+        }
+    }
+
+    suspend fun saveLastReading(bookId: Int, chapter: Int, verse: Int, scrollIndex: Int, scrollOffset: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[LAST_BOOK_ID] = bookId
+            prefs[LAST_CHAPTER] = chapter
+            prefs[LAST_VERSE] = verse
+            prefs[LAST_SCROLL_INDEX] = scrollIndex.coerceAtLeast(0)
+            prefs[LAST_SCROLL_OFFSET] = offset.coerceAtLeast(0)
+        }
+    }
+
+    suspend fun getLastBookId(): Int {
+        return context.dataStore.data.map { it[LAST_BOOK_ID] ?: 1 }.first()
+    }
+
+    suspend fun getLastChapter(): Int {
+        return context.dataStore.data.map { it[LAST_CHAPTER] ?: 1 }.first()
+    }
+
+    suspend fun setDarkMode(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[IS_DARK_MODE] = enabled
+        }
+    }
+
+    suspend fun setFontSize(size: Float) {
+        context.dataStore.edit { prefs ->
+            prefs[FONT_SIZE] = size
         }
     }
 
