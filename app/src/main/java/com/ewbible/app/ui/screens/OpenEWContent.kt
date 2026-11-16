@@ -191,8 +191,9 @@ private fun linkifyVerses(html: String, currentBook: String): String {
 
     var result = html
 
-    // 1. Full references: "2 Samuel 3:1", "John 3:16", "Psalm 119:105"
-    val fullPattern = Regex("(?<!href=[\"'][^\"']*)\\b($bookNames)\\s+(\\d+):(\\d+)\\b(?![^<]*</a>)")
+    // FIXED: Removed (?<!href=[\"'][^\"']*) - variable-length lookbehind crashes Java Regex
+    // hrefs use &chapter= / &verse=, not "Book 1:2", so they can't be double-linked anyway
+    val fullPattern = Regex("\\b($bookNames)\\s+(\\d+):(\\d+)\\b(?![^<]*</a>)")
     result = fullPattern.replace(result) { m ->
         val book = m.groupValues[1]
         val ch = m.groupValues[2]
@@ -200,9 +201,8 @@ private fun linkifyVerses(html: String, currentBook: String): String {
         """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
     }
 
-    // 2. Bare references: "3:1" mapped to the current book (only when currentBook is known)
     if (currentBook.isNotBlank()) {
-        val barePattern = Regex("(?<!href=[\"'][^\"']*)(?<![\\w:])\\b(\\d+):(\\d+)\\b(?![^<]*</a>)")
+        val barePattern = Regex("(?<![\\w:])\\b(\\d+):(\\d+)\\b(?![^<]*</a>)")
         result = barePattern.replace(result) { m ->
             val ch = m.groupValues[1]
             val vs = m.groupValues[2]
