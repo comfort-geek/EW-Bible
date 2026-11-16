@@ -342,8 +342,7 @@ class HomeViewModel(
         viewModelScope.launch { prefs.setFontSize(size) }
     }
 
-    // FIXED: These were missing - HomeScreen calls them for Google Login.
-    // Uses prefs.saveUser / clearUser from your AppPreferences, not setUserName.
+    // FIXED: ADDED - HomeScreen calls these, they were missing so build failed
     fun onUserSignedIn(name: String, email: String) {
         viewModelScope.launch { prefs.saveUser(name, email) }
     }
@@ -464,6 +463,9 @@ class HomeViewModel(
             currentNoteText.value = noteText
         }
     }
+
+    // FIXED: DELETED toggleHighlight() - dead code, nothing called it, and .first() on Flow could hang.
+    // Use saveHighlight() / removeHighlight() below.
 
     fun saveHighlight(color: Color) {
         val verseNum = selectedVerse.value ?: return
