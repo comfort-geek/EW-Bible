@@ -103,63 +103,82 @@ class HomeViewModel(
 
     val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
 
+    // FIXED: Split into 4 small combines - old code had 22 flows in one combine, max is 20
+    private data class ReadingState(
+        val books: List<BookEntity>,
+        val verses: List<VerseEntity>,
+        val highlights: Map<Int, Color>,
+        val notes: List<NoteEntity>,
+        val currentBookId: Int
+    )
+    private data class NavState(
+        val selectedBook: String,
+        val selectedChapter: Int,
+        val selectedVerse: Int?,
+        val selectedTab: String,
+        val commentaryHtml: String,
+        val showNoteDialog: Boolean,
+        val currentNoteText: String
+    )
+    private data class ContentState(
+        val commentaryError: Boolean,
+        val summary: SummaryEntity?,
+        val chapterCounts: Map<Int, Int>,
+        val searchResults: List<VerseSearchResult>,
+        val dailyVerse: String,
+        val scrollRestoreKey: Int
+    )
+    private data class SettingsState(
+        val darkMode: Boolean?,
+        val fontSize: Float,
+        val userName: String,
+        val userEmail: String
+    )
+
+    private val readingState = combine(books, verses, highlights, notes, currentBookId) { b, v, h, n, id ->
+        ReadingState(b, v, h, n, id)
+    }
+    private val navState = combine(selectedBook, selectedChapter, selectedVerse, selectedTab, commentary, showNoteDialog, currentNoteText) { b, c, v, t, comm, show, note ->
+        NavState(b, c, v, t, comm, show, note)
+    }
+    private val contentState = combine(commentaryError, summaryState, chapterCounts, searchResults, dailyVerse, scrollRestoreKey) { err, sum, counts, search, daily, key ->
+        ContentState(err, sum, counts, search, daily, key)
+    }
+    private val settingsState = combine(prefs.isDarkMode, prefs.fontSize, prefs.userName, prefs.userEmail) { dark, font, name, email ->
+        SettingsState(dark, font, name, email)
+    }
+
     val uiState: StateFlow<HomeUiState> = combine(
-        books, verses, highlights, notes, currentBookId,
-        selectedBook, selectedChapter, selectedVerse, selectedTab,
-        commentary, commentaryError, summaryState, chapterCounts,
-        searchResults, dailyVerse, scrollRestoreKey,
-        showNoteDialog, currentNoteText,
-        prefs.isDarkMode, prefs.fontSize, prefs.userName, prefs.userEmail
-    ) { args ->
-        @Suppress("UNCHECKED_CAST")
-        val books = args[0] as List<BookEntity>
-        val verses = args[1] as List<VerseEntity>
-        val highlights = args[2] as Map<Int, Color>
-        val notes = args[3] as List<NoteEntity>
-        val bookId = args[4] as Int
-        val selBook = args[5] as String
-        val selChapter = args[6] as Int
-        val selVerse = args[7] as Int?
-        val selTab = args[8] as String
-        val comm = args[9] as String
-        val commErr = args[10] as Boolean
-        val summary = args[11] as SummaryEntity?
-        val counts = args[12] as Map<Int, Int>
-        val searchRes = args[13] as List<VerseSearchResult>
-        val daily = args[14] as String
-        val restoreKey = args[15] as Int
-        val showNote = args[16] as Boolean
-        val noteText = args[17] as String
-        val dark = args[18] as Boolean?
-        val font = args[19] as Float
-        val uName = args[20] as String
-        val uEmail = args[21] as String
+        readingState, navState, contentState, settingsState
+    ) { reading, nav, content, settings ->
         HomeUiState(
-            books = books,
-            verses = verses,
-            highlights = highlights,
-            notes = notes,
-            currentBookId = bookId,
-            currentBook = selBook,
-            selectedBook = selBook,
-            selectedChapter = selChapter,
-            selectedVerse = selVerse,
-            selectedTab = selTab,
-            commentaryHtml = comm,
-            commentaryError = commErr,
-            summary = summary,
-            summaryText = summary?.summaryText ?: summary?.text ?: "",
-            chapterCounts = counts,
-            searchResults = searchRes,
-            dailyVerse = daily,
-            darkMode = dark,
-            fontSize = font,
-            userName = uName,
-            userEmail = uEmail,
-            isLoggedIn = uName != "Guest" && uEmail.isNotBlank(),
-            scrollRestoreKey = restoreKey,
-            showNoteDialog = showNote,
-            currentNoteText = noteText
+            books = reading.books,
+            verses = reading.verses,
+            highlights = reading.highlights,
+            notes = reading.notes,
+            currentBookId = reading.currentBookId,
+            currentBook = nav.selectedBook,
+            selectedBook = nav.selectedBook,
+            selectedChapter = nav.selectedChapter,
+            selectedVerse = nav.selectedVerse,
+            selectedTab = nav.selectedTab,
+            commentaryHtml = nav.commentaryHtml,
+            commentaryError = content.commentaryError,
+            summary = content.summary,
+            // FIXED: Was summary?.summaryText ?: summary?.text - neither exists
+            // Real fields are summary / whatHappened / application
+            summaryText = content.summary?.summary ?: "",
+            chapterCounts = content.chapterCounts,
+            searchResults = content.searchResults,
+            dailyVerse = content.dailyVerse,
+            darkMode = settings.darkMode,
+            fontSize = settings.fontSize,
+            userName = settings.userName,
+            userEmail = settings.userEmail,
+            isLoggedIn = settings.userName != "Guest" && settings.userEmail.isNotBlank(),
+            scrollRestoreKey = content.scrollRestoreKey,
+            showNoteDialog = nav.showNoteDialog,
+            currentNoteText = nav.currentNoteText
         )
     }.stateIn(
         scope = viewModelScope,
@@ -222,7 +241,6 @@ class HomeViewModel(
         saveReadingProgress()
     }
 
-    // FIXED: Added - HomeScreen chapter +/- buttons call these
     fun previousChapter() {
         if (selectedChapter.value > 1) selectChapter(selectedChapter.value - 1)
     }
@@ -234,7 +252,6 @@ class HomeViewModel(
 
     fun selectVerse(verse: Int?) {
         selectedVerse.value = verse
-        // Load existing note text for this verse so dialog shows it
         if (verse != null) {
             viewModelScope.launch {
                 val note = dao.getNoteAtVerse(currentBookId.value, selectedChapter.value, verse)
@@ -243,7 +260,6 @@ class HomeViewModel(
         }
     }
 
-    // FIXED: Added - HomeScreen calls this to clear selection
     fun clearSelection() {
         selectedVerse.value = null
     }
@@ -263,7 +279,6 @@ class HomeViewModel(
         }
     }
 
-    // FIXED: Added - HomeScreen Search tab calls this directly
     fun searchVerses(query: String) {
         searchQuery.value = query
     }
@@ -353,7 +368,6 @@ class HomeViewModel(
         }
     }
 
-    // FIXED: Added - Note dialog controls
     fun showNoteDialog() {
         if (selectedVerse.value == null) return
         showNoteDialog.value = true
@@ -379,7 +393,6 @@ class HomeViewModel(
         }
     }
 
-    // FIXED: Added - HomeScreen Highlight button calls this (toggle)
     fun toggleHighlight() {
         val verseNum = selectedVerse.value ?: return
         viewModelScope.launch {
