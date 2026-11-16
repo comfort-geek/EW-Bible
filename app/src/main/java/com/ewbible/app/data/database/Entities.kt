@@ -8,8 +8,7 @@ import androidx.room.PrimaryKey
 data class BookEntity(
     @PrimaryKey @ColumnInfo(name = "id") val id: Int,
     @ColumnInfo(name = "key") val key: String,
-    @ColumnInfo(name = "name") val name: String,
-    @ColumnInfo(name = "testament") val testament: String
+    @ColumnInfo(name = "name") val name: String
 )
 
 @Entity(tableName = "verses", primaryKeys = ["book_id", "chapter", "verse"])
@@ -37,22 +36,15 @@ data class CommentaryEntity(
 ) {
     fun getHtml(): String {
         if (htmlCompressed.isEmpty()) return ""
-
-        // 1. Try ZLIB - DB verified in Pydroid: ZLIB (x DA), NOT GZIP, NOT raw deflate
         try {
-            val inflater = java.util.zip.Inflater() // nowrap=false = ZLIB
+            val inflater = java.util.zip.Inflater()
             try {
                 inflater.setInput(htmlCompressed)
                 val out = java.io.ByteArrayOutputStream()
                 val buf = ByteArray(4096)
                 while (!inflater.finished()) {
                     val n = inflater.inflate(buf)
-                    if (n == 0) {
-                        // Needs more input or corrupt - break, don't infinite loop
-                        if (inflater.needsInput()) break
-                        if (inflater.needsDictionary()) break
-                        break
-                    }
+                    if (n == 0) break
                     out.write(buf, 0, n)
                 }
                 val text = out.toString(Charsets.UTF_8)
@@ -61,8 +53,6 @@ data class CommentaryEntity(
                 inflater.end()
             }
         } catch (e: Exception) { }
-
-        // 2. Fallback: GZIP
         try {
             val gzip = java.util.zip.GZIPInputStream(htmlCompressed.inputStream())
             val out = java.io.ByteArrayOutputStream()
@@ -75,8 +65,6 @@ data class CommentaryEntity(
             val text = out.toString(Charsets.UTF_8)
             if (text.isNotBlank()) return text
         } catch (e: Exception) { }
-
-        // 3. Fallback: Plain HTML
         try {
             return htmlCompressed.toString(Charsets.UTF_8)
         } catch (e: Exception) { return "" }
