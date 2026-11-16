@@ -198,6 +198,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     )
                     "Open EW" -> OpenEWContent(
                         commentaryHtml = state.commentaryHtml,
+                        summaryText = state.summaryText, // FIXED: Pass summary for italic display
                         fontSize = state.fontSize,
                         textColor = textColor,
                         secondaryText = textColor.copy(alpha = 0.6f),
