@@ -1,5 +1,6 @@
 package com.ewbible.app.data.database
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -13,7 +14,7 @@ data class BookEntity(
 
 @Entity(tableName = "verses", primaryKeys = ["bookId", "chapter", "verse"])
 data class VerseEntity(
-    val bookId: Int,
+    @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
     val verse: Int,
     val text: String
@@ -21,49 +22,47 @@ data class VerseEntity(
 
 @Entity(tableName = "summaries", primaryKeys = ["bookId", "chapter"])
 data class SummaryEntity(
-    val bookId: Int,
+    @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
     val summary: String,
-    val whatHappened: String,
+    @ColumnInfo(name = "what_happened") val whatHappened: String,
     val application: String
 )
 
 @Entity(tableName = "commentary", primaryKeys = ["bookId", "chapter"])
 data class CommentaryEntity(
-    val bookId: Int,
+    @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
-    val html: String = "",
-    val text: String = ""
+    @ColumnInfo(name = "html_compressed") val htmlCompressed: ByteArray? = null
 ) {
-    fun getHtml(): String = html.ifBlank { text }
+    // Equals/hashCode for ByteArray - Room needs this or it warns
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is CommentaryEntity) return false
+        return bookId == other.bookId && chapter == other.chapter &&
+            (htmlCompressed?.contentEquals(other.htmlCompressed) ?: (other.htmlCompressed == null))
+    }
+    override fun hashCode(): Int {
+        var r = bookId
+        r = 31 * r + chapter
+        r = 31 * r + (htmlCompressed?.contentHashCode() ?: 0)
+        return r
+    }
 }
 
 @Entity(tableName = "notes", primaryKeys = ["bookId", "chapter", "verse"])
 data class NoteEntity(
-    val bookId: Int,
+    @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
     val verse: Int,
-    val noteText: String,
+    @ColumnInfo(name = "note_text") val noteText: String,
     val timestamp: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "highlights", primaryKeys = ["bookId", "chapter", "verse"])
 data class HighlightEntity(
-    val bookId: Int,
+    @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
     val verse: Int,
     val color: String
-)
-
-data class VerseSearchResult(
-    val bookId: Int,
-    val bookName: String,
-    val chapter: Int,
-    val verse: Int,
-    val text: String
-)
-
-data class ChapterCountResult(
-    val bookId: Int,
-    val chapterCount: Int
 )
