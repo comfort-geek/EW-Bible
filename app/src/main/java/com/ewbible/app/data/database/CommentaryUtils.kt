@@ -1,20 +1,31 @@
 package com.ewbible.app.data.database
 
 import java.io.ByteArrayInputStream
-import java.util.zip.InflaterInputStream
+import java.io.ByteArrayOutputStream
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
 
 object CommentaryUtils {
-    fun decompress(bytes: ByteArray?): String {
-        if (bytes.isNullOrEmpty()) return ""
-        return runCatching {
-            // ZLIB - first bytes 0x78 0xDA in your dump
-            // DO NOT use GZIPInputStream here, it will throw "Not a gzipped file"
-            InflaterInputStream(ByteArrayInputStream(bytes)).use {
-                it.readBytes().toString(Charsets.UTF_8)
+
+    fun compressHtml(html: String): ByteArray {
+        val out = ByteArrayOutputStream()
+        GZIPOutputStream(out).use { it.write(html.toByteArray(Charsets.UTF_8)) }
+        return out.toByteArray()
+    }
+
+    fun decompressHtml(compressed: ByteArray?): String {
+        // FIXED: ByteArray has no isNullOrEmpty(), use == null || isEmpty()
+        if (compressed == null || compressed.isEmpty()) return ""
+        return try {
+            GZIPInputStream(ByteArrayInputStream(compressed)).use { gzip ->
+                gzip.readBytes().toString(Charsets.UTF_8)
             }
-        }.getOrElse {
-            // Fallback: if some rows are plain text, show them as-is
-            runCatching { bytes.toString(Charsets.UTF_8) }.getOrDefault("")
+        } catch (e: Exception) {
+            ""
         }
     }
+
+    // Aliases in case other files call these shorter names
+    fun compress(html: String): ByteArray = compressHtml(html)
+    fun decompress(compressed: ByteArray?): String = decompressHtml(compressed)
 }
