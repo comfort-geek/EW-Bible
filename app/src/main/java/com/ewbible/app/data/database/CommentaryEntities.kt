@@ -12,7 +12,7 @@ data class BookEntity(
     val testament: String = "OT"
 )
 
-@Entity(tableName = "verses", primaryKeys = ["bookId", "chapter", "verse"])
+@Entity(tableName = "verses", primaryKeys = ["book_id", "chapter", "verse"])
 data class VerseEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
@@ -20,7 +20,7 @@ data class VerseEntity(
     val text: String
 )
 
-@Entity(tableName = "summaries", primaryKeys = ["bookId", "chapter"])
+@Entity(tableName = "summaries", primaryKeys = ["book_id", "chapter"])
 data class SummaryEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
@@ -29,7 +29,7 @@ data class SummaryEntity(
     val application: String
 )
 
-@Entity(tableName = "commentary", primaryKeys = ["bookId", "chapter"])
+@Entity(tableName = "commentary", primaryKeys = ["book_id", "chapter"])
 data class CommentaryEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
@@ -50,7 +50,7 @@ data class CommentaryEntity(
     }
 }
 
-@Entity(tableName = "notes", primaryKeys = ["bookId", "chapter", "verse"])
+@Entity(tableName = "notes", primaryKeys = ["book_id", "chapter", "verse"])
 data class NoteEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
@@ -59,7 +59,7 @@ data class NoteEntity(
     val timestamp: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "highlights", primaryKeys = ["bookId", "chapter", "verse"])
+@Entity(tableName = "highlights", primaryKeys = ["book_id", "chapter", "verse"])
 data class HighlightEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
