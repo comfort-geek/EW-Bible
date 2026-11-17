@@ -2,7 +2,6 @@ package com.ewbible.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -32,7 +31,6 @@ import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.database.SummaryEntity
 import com.ewbible.app.data.database.VerseEntity
 
-// OVERLOAD - keeps old callers working, converts name -> ID once
 @Composable
 fun BibleContent(
     selectedBook: String,
@@ -64,7 +62,6 @@ fun BibleContent(
     )
 }
 
-// PRIMARY - ID is source of truth, name only for display
 @Composable
 fun BibleContent(
     selectedBookId: Int,
@@ -81,11 +78,6 @@ fun BibleContent(
     onVerseLongClick: (Int) -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
-
-    // WIRED: Name always from Catalog, never from DB string, never from caller string
-    // ID 1 = Genesis, 19 = Psalms, 43 = John, 66 = Revelation - matches your DB exactly
-    val selectedBookName = BookCatalog.name(selectedBookId)
-
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
@@ -113,7 +105,6 @@ fun BibleContent(
                 Spacer(modifier = Modifier.height(0.dp))
             }
         }
-
         itemsIndexed(
             versesList,
             key = { _, verse -> "${verse.bookId}-${verse.chapter}-${verse.verse}" }
