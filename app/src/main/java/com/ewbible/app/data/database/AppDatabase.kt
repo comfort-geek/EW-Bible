@@ -47,7 +47,7 @@ abstract class AppDatabase : RoomDatabase() {
 
                         // 2. Delete old DB so createFromAsset copies the new one
                         appContext.deleteDatabase(DB_NAME)
-                        prefs.edit().putInt(KEY_ASSET_VERSION, ASSET_DB_VERSION).apply()
+                        // FIXED: do NOT save prefs here - save only after verified copy
                         INSTANCE = null
                     }
 
@@ -57,12 +57,25 @@ abstract class AppDatabase : RoomDatabase() {
                         DB_NAME
                     )
                         .createFromAsset("ewbible.db")
-                        .fallbackToDestructiveMigration()
+                        // FIXED: removed fallbackToDestructiveMigration() - it wiped the prepopulated DB
                         .build()
 
-                    // 3. Restore user data synchronously, before UI reads it
-                    if (needsAssetUpdate && (notesBackup.isNotEmpty() || highlightsBackup.isNotEmpty())) {
-                        restoreUserData(instance, notesBackup, highlightsBackup)
+                    // 3. Verify copy + restore user data, then mark as done
+                    if (needsAssetUpdate) {
+                        val count = runCatching {
+                            val c = instance.openHelper.readableDatabase
+                                .query("SELECT COUNT(*) FROM verses")
+                            c.use { if (it.moveToFirst()) it.getLong(0) else 0L }
+                        }.getOrDefault(0L)
+                        android.util.Log.e("AppDatabase", "verses after copy = $count")
+                        if (count > 0) {
+                            if (notesBackup.isNotEmpty() || highlightsBackup.isNotEmpty()) {
+                                restoreUserData(instance, notesBackup, highlightsBackup)
+                            }
+                            prefs.edit().putInt(KEY_ASSET_VERSION, ASSET_DB_VERSION).apply()
+                        } else {
+                            android.util.Log.e("AppDatabase", "Asset copy has 0 verses! Check schema + user_version = 3")
+                        }
                     }
 
                     INSTANCE = instance
