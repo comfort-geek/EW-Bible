@@ -76,8 +76,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         hasRestoredScroll = true
     }
 
-    // FIXED: When book/chapter changes via swipe or drawer, go back to top.
-    // Before, you swiped to James 2 but stayed scrolled halfway down James 1.
     LaunchedEffect(currentBookId, state.selectedChapter) {
         if (hasRestoredScroll) {
             runCatching { listState.scrollToItem(0) }
@@ -92,8 +90,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     }
     fun openBook(bookName: String, chapter: Int) { openBook(BookCatalog.id(bookName), chapter) }
 
-    // FIXED: This is the ONLY swipe handler. Do NOT also swipe inside BibleContent.
-    // PointerEventPass.Initial = observe only, don't consume, so vertical scroll still works.
     val swipeModifier = Modifier.pointerInput(currentBookId, state.selectedChapter, state.selectedTab) {
         awaitPointerEventScope {
             var downX = 0f; var downY = 0f; var tracking = false
@@ -115,6 +111,21 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
             }
         }
+    }
+
+    // FIX B: Don't show Genesis 1 while restoring. Wait until ViewModel has restored Matthew 1.
+    if (!state.isReadingRestored) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(background),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator(color = gold)
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("Loading...", color = textColor)
+            }
+        }
+        return
     }
 
     ModalNavigationDrawer(
@@ -158,8 +169,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         versesList = state.verses, currentHighlightMap = state.highlights, fontSize = state.fontSize,
                         gold = gold, panel = panel, textColor = textColor, listState = listState,
                         onVerseClick = { viewModel.selectVerse(it) }, onVerseLongClick = { viewModel.selectVerse(it) }
-                        // NOTE: No onPreviousChapter / onNextChapter here — swipe is handled by HomeScreen above.
-                        // Do NOT add swipe inside BibleContent or it will double-fire.
                     )
                     "Open EW" -> OpenEWContent(
                         commentaryHtml = state.commentaryHtml, summaryText = state.summaryText, fontSize = state.fontSize,
