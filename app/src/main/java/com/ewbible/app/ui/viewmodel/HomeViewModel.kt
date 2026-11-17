@@ -55,7 +55,8 @@ class HomeViewModel(
     private val prefs: AppPreferences
 ) : ViewModel() {
 
-    private val selectedBook = MutableStateFlow("Genesis")
+    // WIRED: ID is source of truth. Never resolve ID from DB books by name again.
+    private val selectedBookId = MutableStateFlow(1)
     private val selectedChapter = MutableStateFlow(1)
     private val selectedVerse = MutableStateFlow<Int?>(null)
     private val selectedTab = MutableStateFlow("Bible")
@@ -76,21 +77,14 @@ class HomeViewModel(
 
     private var commentaryJob: Job? = null
 
-    val books: Flow<List<BookEntity>> = dao.getAllBooks()
+    // Books for Drawer - now from Catalog, not DB. Drawer works even if DB books wiped.
+    val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
 
-    val currentBookId: StateFlow<Int> = combine(
-        books,
-        selectedBook
-    ) { bookList, bookName ->
-        bookList.firstOrNull {
-            it.name.equals(bookName, ignoreCase = true) ||
-                it.key.equals(bookName, ignoreCase = true)
-        }?.id ?: bookList.firstOrNull()?.id ?: 1
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.Eagerly,
-        initialValue = 1
-    )
+    // WIRED: Direct StateFlow, no combine(books, name) lookup
+    val currentBookId: StateFlow<Int> = selectedBookId.asStateFlow()
+
+    // WIRED: Name always derived from Catalog ID
+    private val selectedBookName: Flow<String> = selectedBookId.map { BookCatalog.name(it) }
 
     val verses: Flow<List<VerseEntity>> = currentBookId
         .flatMapLatest { bookId ->
@@ -157,7 +151,7 @@ class HomeViewModel(
         )
     }
     @Suppress("UNCHECKED_CAST")
-    private val navState = combine(selectedBook, selectedChapter, selectedVerse, selectedTab, commentary, showNoteDialog, currentNoteText, linkedVerseText, linkedVerseRef) { args ->
+    private val navState = combine(selectedBookName, selectedChapter, selectedVerse, selectedTab, commentary, showNoteDialog, currentNoteText, linkedVerseText, linkedVerseRef) { args ->
         NavState(
             args[0] as String,
             args[1] as Int,
@@ -276,17 +270,20 @@ class HomeViewModel(
                     }
                 }
         }
-        // WIRED: loadDailyVerse() already launches internally, call it directly
         loadDailyVerse()
     }
 
-    fun selectBook(bookName: String) {
-        selectedBook.value = bookName
+    // WIRED: Primary - ID version. Use this everywhere new.
+    fun selectBook(bookId: Int) {
+        selectedBookId.value = bookId.coerceIn(1, 66)
         selectedChapter.value = 1
         selectedVerse.value = null
         scrollRestoreKey.update { it + 1 }
         saveReadingProgress()
     }
+
+    // Back-compat: old callers passing "John" still work, converted once via Catalog
+    fun selectBook(bookName: String) = selectBook(BookCatalog.id(bookName))
 
     fun selectChapter(chapter: Int) {
         selectedChapter.value = chapter
@@ -322,13 +319,17 @@ class HomeViewModel(
         selectedVerse.value = null
     }
 
-    fun openBook(bookName: String, chapter: Int) {
-        selectedBook.value = bookName
+    // WIRED: Primary - ID version
+    fun openBook(bookId: Int, chapter: Int) {
+        selectedBookId.value = bookId.coerceIn(1, 66)
         selectedChapter.value = chapter
         selectedVerse.value = null
         scrollRestoreKey.update { it + 1 }
         saveReadingProgress()
     }
+
+    // Back-compat
+    fun openBook(bookName: String, chapter: Int) = openBook(BookCatalog.id(bookName), chapter)
 
     fun selectTab(tab: String) {
         selectedTab.value = tab
@@ -380,10 +381,9 @@ class HomeViewModel(
     private suspend fun restoreSavedReading() {
         val lastBookId = prefs.getLastBookId()
         val lastChapter = prefs.getLastChapter()
-        val allBooks = dao.getAllBooksSync()
-        val book = allBooks.firstOrNull { it.id == lastBookId }
-        if (book != null) {
-            selectedBook.value = book.name
+        // WIRED: Validate ID only, no DB name lookup. 1-66 = your JOIN test, 0 orphans.
+        if (lastBookId in 1..66) {
+            selectedBookId.value = lastBookId
             selectedChapter.value = lastChapter
         }
     }
@@ -398,16 +398,13 @@ class HomeViewModel(
         loadSummary(currentBookId.value, selectedChapter.value)
     }
 
-    // FIXED: Load verse for bottom sheet
+    // WIRED: Linked verse now uses Catalog ID, not DB books lookup
     fun loadLinkedVerse(bookName: String, chapter: Int, verse: Int) {
         viewModelScope.launch {
-            linkedVerseRef.value = "$bookName $chapter:$verse"
+            val bookId = BookCatalog.id(bookName)
+            linkedVerseRef.value = "${BookCatalog.name(bookId)} $chapter:$verse"
             linkedVerseText.value = "Loading..."
             runCatching {
-                val allBooks = try { books.first() } catch (e: Exception) { dao.getAllBooksSync() }
-                val bookId = allBooks.firstOrNull {
-                    it.name.equals(bookName, ignoreCase = true) || it.key.equals(bookName, ignoreCase = true)
-                }?.id ?: currentBookId.value
                 val versesList = dao.getVerses(bookId, chapter).first()
                 val found = versesList.firstOrNull { it.verse == verse }
                 linkedVerseText.value = found?.text ?: "Verse not found."
@@ -417,6 +414,7 @@ class HomeViewModel(
         }
     }
 
+    // WIRED: Bible + Commentary use SAME ID. bookId 43 = John in both tables.
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
@@ -426,7 +424,7 @@ class HomeViewModel(
                 val html = withContext(Dispatchers.IO) {
                     val comm = dao.getCommentary(bookId, chapter)
                     if (comm == null) {
-                        Log.e("HomeViewModel", "getCommentary returned NULL book=$bookId ch=$chapter - no row in DB")
+                        Log.e("HomeViewModel", "getCommentary returned NULL book=$bookId (${BookCatalog.name(bookId)}) ch=$chapter - no row in DB")
                         return@withContext null
                     }
                     try {
@@ -457,8 +455,6 @@ class HomeViewModel(
         loadCommentary(currentBookId.value, selectedChapter.value)
     }
 
-    // WIRED CORRECTLY: Public, not suspend, launches internally
-    // HomeScreen calls this every open -> new random verse every open
     fun loadDailyVerse() {
         viewModelScope.launch {
             runCatching {
