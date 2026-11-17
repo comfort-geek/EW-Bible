@@ -81,43 +81,22 @@ fun BibleContent(
 ) {
     val haptic = LocalHapticFeedback.current
 
-    // FIXED: Single source of truth via Catalog — HomeScreen passes id, we never trust raw values
     val safeBookId = selectedBookId.coerceIn(1, 66)
     val bookName = BookCatalog.name(safeBookId)
     val maxChapter = BookCatalog.chapters(safeBookId)
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
 
-    // NOTE: NO swipe here. Swipe lives ONLY in HomeScreen (swipeModifier on the outer Box).
-    // Adding swipe here would double-fire nextChapter() / previousChapter().
+    // NOTE: NO swipe here. Swipe lives ONLY in HomeScreen.
+
+    // FIXED: REMOVED ONLY the duplicate header.
+    // HomeScreen already shows "Matthew 1" at the top.
+    // Summary is KEPT here in Bible tab, and also KEPT in Open EW tab.
 
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
         contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
     ) {
-        // FIXED: Header was missing — HomeScreen already shows "James 1" at top,
-        // this is inside the list so it scrolls away correctly and always matches Catalog
-        item(key = "header-$safeBookId-$safeChapter") {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = bookName,
-                    color = textColor,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp,
-                    textAlign = TextAlign.Center
-                )
-                Text(
-                    text = "Chapter $safeChapter of $maxChapter",
-                    color = gold,
-                    fontSize = 14.sp,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-
         item(key = "summary-$safeBookId-$safeChapter") {
             if (summary != null) {
                 Card(
@@ -139,7 +118,6 @@ fun BibleContent(
             }
         }
 
-        // FIXED: Empty state — before it showed blank if verses didn't load
         if (versesList.isEmpty()) {
             item(key = "empty-$safeBookId-$safeChapter") {
                 Text(
