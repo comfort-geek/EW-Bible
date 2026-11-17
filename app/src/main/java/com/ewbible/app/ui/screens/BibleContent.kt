@@ -28,9 +28,11 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.database.SummaryEntity
 import com.ewbible.app.data.database.VerseEntity
 
+// OVERLOAD - keeps old callers working, converts name -> ID once
 @Composable
 fun BibleContent(
     selectedBook: String,
@@ -46,19 +48,50 @@ fun BibleContent(
     onVerseClick: (Int) -> Unit,
     onVerseLongClick: (Int) -> Unit,
 ) {
+    BibleContent(
+        selectedBookId = BookCatalog.id(selectedBook),
+        selectedChapter = selectedChapter,
+        summary = summary,
+        versesList = versesList,
+        currentHighlightMap = currentHighlightMap,
+        fontSize = fontSize,
+        gold = gold,
+        panel = panel,
+        textColor = textColor,
+        listState = listState,
+        onVerseClick = onVerseClick,
+        onVerseLongClick = onVerseLongClick
+    )
+}
+
+// PRIMARY - ID is source of truth, name only for display
+@Composable
+fun BibleContent(
+    selectedBookId: Int,
+    selectedChapter: Int,
+    summary: SummaryEntity?,
+    versesList: List<VerseEntity>,
+    currentHighlightMap: Map<Int, Color>,
+    fontSize: Float,
+    gold: Color,
+    panel: Color,
+    textColor: Color,
+    listState: LazyListState,
+    onVerseClick: (Int) -> Unit,
+    onVerseLongClick: (Int) -> Unit,
+) {
     val haptic = LocalHapticFeedback.current
 
-    // FIXED: No Column + no duplicate title here.
-    // HomeScreen already shows "John 4". This file shows ONLY the list.
+    // WIRED: Name always from Catalog, never from DB string, never from caller string
+    // ID 1 = Genesis, 19 = Psalms, 43 = John, 66 = Revelation - matches your DB exactly
+    val selectedBookName = BookCatalog.name(selectedBookId)
+
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
         contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
     ) {
-        // FIXED SHAKING CAUSE A: Always reserve the summary slot.
-        // Before: summary was null -> no item, then summary arrived -> whole list jumped down.
-        // Now: same slot exists from the start, we just fill it in. No jump.
-        item(key = "summary-$selectedBook-$selectedChapter") {
+        item(key = "summary-$selectedBookId-$selectedChapter") {
             if (summary != null) {
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
@@ -77,13 +110,10 @@ fun BibleContent(
                     }
                 }
             } else {
-                // Placeholder keeps layout stable while summary loads - no jump
                 Spacer(modifier = Modifier.height(0.dp))
             }
         }
 
-        // FIXED SHAKING CAUSE C: Stable key with book + chapter + verse
-        // Before: key = verse only, so John 4:10 and John 5:10 looked identical to LazyColumn
         itemsIndexed(
             versesList,
             key = { _, verse -> "${verse.bookId}-${verse.chapter}-${verse.verse}" }
@@ -111,8 +141,6 @@ fun BibleContent(
                     fontSize = fontSize.sp,
                     modifier = Modifier.width(32.dp),
                 )
-                // FIXED SHAKING CAUSE B: weight(1f) so text width is fixed.
-                // Before: no weight, so highlighting verse 10 re-measured the row and shook rows below.
                 Text(
                     verse.text,
                     color = textColor,
