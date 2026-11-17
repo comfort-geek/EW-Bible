@@ -1,6 +1,7 @@
 package com.ewbible.app.ui.screens
 
 import android.graphics.Color as AndroidColor
+import android.view.MotionEvent
 import android.view.View
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -30,14 +31,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.ewbible.app.data.database.BookCatalog
 import java.net.URLDecoder
 import java.net.URLEncoder
+import kotlin.math.abs
 
 @Composable
 fun OpenEWContent(
     commentaryHtml: String,
-    summaryText: String = "",
     fontSize: Float,
     textColor: Color,
-    secondaryText: Color,
     hasError: Boolean = false,
     isLoading: Boolean = false,
     bookName: String = "",
@@ -62,34 +62,14 @@ fun OpenEWContent(
         }.getOrDefault("")
     }
 
-    // FIX SUMMARY - THIS IS THE PART MISSING IN YOUR PASTE:
-    // Strip the italic summary that is embedded INSIDE the commentary HTML
-    val linkedHtml = remember(renderedHtml, bookName, summaryText) {
-        var cleaned = renderedHtml
-        if (summaryText.isNotBlank()) {
-            val summaryNorm = summaryText.trim().replace(Regex("\\s+"), " ").take(80)
-            if (summaryNorm.isNotBlank()) {
-                val italicPara = Regex(
-                    """<p[^>]*>\s*<i[^>]*>.*?${Regex.escape(summaryNorm)}.*?</i>\s*</p>\s*(<hr[^>]*>)?""",
-                    RegexOption.DOT_MATCHES_ALL
-                )
-                val afterItalic = italicPara.replaceFirst(cleaned, "")
-                if (afterItalic != cleaned) {
-                    cleaned = afterItalic
-                } else {
-                    val emPara = Regex(
-                        """<p[^>]*>\s*<em[^>]*>.*?${Regex.escape(summaryNorm)}.*?</em>\s*</p>\s*(<hr[^>]*>)?""",
-                        RegexOption.DOT_MATCHES_ALL
-                    )
-                    cleaned = emPara.replaceFirst(cleaned, "")
-                }
-            }
-        }
-        linkifyVerses(cleaned, bookName)
+    // NO SUMMARY - removed completely. No summaryText, no strip regex.
+    val linkedHtml = remember(renderedHtml, bookName) {
+        linkifyVerses(renderedHtml, bookName)
     }
 
     val textColorCss = "#%06X".format(0xFFFFFF and textColor.toArgb())
-    val secondaryColorCss = "#%06X".format(0xFFFFFF and secondaryText.toArgb())
+    // secondaryText removed - use dimmed textColor instead
+    val secondaryColorCss = "#%06X".format(0xFFFFFF and textColor.copy(alpha = 0.6f).toArgb())
 
     val html = remember(linkedHtml, textColorCss, secondaryColorCss, fontSize) {
         """
@@ -113,7 +93,7 @@ fun OpenEWContent(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(color = Color(0xFFC9A227))
                 Spacer(modifier = Modifier.height(12.dp))
-                Text("Loading commentary...", color = secondaryText, fontSize = 14.sp)
+                Text("Loading commentary...", color = textColor.copy(alpha = 0.6f), fontSize = 14.sp)
             }
         }
         return
@@ -123,7 +103,7 @@ fun OpenEWContent(
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
             Text(
                 text = "Could not load commentary. Please try again.",
-                color = secondaryText,
+                color = textColor.copy(alpha = 0.6f),
                 fontSize = fontSize.sp,
                 lineHeight = (fontSize + 8).sp
             )
@@ -172,6 +152,26 @@ fun OpenEWContent(
                         return false
                     }
                     override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {}
+                }
+                // SWIPE ONLY HERE - for Open EW. HomeScreen does NOT swipe Open EW, so no fight.
+                var downX = 0f
+                var downY = 0f
+                setOnTouchListener { _, event ->
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            downX = event.x
+                            downY = event.y
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            val dx = event.x - downX
+                            val dy = event.y - downY
+                            if (abs(dx) > 150 && abs(dx) > abs(dy) * 1.5f) {
+                                if (dx < 0) onNextChapter() else onPreviousChapter()
+                                return@setOnTouchListener true
+                            }
+                        }
+                    }
+                    false
                 }
             }
         },
