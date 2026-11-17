@@ -247,12 +247,12 @@ class HomeViewModel(
             commentary.value = ""
             try {
                 val html = withContext(Dispatchers.IO) {
-                    val comm = dao.getCommentary(bookId, chapter)
-                    if (comm == null) {
-                        Log.e("HomeViewModel", "getCommentary NULL book=$bookId (${BookCatalog.name(bookId)}) ch=$chapter")
+                    val compressed = dao.getCommentaryCompressed(bookId, chapter)
+                    if (compressed == null) {
+                        Log.e("HomeViewModel", "getCommentaryCompressed NULL book=$bookId (${BookCatalog.name(bookId)}) ch=$chapter")
                         return@withContext null
                     }
-                    try { comm.getHtml() } catch (e: Exception) { Log.e("HomeViewModel", "getHtml failed book=$bookId ch=$chapter", e); null }
+                    CommentaryUtils.decompress(compressed)
                 }
                 if (html.isNullOrBlank()) { commentary.value = ""; commentaryError.value = true }
                 else { commentary.value = html; commentaryError.value = false }
