@@ -51,7 +51,7 @@ data class HomeUiState(
     val scrollRestoreKey: Int = 0,
     val showNoteDialog: Boolean = false,
     val currentNoteText: String = "",
-    // FIX B: True only after saved Matthew 1 is restored. HomeScreen waits for this.
+    // FIX B: true only AFTER saved Matthew 1 is restored. HomeScreen waits for this.
     val isReadingRestored: Boolean = false
 )
 
@@ -72,6 +72,7 @@ class HomeViewModel(
     private val commentary = MutableStateFlow("")
     private val commentaryError = MutableStateFlow(false)
     private val summaryState = MutableStateFlow<SummaryEntity?>(null)
+    private val isReadingRestored = MutableStateFlow(false)
     private val chapterCounts = MutableStateFlow<Map<Int, Int>>(
         BookCatalog.all.associate { it.id to it.chapters }
     )
@@ -80,8 +81,6 @@ class HomeViewModel(
     private val scrollRestoreKey = MutableStateFlow(0)
     private val linkedVerseText = MutableStateFlow("")
     private val linkedVerseRef = MutableStateFlow("")
-    // FIX B: starts false, becomes true after restoreSavedReading()
-    private val isReadingRestored = MutableStateFlow(false)
     private var commentaryJob: Job? = null
 
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
@@ -251,7 +250,7 @@ class HomeViewModel(
                 selectedChapter.value = lastChapter.coerceIn(1, BookCatalog.chapters(lastBookId))
             }
         } finally {
-            // FIX B: Only now is it safe to show the UI — no more Genesis 1 flash
+            // FIX B: Only now is it safe to show the UI. Before this, HomeScreen was showing Genesis 1.
             isReadingRestored.value = true
         }
     }
@@ -289,26 +288,15 @@ class HomeViewModel(
     }
     fun loadCommentary() { loadCommentary(currentBookId.value, selectedChapter.value) }
 
-    // FIX A: Try GZIP -> ZLIB -> Raw Deflate -> Plain text. Old code only tried GZIP.
+    // FIX A: Old code only tried GZIP, else dumped raw compressed bytes as text -> garbled.
+    // Now tries GZIP -> ZLIB -> Raw Deflate -> plain text.
     private fun decompressCommentary(bytes: ByteArray): String {
-        // 1. GZIP (1f 8b)
         runCatching {
             GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader(Charsets.UTF_8).use { it.readText() }
         }.onSuccess { if (it.isNotBlank()) return it }
 
-        // 2. ZLIB / Deflate (this is what your DB actually uses)
-        runCatching { inflate(bytes, nowrap = false) }.onSuccess { if (it.isNotBlank()) return it }
-
-        // 3. Raw Deflate (no header)
-        runCatching { inflate(bytes, nowrap = true) }.onSuccess { if (it.isNotBlank()) return it }
-
-        // 4. Plain text fallback
-        return String(bytes, Charsets.UTF_8)
-    }
-
-    private fun inflate(bytes: ByteArray, nowrap: Boolean): String {
-        val inflater = Inflater(nowrap)
-        try {
+        runCatching {
+            val inflater = Inflater()
             inflater.setInput(bytes)
             val out = ByteArrayOutputStream()
             val buf = ByteArray(4096)
@@ -317,10 +305,25 @@ class HomeViewModel(
                 if (n == 0) break
                 out.write(buf, 0, n)
             }
-            return out.toString(Charsets.UTF_8.name())
-        } finally {
             inflater.end()
-        }
+            out.toString(Charsets.UTF_8.name())
+        }.onSuccess { if (it.isNotBlank()) return it }
+
+        runCatching {
+            val inflater = Inflater(true)
+            inflater.setInput(bytes)
+            val out = ByteArrayOutputStream()
+            val buf = ByteArray(4096)
+            while (!inflater.finished()) {
+                val n = inflater.inflate(buf)
+                if (n == 0) break
+                out.write(buf, 0, n)
+            }
+            inflater.end()
+            out.toString(Charsets.UTF_8.name())
+        }.onSuccess { if (it.isNotBlank()) return it }
+
+        return String(bytes, Charsets.UTF_8)
     }
 
     fun loadDailyVerse() {
