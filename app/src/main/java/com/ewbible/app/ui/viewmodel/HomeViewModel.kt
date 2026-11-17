@@ -29,7 +29,7 @@ data class HomeUiState(
     val commentaryError: Boolean = false,
     val linkedVerseText: String = "",
     val linkedVerseRef: String = "",
-    val chapterCounts: Map<Int, Int> = emptyMap(),
+    val chapterCounts: Map<Int, Int> = BookCatalog.all.associate { it.id to it.chapters },
     val searchResults: List<VerseSearchResult> = emptyList(),
     val searchFilter: String = "All",
     val dailyVerse: String = "",
@@ -66,7 +66,6 @@ class HomeViewModel(
     private val commentary = MutableStateFlow("")
     private val commentaryError = MutableStateFlow(false)
     private val summaryState = MutableStateFlow<SummaryEntity?>(null)
-    // FIXED: Start from BookCatalog, never empty. DB is only an override later.
     private val chapterCounts = MutableStateFlow<Map<Int, Int>>(
         BookCatalog.all.associate { it.id to it.chapters }
     )
@@ -139,13 +138,14 @@ class HomeViewModel(
 
     init {
         viewModelScope.launch { restoreSavedReading() }
-        // FIXED: Don't overwrite Catalog with empty/wrong DB result.
-        // Merge DB on top of Catalog, only if it has sane values.
         viewModelScope.launch {
             runCatching {
                 val fromDb = dao.getChapterCounts().associate { it.bookId to it.chapterCount }
                 if (fromDb.isNotEmpty()) {
-                    chapterCounts.value = BookCatalog.all.associate { it.id to it.chapters } + fromDb.filterValues { it > 0 }
+                    val catalog = BookCatalog.all.associate { it.id to it.chapters }
+                    chapterCounts.value = catalog.mapValues { (id, catalogCount) ->
+                        maxOf(catalogCount, fromDb[id] ?: 0)
+                    }
                 }
             }.onFailure {
                 Log.e("HomeViewModel", "getChapterCounts failed, keeping BookCatalog counts", it)
@@ -185,7 +185,6 @@ class HomeViewModel(
         saveReadingProgress()
     }
     fun selectBook(bookName: String) = selectBook(BookCatalog.id(bookName))
-    // FIXED: Clamp to BookCatalog max, never go out of range
     fun selectChapter(chapter: Int) {
         val max = BookCatalog.chapters(currentBookId.value)
         selectedChapter.value = chapter.coerceIn(1, max)
@@ -194,7 +193,6 @@ class HomeViewModel(
         saveReadingProgress()
     }
     fun previousChapter() { if (selectedChapter.value > 1) selectChapter(selectedChapter.value - 1) }
-    // FIXED: Use BookCatalog, not nullable map
     fun nextChapter() {
         val max = BookCatalog.chapters(currentBookId.value)
         if (selectedChapter.value < max) selectChapter(selectedChapter.value + 1)
@@ -209,7 +207,6 @@ class HomeViewModel(
         }
     }
     fun clearSelection() { selectedVerse.value = null }
-    // FIXED: Clamp book + chapter
     fun openBook(bookId: Int, chapter: Int) {
         val safeId = bookId.coerceIn(1, 66)
         selectedBookId.value = safeId
@@ -235,7 +232,6 @@ class HomeViewModel(
             prefs.saveLastReading(bookId = currentBookId.value, chapter = selectedChapter.value, verse = verse?.verse ?: (selectedVerse.value ?: 1), scrollIndex = scrollIndex, scrollOffset = scrollOffset)
         }
     }
-    // FIXED: Clamp restored chapter to that book's max
     private suspend fun restoreSavedReading() {
         val lastBookId = prefs.getLastBookId()
         val lastChapter = prefs.getLastChapter()
