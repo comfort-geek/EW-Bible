@@ -130,6 +130,10 @@ fun HomeScreen(viewModel: HomeViewModel) {
 
     ModalNavigationDrawer(
         drawerState = drawerState,
+        // FIX OPEN EW: Drawer edge-swipe ONLY on Bible tab.
+        // On Open EW, WebView scroll was fighting drawer swipe.
+        // Drawer still opens via hamburger icon on all tabs.
+        gesturesEnabled = state.selectedTab == "Bible",
         drawerContent = {
             BookDrawer(
                 otBookEntities = state.books.filter { it.id <= 39 }.sortedBy { it.id },
@@ -159,11 +163,16 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
                 IconButton(onClick = { settingsOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Settings", tint = textColor) }
             }
-            if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") {
+            // FIX OPEN EW: Title ONLY on Bible tab.
+            // Open EW commentary already has its own heading "Hebrews 2 – Jesus, Our Elder Brother"
+            // Showing this too was the duplicate.
+            if (state.selectedTab == "Bible") {
                 Text(text = "$currentBookName ${state.selectedChapter}", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
-            // FIX: Swipe now active on BOTH Bible + Open EW
-            Box(modifier = Modifier.weight(1f).fillMaxWidth().then(if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") swipeModifier else Modifier)) {
+            // FIX OPEN EW: Swipe ONLY on Bible tab.
+            // Open EW uses WebView - HomeScreen swipe with PointerEventPass.Initial was
+            // intercepting its scroll before WebView could handle it, causing lag.
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().then(if (state.selectedTab == "Bible") swipeModifier else Modifier)) {
                 when (state.selectedTab) {
                     "Bible" -> BibleContent(
                         selectedBookId = currentBookId, selectedChapter = state.selectedChapter, summary = state.summary,
@@ -174,7 +183,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     "Open EW" -> OpenEWContent(
                         commentaryHtml = state.commentaryHtml, summaryText = state.summaryText, fontSize = state.fontSize,
                         textColor = textColor, secondaryText = textColor.copy(alpha = 0.6f), hasError = state.commentaryError,
-                        isLoading = state.commentaryHtml.isBlank() && state.summaryText.isBlank() && !state.commentaryError,
+                        isLoading = state.commentaryHtml.isBlank() && !state.commentaryError,
                         bookName = currentBookName, chapter = state.selectedChapter,
                         onVerseClick = { book, chapter, verse ->
                             linkedVerseBook = book; linkedVerseChapter = chapter; linkedVerseNum = verse
