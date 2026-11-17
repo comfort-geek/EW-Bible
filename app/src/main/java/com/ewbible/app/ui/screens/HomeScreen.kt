@@ -50,7 +50,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var dailyVerseDialog by remember { mutableStateOf(false) }
     var hasRestoredScroll by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
-    var expandedBook by remember { mutableStateOf<String?>(null) }
+    var expandedBook by remember { mutableStateOf<Int?>(null) }
     var showHighlightPicker by remember { mutableStateOf(false) }
     var showBibleCom by remember { mutableStateOf(false) }
     var showLinkedVerseSheet by remember { mutableStateOf(false) }
@@ -114,14 +114,14 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 otBookEntities = state.books.filter { it.id <= 39 }.sortedBy { it.id },
                 ntBookEntities = state.books.filter { it.id >= 40 }.sortedBy { it.id },
                 chapterCounts = state.chapterCounts,
-                selectedBook = currentBookName,
+                selectedBookId = currentBookId,
                 selectedChapter = state.selectedChapter,
-                expandedBook = expandedBook,
+                expandedBookId = expandedBook,
                 background = background, textColor = textColor, panel = panel, gold = gold,
                 secondaryText = textColor.copy(alpha = 0.6f),
-                onOpenBook = { book, chapter -> openBook(book, chapter) },
-                onSelectBook = { book -> viewModel.selectBook(BookCatalog.id(book)) },
-                onToggleBook = { book -> expandedBook = if (expandedBook == book) null else book }
+                onOpenBook = { bookId, chapter -> openBook(bookId, chapter) },
+                onSelectBook = { bookId -> viewModel.selectBook(bookId) },
+                onToggleBook = { bookId -> expandedBook = if (expandedBook == bookId) null else bookId }
             )
         }
     ) {
