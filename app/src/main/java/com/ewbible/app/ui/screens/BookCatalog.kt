@@ -141,4 +141,15 @@ object BookCatalog {
         key = info.key,
         testament = info.testament
     )
+
+    // NEW - for OpenEW linkify only, no new book data, just exposes what is already here
+    fun canonicalName(raw: String): String = name(id(raw))
+
+    fun allDisplayNames(): List<String> {
+        return all.map { it.name } + aliases.keys.map { raw ->
+            raw.split(" ", "-").joinToString(" ") { part ->
+                part.replaceFirstChar { c -> c.uppercase() }
+            }
+        }
+    }
 }
