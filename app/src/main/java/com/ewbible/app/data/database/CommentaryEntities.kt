@@ -33,22 +33,8 @@ data class SummaryEntity(
 data class CommentaryEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
-    @ColumnInfo(name = "html_compressed") val htmlCompressed: ByteArray? = null
-) {
-    // Equals/hashCode for ByteArray - Room needs this or it warns
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (other !is CommentaryEntity) return false
-        return bookId == other.bookId && chapter == other.chapter &&
-            (htmlCompressed?.contentEquals(other.htmlCompressed) ?: (other.htmlCompressed == null))
-    }
-    override fun hashCode(): Int {
-        var r = bookId
-        r = 31 * r + chapter
-        r = 31 * r + (htmlCompressed?.contentHashCode() ?: 0)
-        return r
-    }
-}
+    @ColumnInfo(name = "html_compressed") val htmlText: String // Room converts BLOB <-> String automatically
+)
 
 @Entity(tableName = "notes", primaryKeys = ["book_id", "chapter", "verse"])
 data class NoteEntity(
