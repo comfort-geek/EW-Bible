@@ -67,7 +67,8 @@ fun BookDrawer(
                     items(otBookEntities, key = { it.id }) { book ->
                         BookDrawerRow(
                             book = book,
-                            chapterCount = chapterCounts[book.id] ?: BookCatalog.chapters(book.id),
+                            // FIXED: maxOf, not ?: — a wrong DB value (James=1) can no longer hide Catalog's 5
+                            chapterCount = maxOf(chapterCounts[book.id] ?: 0, BookCatalog.chapters(book.id)),
                             selectedBookId = selectedBookId,
                             selectedChapter = selectedChapter,
                             expandedBookId = expandedBookId,
@@ -84,7 +85,8 @@ fun BookDrawer(
                     items(ntBookEntities, key = { it.id }) { book ->
                         BookDrawerRow(
                             book = book,
-                            chapterCount = chapterCounts[book.id] ?: BookCatalog.chapters(book.id),
+                            // FIXED: same maxOf here
+                            chapterCount = maxOf(chapterCounts[book.id] ?: 0, BookCatalog.chapters(book.id)),
                             selectedBookId = selectedBookId,
                             selectedChapter = selectedChapter,
                             expandedBookId = expandedBookId,
