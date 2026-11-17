@@ -33,7 +33,7 @@ data class SummaryEntity(
 data class CommentaryEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
-    @ColumnInfo(name = "html_compressed") val htmlText: String // Room converts BLOB <-> String automatically
+    @ColumnInfo(name = "html_compressed") val htmlText: String? = null // Room converts BLOB <-> String automatically
 )
 
 @Entity(tableName = "notes", primaryKeys = ["book_id", "chapter", "verse"])
