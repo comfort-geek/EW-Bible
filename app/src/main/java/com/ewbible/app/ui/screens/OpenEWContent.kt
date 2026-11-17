@@ -4,6 +4,7 @@ import android.graphics.Color as AndroidColor
 import android.view.MotionEvent
 import android.view.View
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Box
@@ -17,8 +18,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +31,28 @@ import com.ewbible.app.data.database.BookCatalog
 import java.net.URLDecoder
 import java.net.URLEncoder
 import kotlin.math.abs
+
+// FIX: Build these ONCE for whole app, not on every chapter.
+// This was your biggest slowdown - 66 book names Regex rebuilt every time.
+private val ALL_NAMES_PATTERN: String by lazy {
+    BookCatalog.allDisplayNames()
+        .distinct()
+        .sortedByDescending { it.length }
+        .joinToString("|") { Regex.escape(it) }
+}
+private val FULL_VERSE_REGEX: Regex by lazy {
+    Regex("\\b($ALL_NAMES_PATTERN)\\s+(\\d+):(\\d+)\\b(?![^<]*</a>)")
+}
+private val BARE_VERSE_REGEX: Regex by lazy {
+    Regex("(?<![\\w:])\\b(\\d+):(\\d+)\\b(?![^<]*</a>)")
+}
+
+// FIX: Cache linkified HTML so going back to same chapter is instant
+private val linkedHtmlCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
+        return size > 30
+    }
+}
 
 @Composable
 fun OpenEWContent(
@@ -47,29 +68,22 @@ fun OpenEWContent(
     onPreviousChapter: () -> Unit = {},
     onRetry: () -> Unit = {},
 ) {
-    val lastLoaded = remember(bookName, chapter) { mutableStateOf("") }
+    // FIX: Cache key includes book+chapter, so linkify runs once per chapter
+    val cacheKey = remember(bookName, chapter) { "$bookName-$chapter" }
 
-    LaunchedEffect(bookName, chapter) {
-        lastLoaded.value = ""
-    }
-
-    val renderedHtml = remember(commentaryHtml) {
-        runCatching {
+    val linkedHtml = remember(commentaryHtml, cacheKey) {
+        if (commentaryHtml.isBlank()) ""
+        else linkedHtmlCache.getOrPut(cacheKey) {
             val t = commentaryHtml.trim()
-            if (t.contains("<body", ignoreCase = true)) {
+            val body = if (t.contains("<body", ignoreCase = true)) {
                 t.substringAfter("<body", "").substringAfter(">", "").substringBeforeLast("</body>", t)
             } else t
-        }.getOrDefault("")
+            linkifyVerses(body, bookName)
+        }
     }
 
-    // NO SUMMARY - removed completely. No summaryText, no strip regex.
-    val linkedHtml = remember(renderedHtml, bookName) {
-        linkifyVerses(renderedHtml, bookName)
-    }
-
-    val textColorCss = "#%06X".format(0xFFFFFF and textColor.toArgb())
-    // secondaryText removed - use dimmed textColor instead
-    val secondaryColorCss = "#%06X".format(0xFFFFFF and textColor.copy(alpha = 0.6f).toArgb())
+    val textColorCss = remember(textColor) { "#%06X".format(0xFFFFFF and textColor.toArgb()) }
+    val secondaryColorCss = remember(textColor) { "#%06X".format(0xFFFFFF and textColor.copy(alpha = 0.6f).toArgb()) }
 
     val html = remember(linkedHtml, textColorCss, secondaryColorCss, fontSize) {
         """
@@ -88,18 +102,7 @@ fun OpenEWContent(
         """.trimIndent()
     }
 
-    if (isLoading) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                CircularProgressIndicator(color = Color(0xFFC9A227))
-                Spacer(modifier = Modifier.height(12.dp))
-                Text("Loading commentary...", color = textColor.copy(alpha = 0.6f), fontSize = 14.sp)
-            }
-        }
-        return
-    }
-
-    if (hasError && linkedHtml.isBlank()) {
+    if (hasError && linkedHtml.isBlank() && !isLoading) {
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
             Text(
                 text = "Could not load commentary. Please try again.",
@@ -118,102 +121,99 @@ fun OpenEWContent(
         return
     }
 
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { ctx ->
-            WebView(ctx).apply {
-                setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                overScrollMode = View.OVER_SCROLL_NEVER
-                isNestedScrollingEnabled = true
-                settings.javaScriptEnabled = false
-                settings.domStorageEnabled = false
-                settings.loadWithOverviewMode = true
-                settings.useWideViewPort = true
-                settings.builtInZoomControls = false
-                settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
-                setBackgroundColor(AndroidColor.TRANSPARENT)
-                webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                        val url = request?.url?.toString() ?: return false
-                        if (url.startsWith("ew://verse")) {
-                            runCatching {
-                                val query = url.substringAfter("?", "")
-                                val params = query.split("&").associate {
-                                    val parts = it.split("=", limit = 2)
-                                    if (parts.size == 2) parts[0] to URLDecoder.decode(parts[1], "UTF-8") else parts[0] to ""
+    Box(modifier = Modifier.fillMaxSize()) {
+        // FIX: Keep WebView ALWAYS in tree, just overlay loading on top.
+        // Before, isLoading hid the WebView -> it got destroyed -> slow every time.
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                    overScrollMode = View.OVER_SCROLL_NEVER
+                    isNestedScrollingEnabled = true
+                    settings.javaScriptEnabled = false
+                    settings.domStorageEnabled = false
+                    settings.loadWithOverviewMode = true
+                    settings.useWideViewPort = true
+                    settings.builtInZoomControls = false
+                    // FIX: Was LOAD_NO_CACHE - now allows WebView to cache
+                    settings.cacheMode = WebSettings.LOAD_DEFAULT
+                    setBackgroundColor(AndroidColor.TRANSPARENT)
+                    webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                            val url = request?.url?.toString() ?: return false
+                            if (url.startsWith("ew://verse")) {
+                                runCatching {
+                                    val query = url.substringAfter("?", "")
+                                    val params = query.split("&").associate {
+                                        val parts = it.split("=", limit = 2)
+                                        if (parts.size == 2) parts[0] to URLDecoder.decode(parts[1], "UTF-8") else parts[0] to ""
+                                    }
+                                    val b = params["book"]?.takeIf { it.isNotBlank() } ?: bookName
+                                    val c = params["chapter"]?.toIntOrNull() ?: chapter
+                                    val v = params["verse"]?.toIntOrNull() ?: 1
+                                    onVerseClick(b, c, v)
                                 }
-                                val b = params["book"]?.takeIf { it.isNotBlank() } ?: bookName
-                                val c = params["chapter"]?.toIntOrNull() ?: chapter
-                                val v = params["verse"]?.toIntOrNull() ?: 1
-                                onVerseClick(b, c, v)
+                                return true
                             }
-                            return true
+                            return false
                         }
-                        return false
+                        override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {}
                     }
-                    override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {}
-                }
-                // SWIPE ONLY HERE - for Open EW. HomeScreen does NOT swipe Open EW, so no fight.
-                var downX = 0f
-                var downY = 0f
-                setOnTouchListener { _, event ->
-                    when (event.action) {
-                        MotionEvent.ACTION_DOWN -> {
-                            downX = event.x
-                            downY = event.y
-                        }
-                        MotionEvent.ACTION_UP -> {
-                            val dx = event.x - downX
-                            val dy = event.y - downY
-                            if (abs(dx) > 150 && abs(dx) > abs(dy) * 1.5f) {
-                                if (dx < 0) onNextChapter() else onPreviousChapter()
-                                return@setOnTouchListener true
+                    var downX = 0f
+                    var downY = 0f
+                    setOnTouchListener { _, event ->
+                        when (event.action) {
+                            MotionEvent.ACTION_DOWN -> {
+                                downX = event.x
+                                downY = event.y
+                            }
+                            MotionEvent.ACTION_UP -> {
+                                val dx = event.x - downX
+                                val dy = event.y - downY
+                                if (abs(dx) > 150 && abs(dx) > abs(dy) * 1.5f) {
+                                    if (dx < 0) onNextChapter() else onPreviousChapter()
+                                    return@setOnTouchListener true
+                                }
                             }
                         }
-                    }
-                    false
-                }
-            }
-        },
-        update = { wv ->
-            if (lastLoaded.value != html) {
-                lastLoaded.value = html
-                runCatching {
-                    wv.post {
-                        runCatching {
-                            wv.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
-                        }
+                        false
                     }
                 }
+            },
+            update = { wv ->
+                // FIX: Only reload if html actually changed
+                if (wv.tag != html.hashCode()) {
+                    wv.tag = html.hashCode()
+                    wv.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
+                }
             }
-        },
-        onRelease = { wv ->
-            runCatching {
-                wv.stopLoading()
-                wv.removeAllViews()
-                wv.destroy()
+            // FIX: NO onRelease destroy() anymore - keep WebView alive
+        )
+
+        if (isLoading && linkedHtml.isBlank()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Color(0xFFC9A227))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Loading commentary...", color = textColor.copy(alpha = 0.6f), fontSize = 14.sp)
+                }
             }
         }
-    )
+    }
 }
 
 private fun linkifyVerses(html: String, currentBook: String): String {
     if (html.isBlank()) return html
-    val allNames = BookCatalog.allDisplayNames()
-        .distinct()
-        .sortedByDescending { it.length }
-        .joinToString("|") { Regex.escape(it) }
     var result = html
-    val fullPattern = Regex("\\b($allNames)\\s+(\\d+):(\\d+)\\b(?![^<]*</a>)")
-    result = fullPattern.replace(result) { m ->
+    result = FULL_VERSE_REGEX.replace(result) { m ->
         val book = BookCatalog.canonicalName(m.groupValues[1])
         val ch = m.groupValues[2]
         val vs = m.groupValues[3]
         """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
     }
     if (currentBook.isNotBlank()) {
-        val barePattern = Regex("(?<![\\w:])\\b(\\d+):(\\d+)\\b(?![^<]*</a>)")
-        result = barePattern.replace(result) { m ->
+        result = BARE_VERSE_REGEX.replace(result) { m ->
             val ch = m.groupValues[1]
             val vs = m.groupValues[2]
             """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(BookCatalog.canonicalName(currentBook), "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
