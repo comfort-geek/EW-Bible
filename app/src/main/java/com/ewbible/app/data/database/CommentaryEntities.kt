@@ -7,9 +7,9 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "books")
 data class BookEntity(
     @PrimaryKey val id: Int,
-    val name: String,
     val key: String,
-    val testament: String = "OT"
+    val name: String,
+    val testament: String
 )
 
 @Entity(tableName = "verses", primaryKeys = ["book_id", "chapter", "verse"])
@@ -33,11 +33,24 @@ data class SummaryEntity(
 data class CommentaryEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
-    @ColumnInfo(name = "html_compressed") val htmlText: String? = null // Room converts BLOB <-> String automatically
-)
+    @ColumnInfo(name = "html_compressed") val htmlCompressed: ByteArray
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is CommentaryEntity) return false
+        return bookId == other.bookId && chapter == other.chapter && htmlCompressed.contentEquals(other.htmlCompressed)
+    }
+    override fun hashCode(): Int {
+        var result = bookId
+        result = 31 * result + chapter
+        result = 31 * result + htmlCompressed.contentHashCode()
+        return result
+    }
+}
 
-@Entity(tableName = "notes", primaryKeys = ["book_id", "chapter", "verse"])
+@Entity(tableName = "notes")
 data class NoteEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
     val verse: Int,
