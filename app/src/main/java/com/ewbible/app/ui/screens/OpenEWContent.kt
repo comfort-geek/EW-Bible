@@ -34,7 +34,7 @@ import java.net.URLEncoder
 @Composable
 fun OpenEWContent(
     commentaryHtml: String,
-    summaryText: String = "", // KEPT for compatibility, but NOT shown anymore - commentary already has it
+    summaryText: String = "",
     fontSize: Float,
     textColor: Color,
     secondaryText: Color,
@@ -62,8 +62,30 @@ fun OpenEWContent(
         }.getOrDefault("")
     }
 
-    val linkedHtml = remember(renderedHtml, bookName) {
-        linkifyVerses(renderedHtml, bookName)
+    // FIX SUMMARY - THIS IS THE PART MISSING IN YOUR PASTE:
+    // Strip the italic summary that is embedded INSIDE the commentary HTML
+    val linkedHtml = remember(renderedHtml, bookName, summaryText) {
+        var cleaned = renderedHtml
+        if (summaryText.isNotBlank()) {
+            val summaryNorm = summaryText.trim().replace(Regex("\\s+"), " ").take(80)
+            if (summaryNorm.isNotBlank()) {
+                val italicPara = Regex(
+                    """<p[^>]*>\s*<i[^>]*>.*?${Regex.escape(summaryNorm)}.*?</i>\s*</p>\s*(<hr[^>]*>)?""",
+                    RegexOption.DOT_MATCHES_ALL
+                )
+                val afterItalic = italicPara.replaceFirst(cleaned, "")
+                if (afterItalic != cleaned) {
+                    cleaned = afterItalic
+                } else {
+                    val emPara = Regex(
+                        """<p[^>]*>\s*<em[^>]*>.*?${Regex.escape(summaryNorm)}.*?</em>\s*</p>\s*(<hr[^>]*>)?""",
+                        RegexOption.DOT_MATCHES_ALL
+                    )
+                    cleaned = emPara.replaceFirst(cleaned, "")
+                }
+            }
+        }
+        linkifyVerses(cleaned, bookName)
     }
 
     val textColorCss = "#%06X".format(0xFFFFFF and textColor.toArgb())
@@ -97,7 +119,7 @@ fun OpenEWContent(
         return
     }
 
-    if (hasError && linkedHtml.isBlank() && summaryText.isBlank()) {
+    if (hasError && linkedHtml.isBlank()) {
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
             Text(
                 text = "Could not load commentary. Please try again.",
@@ -116,18 +138,13 @@ fun OpenEWContent(
         return
     }
 
-    // FIX 1: Summary block DELETED - no more duplicate
-    // FIX 2: No Column wrapping WebView anymore - WebView is direct child, so it scrolls natively and smoothly like Bible tab
-
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
             WebView(ctx).apply {
-                // FIX 2: Performance - hardware layer + no over-scroll fighting
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
                 overScrollMode = View.OVER_SCROLL_NEVER
                 isNestedScrollingEnabled = true
-
                 settings.javaScriptEnabled = false
                 settings.domStorageEnabled = false
                 settings.loadWithOverviewMode = true
@@ -135,9 +152,6 @@ fun OpenEWContent(
                 settings.builtInZoomControls = false
                 settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
                 setBackgroundColor(AndroidColor.TRANSPARENT)
-
-                // NO SWIPE HERE - swipe lives ONLY in HomeScreen.kt
-
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                         val url = request?.url?.toString() ?: return false
@@ -157,13 +171,7 @@ fun OpenEWContent(
                         }
                         return false
                     }
-                    override fun onReceivedError(
-                        view: WebView?,
-                        errorCode: Int,
-                        description: String?,
-                        failingUrl: String?
-                    ) {
-                    }
+                    override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {}
                 }
             }
         },
@@ -189,17 +197,13 @@ fun OpenEWContent(
     )
 }
 
-// NO BOOK NAMES HERE. Everything comes from BookCatalog.
 private fun linkifyVerses(html: String, currentBook: String): String {
     if (html.isBlank()) return html
-
     val allNames = BookCatalog.allDisplayNames()
         .distinct()
         .sortedByDescending { it.length }
         .joinToString("|") { Regex.escape(it) }
-
     var result = html
-
     val fullPattern = Regex("\\b($allNames)\\s+(\\d+):(\\d+)\\b(?![^<]*</a>)")
     result = fullPattern.replace(result) { m ->
         val book = BookCatalog.canonicalName(m.groupValues[1])
@@ -207,7 +211,6 @@ private fun linkifyVerses(html: String, currentBook: String): String {
         val vs = m.groupValues[3]
         """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
     }
-
     if (currentBook.isNotBlank()) {
         val barePattern = Regex("(?<![\\w:])\\b(\\d+):(\\d+)\\b(?![^<]*</a>)")
         result = barePattern.replace(result) { m ->
@@ -216,6 +219,5 @@ private fun linkifyVerses(html: String, currentBook: String): String {
             """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(BookCatalog.canonicalName(currentBook), "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
         }
     }
-
     return result
 }
