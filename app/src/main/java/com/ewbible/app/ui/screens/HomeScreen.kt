@@ -174,6 +174,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     "Open EW" -> OpenEWContent(
                         commentaryHtml = state.commentaryHtml, summaryText = state.summaryText, fontSize = state.fontSize,
                         textColor = textColor, secondaryText = textColor.copy(alpha = 0.6f), hasError = state.commentaryError,
+                        isLoading = state.commentaryHtml.isBlank() && state.summaryText.isBlank() && !state.commentaryError,
                         bookName = currentBookName, chapter = state.selectedChapter,
                         onVerseClick = { book, chapter, verse ->
                             linkedVerseBook = book; linkedVerseChapter = chapter; linkedVerseNum = verse
