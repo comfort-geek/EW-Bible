@@ -22,12 +22,9 @@ interface BibleDao {
     @Query("SELECT * FROM books ORDER BY id")
     fun getAllBooks(): Flow<List<BookEntity>>
 
-    // FIXED: Added - HomeViewModel.restoreSavedReading() calls this
     @Query("SELECT * FROM books ORDER BY id")
     suspend fun getAllBooksSync(): List<BookEntity>
 
-    // FIXED: Random every open - what you want
-    // Called by HomeViewModel.loadDailyVerse() every time you open Daily Verse dialog
     @Query("""
         SELECT v.book_id AS bookId,
                b.name AS bookName,
@@ -44,8 +41,11 @@ interface BibleDao {
     @Query("SELECT COALESCE(MAX(chapter), 1) FROM verses WHERE book_id = :bookId")
     suspend fun getMaxChapter(bookId: Int): Int
 
+    // FIXED: Never return 0 / null. If verses table is empty for a book,
+    // Room will just not return a row for it — ViewModel must fill from BookCatalog.
+    // MAX(chapter) is correct here — COUNT(DISTINCT) would break if a chapter is missing a verse.
     @Query("""
-        SELECT book_id AS bookId, MAX(chapter) AS chapterCount
+        SELECT book_id AS bookId, COALESCE(MAX(chapter), 0) AS chapterCount
         FROM verses
         GROUP BY book_id
     """)
