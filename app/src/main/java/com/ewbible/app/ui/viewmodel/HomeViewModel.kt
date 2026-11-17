@@ -255,6 +255,9 @@ class HomeViewModel(
             }.onFailure { linkedVerseText.value = "Could not load verse." }
         }
     }
+
+    // STEP 5 FIXED: No more getCommentaryCompressed / CommentaryUtils.decompress
+    // Room + converter now returns htmlText already decompressed
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
@@ -262,12 +265,7 @@ class HomeViewModel(
             commentary.value = ""
             try {
                 val html = withContext(Dispatchers.IO) {
-                    val compressed = dao.getCommentaryCompressed(bookId, chapter)
-                    if (compressed == null) {
-                        Log.e("HomeViewModel", "getCommentaryCompressed NULL book=$bookId (${BookCatalog.name(bookId)}) ch=$chapter")
-                        return@withContext null
-                    }
-                    CommentaryUtils.decompress(compressed)
+                    dao.getCommentary(bookId, chapter)?.htmlText
                 }
                 if (html.isNullOrBlank()) { commentary.value = ""; commentaryError.value = true }
                 else { commentary.value = html; commentaryError.value = false }
