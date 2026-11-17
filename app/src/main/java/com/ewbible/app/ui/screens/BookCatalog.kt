@@ -1,103 +1,121 @@
 package com.ewbible.app.data.database
 
-// Single source of truth. ID is king. Name is only for display.
-// Matches your DB exactly: books.id 1-66 = commentary.book_id 1-66 = verses.book_id 1-66
-// 0 orphans - proven by your JOIN test.
-
 data class BookInfo(
     val id: Int,
-    val key: String,
     val name: String,
-    val testament: String // "OT" or "NT"
+    val key: String,
+    val testament: String,
+    val chapters: Int
 )
 
 object BookCatalog {
-    val all = listOf(
-        BookInfo(1, "genesis", "Genesis", "OT"),
-        BookInfo(2, "exodus", "Exodus", "OT"),
-        BookInfo(3, "leviticus", "Leviticus", "OT"),
-        BookInfo(4, "numbers", "Numbers", "OT"),
-        BookInfo(5, "deuteronomy", "Deuteronomy", "OT"),
-        BookInfo(6, "joshua", "Joshua", "OT"),
-        BookInfo(7, "judges", "Judges", "OT"),
-        BookInfo(8, "ruth", "Ruth", "OT"),
-        BookInfo(9, "1-samuel", "1 Samuel", "OT"),
-        BookInfo(10, "2-samuel", "2 Samuel", "OT"),
-        BookInfo(11, "1-kings", "1 Kings", "OT"),
-        BookInfo(12, "2-kings", "2 Kings", "OT"),
-        BookInfo(13, "1-chronicles", "1 Chronicles", "OT"),
-        BookInfo(14, "2-chronicles", "2 Chronicles", "OT"),
-        BookInfo(15, "ezra", "Ezra", "OT"),
-        BookInfo(16, "nehemiah", "Nehemiah", "OT"),
-        BookInfo(17, "esther", "Esther", "OT"),
-        BookInfo(18, "job", "Job", "OT"),
-        BookInfo(19, "psalms", "Psalms", "OT"),
-        BookInfo(20, "proverbs", "Proverbs", "OT"),
-        BookInfo(21, "ecclesiastes", "Ecclesiastes", "OT"),
-        BookInfo(22, "song-of-solomon", "Song of Solomon", "OT"),
-        BookInfo(23, "isaiah", "Isaiah", "OT"),
-        BookInfo(24, "jeremiah", "Jeremiah", "OT"),
-        BookInfo(25, "lamentations", "Lamentations", "OT"),
-        BookInfo(26, "ezekiel", "Ezekiel", "OT"),
-        BookInfo(27, "daniel", "Daniel", "OT"),
-        BookInfo(28, "hosea", "Hosea", "OT"),
-        BookInfo(29, "joel", "Joel", "OT"),
-        BookInfo(30, "amos", "Amos", "OT"),
-        BookInfo(31, "obadiah", "Obadiah", "OT"),
-        BookInfo(32, "jonah", "Jonah", "OT"),
-        BookInfo(33, "micah", "Micah", "OT"),
-        BookInfo(34, "nahum", "Nahum", "OT"),
-        BookInfo(35, "habakkuk", "Habakkuk", "OT"),
-        BookInfo(36, "zephaniah", "Zephaniah", "OT"),
-        BookInfo(37, "haggai", "Haggai", "OT"),
-        BookInfo(38, "zechariah", "Zechariah", "OT"),
-        BookInfo(39, "malachi", "Malachi", "OT"),
-        BookInfo(40, "matthew", "Matthew", "NT"),
-        BookInfo(41, "mark", "Mark", "NT"),
-        BookInfo(42, "luke", "Luke", "NT"),
-        BookInfo(43, "john", "John", "NT"),
-        BookInfo(44, "acts", "Acts", "NT"),
-        BookInfo(45, "romans", "Romans", "NT"),
-        BookInfo(46, "1-corinthians", "1 Corinthians", "NT"),
-        BookInfo(47, "2-corinthians", "2 Corinthians", "NT"),
-        BookInfo(48, "galatians", "Galatians", "NT"),
-        BookInfo(49, "ephesians", "Ephesians", "NT"),
-        BookInfo(50, "philippians", "Philippians", "NT"),
-        BookInfo(51, "colossians", "Colossians", "NT"),
-        BookInfo(52, "1-thessalonians", "1 Thessalonians", "NT"),
-        BookInfo(53, "2-thessalonians", "2 Thessalonians", "NT"),
-        BookInfo(54, "1-timothy", "1 Timothy", "NT"),
-        BookInfo(55, "2-timothy", "2 Timothy", "NT"),
-        BookInfo(56, "titus", "Titus", "NT"),
-        BookInfo(57, "philemon", "Philemon", "NT"),
-        BookInfo(58, "hebrews", "Hebrews", "NT"),
-        BookInfo(59, "james", "James", "NT"),
-        BookInfo(60, "1-peter", "1 Peter", "NT"),
-        BookInfo(61, "2-peter", "2 Peter", "NT"),
-        BookInfo(62, "1-john", "1 John", "NT"),
-        BookInfo(63, "2-john", "2 John", "NT"),
-        BookInfo(64, "3-john", "3 John", "NT"),
-        BookInfo(65, "jude", "Jude", "NT"),
-        BookInfo(66, "revelation", "Revelation", "NT")
+
+    val all: List<BookInfo> = listOf(
+        BookInfo(1, "Genesis", "Genesis", "OT", 50),
+        BookInfo(2, "Exodus", "Exodus", "OT", 40),
+        BookInfo(3, "Leviticus", "Leviticus", "OT", 27),
+        BookInfo(4, "Numbers", "Numbers", "OT", 36),
+        BookInfo(5, "Deuteronomy", "Deuteronomy", "OT", 34),
+        BookInfo(6, "Joshua", "Joshua", "OT", 24),
+        BookInfo(7, "Judges", "Judges", "OT", 21),
+        BookInfo(8, "Ruth", "Ruth", "OT", 4),
+        BookInfo(9, "1 Samuel", "1 Samuel", "OT", 31),
+        BookInfo(10, "2 Samuel", "2 Samuel", "OT", 24),
+        BookInfo(11, "1 Kings", "1 Kings", "OT", 22),
+        BookInfo(12, "2 Kings", "2 Kings", "OT", 25),
+        BookInfo(13, "1 Chronicles", "1 Chronicles", "OT", 29),
+        BookInfo(14, "2 Chronicles", "2 Chronicles", "OT", 36),
+        BookInfo(15, "Ezra", "Ezra", "OT", 10),
+        BookInfo(16, "Nehemiah", "Nehemiah", "OT", 13),
+        BookInfo(17, "Esther", "Esther", "OT", 10),
+        BookInfo(18, "Job", "Job", "OT", 42),
+        BookInfo(19, "Psalms", "Psalms", "OT", 150),
+        BookInfo(20, "Proverbs", "Proverbs", "OT", 31),
+        BookInfo(21, "Ecclesiastes", "Ecclesiastes", "OT", 12),
+        BookInfo(22, "Song of Solomon", "Song of Solomon", "OT", 8),
+        BookInfo(23, "Isaiah", "Isaiah", "OT", 66),
+        BookInfo(24, "Jeremiah", "Jeremiah", "OT", 52),
+        BookInfo(25, "Lamentations", "Lamentations", "OT", 5),
+        BookInfo(26, "Ezekiel", "Ezekiel", "OT", 36),
+        BookInfo(27, "Daniel", "Daniel", "OT", 12),
+        BookInfo(28, "Hosea", "Hosea", "OT", 14),
+        BookInfo(29, "Joel", "Joel", "OT", 3),
+        BookInfo(30, "Amos", "Amos", "OT", 9),
+        BookInfo(31, "Obadiah", "Obadiah", "OT", 1),
+        BookInfo(32, "Jonah", "Jonah", "OT", 4),
+        BookInfo(33, "Micah", "Micah", "OT", 7),
+        BookInfo(34, "Nahum", "Nahum", "OT", 3),
+        BookInfo(35, "Habakkuk", "Habakkuk", "OT", 3),
+        BookInfo(36, "Zephaniah", "Zephaniah", "OT", 3),
+        BookInfo(37, "Haggai", "Haggai", "OT", 2),
+        BookInfo(38, "Zechariah", "Zechariah", "OT", 14),
+        BookInfo(39, "Malachi", "Malachi", "OT", 4),
+        BookInfo(40, "Matthew", "Matthew", "NT", 28),
+        BookInfo(41, "Mark", "Mark", "NT", 16),
+        BookInfo(42, "Luke", "Luke", "NT", 24),
+        BookInfo(43, "John", "John", "NT", 21),
+        BookInfo(44, "Acts", "Acts", "NT", 28),
+        BookInfo(45, "Romans", "Romans", "NT", 16),
+        BookInfo(46, "1 Corinthians", "1 Corinthians", "NT", 13),
+        BookInfo(47, "2 Corinthians", "2 Corinthians", "NT", 13),
+        BookInfo(48, "Galatians", "Galatians", "NT", 6),
+        BookInfo(49, "Ephesians", "Ephesians", "NT", 6),
+        BookInfo(50, "Philippians", "Philippians", "NT", 4),
+        BookInfo(51, "Colossians", "Colossians", "NT", 4),
+        BookInfo(52, "1 Thessalonians", "1 Thessalonians", "NT", 5),
+        BookInfo(53, "2 Thessalonians", "2 Thessalonians", "NT", 3),
+        BookInfo(54, "1 Timothy", "1 Timothy", "NT", 6),
+        BookInfo(55, "2 Timothy", "2 Timothy", "NT", 4),
+        BookInfo(56, "Titus", "Titus", "NT", 3),
+        BookInfo(57, "Philemon", "Philemon", "NT", 1),
+        BookInfo(58, "Hebrews", "Hebrews", "NT", 13),
+        BookInfo(59, "James", "James", "NT", 5),
+        BookInfo(60, "1 Peter", "1 Peter", "NT", 5),
+        BookInfo(61, "2 Peter", "2 Peter", "NT", 3),
+        BookInfo(62, "1 John", "1 John", "NT", 5),
+        BookInfo(63, "2 John", "2 John", "NT", 1),
+        BookInfo(64, "3 John", "3 John", "NT", 1),
+        BookInfo(65, "Jude", "Jude", "NT", 1),
+        BookInfo(66, "Revelation", "Revelation", "NT", 22)
     )
 
     private val byId = all.associateBy { it.id }
-    private val byKey = all.associateBy { it.key.lowercase() }
     private val byName = all.associateBy { it.name.lowercase() }
+    private val byKey = all.associateBy { it.key.lowercase() }
 
     fun name(id: Int): String = byId[id]?.name ?: "Genesis"
-    fun key(id: Int): String = byId[id]?.key ?: "genesis"
-    fun info(id: Int): BookInfo = byId[id] ?: all[0]
-
-    // Accepts "Genesis", "genesis", "1 Samuel", "1-samuel" - all resolve to same ID
-    fun id(nameOrKey: String): Int {
-        val n = nameOrKey.trim().lowercase()
-        return byName[n]?.id ?: byKey[n]?.id ?: byKey[n.replace(" ", "-")]?.id ?: 1
+    fun id(name: String): Int {
+        val clean = name.trim().lowercase()
+        return byName[clean]?.id ?: byKey[clean]?.id ?: when (clean) {
+            "psalm", "ps" -> 19
+            "song of songs", "canticles" -> 22
+            "1 sam" -> 9
+            "2 sam" -> 10
+            "1 kings", "1 kgs" -> 11
+            "2 kings", "2 kgs" -> 12
+            "1 chron" -> 13
+            "2 chron" -> 14
+            "1 cor" -> 46
+            "2 cor" -> 47
+            "1 thess" -> 52
+            "2 thess" -> 53
+            "1 tim" -> 54
+            "2 tim" -> 55
+            "1 pet" -> 60
+            "2 pet" -> 61
+            "1 jn" -> 62
+            "2 jn" -> 63
+            "3 jn" -> 64
+            "rev" -> 66
+            else -> 1
+        }
     }
-
-    val otBooks: List<BookInfo> = all.filter { it.testament == "OT" }
-    val ntBooks: List<BookInfo> = all.filter { it.testament == "NT" }
-
-    fun toEntity(info: BookInfo): BookEntity =
-        BookEntity(id = info.id, key = info.key, name = info.name, testament = info.testament)
+    fun testament(id: Int): String = byId[id]?.testament ?: "OT"
+    fun chapters(id: Int): Int = byId[id]?.chapters ?: 1
+    fun toEntity(info: BookInfo): BookEntity = BookEntity(
+        id = info.id,
+        name = info.name,
+        key = info.key,
+        testament = info.testament
+    )
 }
