@@ -51,7 +51,6 @@ data class HomeUiState(
     val scrollRestoreKey: Int = 0,
     val showNoteDialog: Boolean = false,
     val currentNoteText: String = "",
-    // FIX B: true only AFTER saved Matthew 1 is restored. HomeScreen waits for this.
     val isReadingRestored: Boolean = false
 )
 
@@ -82,6 +81,14 @@ class HomeViewModel(
     private val linkedVerseText = MutableStateFlow("")
     private val linkedVerseRef = MutableStateFlow("")
     private var commentaryJob: Job? = null
+
+    // SPEED FIX: Cache decompressed commentary. Key = "51-2"
+    // LinkedHashMap with LRU - keeps last 20 chapters, auto-evicts old ones
+    private val commentaryCache = object : LinkedHashMap<String, String>(20, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
+            return size > 20
+        }
+    }
 
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
     val currentBookId: StateFlow<Int> = selectedBookId.asStateFlow()
@@ -201,15 +208,13 @@ class HomeViewModel(
         scrollRestoreKey.update { it + 1 }
         saveReadingProgress()
     }
-    // FIX: Cross-book navigation - swipe past last/first chapter goes to next/prev book
     fun previousChapter() {
         if (selectedChapter.value > 1) {
             selectChapter(selectedChapter.value - 1)
             return
         }
-        // At chapter 1 -> go to last chapter of previous book
         val prevBookId = currentBookId.value - 1
-        if (prevBookId < 1) return // Already Genesis 1, nowhere to go
+        if (prevBookId < 1) return
         selectedBookId.value = prevBookId
         selectedChapter.value = BookCatalog.chapters(prevBookId)
         selectedVerse.value = null
@@ -222,9 +227,8 @@ class HomeViewModel(
             selectChapter(selectedChapter.value + 1)
             return
         }
-        // At last chapter -> go to chapter 1 of next book
         val nextBookId = currentBookId.value + 1
-        if (nextBookId > 66) return // Already Revelation 22, nowhere to go
+        if (nextBookId > 66) return
         selectedBookId.value = nextBookId
         selectedChapter.value = 1
         selectedVerse.value = null
@@ -275,7 +279,6 @@ class HomeViewModel(
                 selectedChapter.value = lastChapter.coerceIn(1, BookCatalog.chapters(lastBookId))
             }
         } finally {
-            // FIX B: Only now is it safe to show the UI. Before this, HomeScreen was showing Genesis 1.
             isReadingRestored.value = true
         }
     }
@@ -295,36 +298,62 @@ class HomeViewModel(
         }
     }
 
+    // SPEED FIXED VERSION
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
+        val key = "$bookId-$chapter"
+        // 1. Cache hit = instant, no DB, no decompress
+        commentaryCache[key]?.let {
+            commentaryError.value = false
+            commentary.value = it
+            preloadNextCommentary(bookId, chapter)
+            return
+        }
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
             commentaryError.value = false
-            commentary.value = ""
+            // Don't blank the screen while loading - keep old html until new one arrives
             try {
                 val html = withContext(Dispatchers.IO) {
                     val compressed = dao.getCommentaryCompressed(bookId, chapter)
                     if (compressed == null) null else decompressCommentary(compressed)
                 }
                 if (html.isNullOrBlank()) { commentary.value = ""; commentaryError.value = true }
-                else { commentary.value = html; commentaryError.value = false }
+                else {
+                    commentaryCache[key] = html
+                    commentary.value = html
+                    commentaryError.value = false
+                    preloadNextCommentary(bookId, chapter)
+                }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) { Log.e("HomeViewModel", "loadCommentary failed book=$bookId ch=$chapter", e); commentaryError.value = true; commentary.value = "" }
         }
     }
     fun loadCommentary() { loadCommentary(currentBookId.value, selectedChapter.value) }
 
-    // FIX A: Old code only tried GZIP, else dumped raw compressed bytes as text -> garbled.
-    // Now tries GZIP -> ZLIB -> Raw Deflate -> plain text.
-    private fun decompressCommentary(bytes: ByteArray): String {
-        runCatching {
-            GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader(Charsets.UTF_8).use { it.readText() }
-        }.onSuccess { if (it.isNotBlank()) return it }
+    // Preload next chapter in background so swipe is instant
+    private fun preloadNextCommentary(bookId: Int, chapter: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val max = BookCatalog.chapters(bookId)
+                val (nextBook, nextChapter) = if (chapter < max) bookId to chapter + 1
+                    else if (bookId < 66) (bookId + 1) to 1 else return@launch
+                val nextKey = "$nextBook-$nextChapter"
+                if (commentaryCache.containsKey(nextKey)) return@launch
+                val compressed = dao.getCommentaryCompressed(nextBook, nextChapter) ?: return@launch
+                val html = decompressCommentary(compressed)
+                if (html.isNotBlank()) commentaryCache[nextKey] = html
+            }
+        }
+    }
 
+    // SPEED FIX: Try ZLIB first (your DB is zlib), then GZIP, then raw deflate
+    private fun decompressCommentary(bytes: ByteArray): String {
+        // 1. ZLIB - this is what your DB actually uses, try first
         runCatching {
             val inflater = Inflater()
             inflater.setInput(bytes)
             val out = ByteArrayOutputStream()
-            val buf = ByteArray(4096)
+            val buf = ByteArray(8192)
             while (!inflater.finished()) {
                 val n = inflater.inflate(buf)
                 if (n == 0) break
@@ -334,11 +363,17 @@ class HomeViewModel(
             out.toString(Charsets.UTF_8.name())
         }.onSuccess { if (it.isNotBlank()) return it }
 
+        // 2. GZIP - for old DBs
+        runCatching {
+            GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader(Charsets.UTF_8).use { it.readText() }
+        }.onSuccess { if (it.isNotBlank()) return it }
+
+        // 3. Raw deflate
         runCatching {
             val inflater = Inflater(true)
             inflater.setInput(bytes)
             val out = ByteArrayOutputStream()
-            val buf = ByteArray(4096)
+            val buf = ByteArray(8192)
             while (!inflater.finished()) {
                 val n = inflater.inflate(buf)
                 if (n == 0) break
