@@ -70,9 +70,6 @@ interface BibleDao {
     @Query("SELECT * FROM summaries WHERE book_id = :bookId AND chapter = :chapter")
     suspend fun getSummary(bookId: Int, chapter: Int): SummaryEntity?
 
-    @Query("SELECT * FROM commentary WHERE book_id = :bookId AND chapter = :chapter")
-    suspend fun getCommentary(bookId: Int, chapter: Int): CommentaryEntity?
-
     @Query("SELECT html_compressed FROM commentary WHERE book_id = :bookId AND chapter = :chapter")
     suspend fun getCommentaryCompressed(bookId: Int, chapter: Int): ByteArray?
 
