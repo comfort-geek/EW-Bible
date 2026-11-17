@@ -1,8 +1,19 @@
-package com.ewbible.ui
+package com.ewbible.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -11,8 +22,20 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -22,23 +45,31 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun SettingsPanel(
-    onClose: () -> Unit,
-    onBibleComClick: () -> Unit,
-    onDailyVerseClick: () -> Unit,
-    onNotesClick: () -> Unit,
-    isDarkMode: Boolean,
-    onDarkModeChange: (Boolean) -> Unit,
+    visible: Boolean,
+    isLoggedIn: Boolean,
+    userName: String,
+    userEmail: String,
     fontSize: Float,
+    darkMode: Boolean,
+    notesCount: Int,
+    background: Color,
+    panel: Color,
+    textColor: Color,
+    gold: Color,
+    onClose: () -> Unit,
     onFontSizeChange: (Float) -> Unit,
-    userName: String? = null,
-    isLoggedIn: Boolean = false,
-    onLoginClick: () -> Unit = {},
-    onLogoutClick: () -> Unit = {}
+    onDarkModeChange: (Boolean) -> Unit,
+    onDailyVerse: () -> Unit,
+    onShowNotes: () -> Unit,
+    onGoogleSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+    onOpenResource: () -> Unit,
 ) {
+    if (!visible) return
+
     var resourcesExpanded by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
-    // Full screen dim background
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -46,27 +77,24 @@ fun SettingsPanel(
             .clickable { onClose() },
         contentAlignment = Alignment.TopEnd
     ) {
-        // Panel itself - anchored to RIGHT
         Column(
             modifier = Modifier
                 .fillMaxHeight()
                 .fillMaxWidth(0.85f)
-                .background(Color(0xFFFFF8EE))
+                .background(background)
                 .clickable(enabled = false) {}
                 .verticalScroll(scrollState)
                 .padding(20.dp)
         ) {
-            // 1. TOP ROW: X to close
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
             ) {
                 IconButton(onClick = onClose) {
-                    Icon(Icons.Default.Close, contentDescription = "Close")
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor)
                 }
             }
 
-            // 2. PROFILE: Icon + Name FROM SIGN-IN + Log Out / Log In
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
@@ -74,42 +102,34 @@ fun SettingsPanel(
                 Icon(
                     imageVector = Icons.Default.Person,
                     contentDescription = null,
-                    tint = Color(0xFFD4A017),
+                    tint = gold,
                     modifier = Modifier.size(48.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    text = if (isLoggedIn) (userName ?: "My Account") else "Guest",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Black,
-                    modifier = Modifier.weight(1f)
-                )
-
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (isLoggedIn) userName.ifBlank { "My Account" } else "Guest",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = textColor
+                    )
+                    if (isLoggedIn && userEmail.isNotBlank()) {
+                        Text(userEmail, fontSize = 13.sp, color = textColor.copy(alpha = 0.6f))
+                    }
+                }
                 if (isLoggedIn) {
-                    TextButton(onClick = onLogoutClick) {
-                        Text(
-                            text = "Log Out",
-                            color = Color.Red,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium
-                        )
+                    TextButton(onClick = onSignOut) {
+                        Text("Log Out", color = Color.Red, fontSize = 15.sp, fontWeight = FontWeight.Medium)
                     }
                 } else {
-                    TextButton(onClick = onLoginClick) {
-                        Text(
-                            text = "Log In",
-                            color = Color(0xFFD4A017),
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium
-                        )
+                    TextButton(onClick = onGoogleSignIn) {
+                        Text("Log In", color = gold, fontSize = 15.sp, fontWeight = FontWeight.Medium)
                     }
                 }
             }
 
-            Divider()
+            HorizontalDivider()
 
-            // 3. RESOURCES
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -118,66 +138,66 @@ fun SettingsPanel(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Resources", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Text(if (resourcesExpanded) "▲" else "▼", fontSize = 14.sp)
+                Text("Resources", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
+                Text(if (resourcesExpanded) "▲" else "▼", fontSize = 14.sp, color = textColor)
             }
 
             if (resourcesExpanded) {
-                // Bible.com ONLY - no subtitle, no sentence
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color(0xFFF5EEDD), RoundedCornerShape(12.dp))
-                        .clickable { onBibleComClick() }
+                        .background(panel, RoundedCornerShape(12.dp))
+                        .clickable { onOpenResource() }
                         .padding(16.dp)
                 ) {
-                    Text("Bible.com", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("Bible.com", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            Divider()
+            HorizontalDivider()
 
-            // 4. FONT SIZE
             Spacer(modifier = Modifier.height(16.dp))
-            Slider(value = fontSize, onValueChange = onFontSizeChange)
+            Text("Font Size", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = textColor)
+            Slider(
+                value = fontSize,
+                onValueChange = onFontSizeChange,
+                valueRange = 12f..24f
+            )
             Spacer(modifier = Modifier.height(16.dp))
 
-            // 5. DARK MODE - with label + button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Dark Mode", fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                Switch(checked = isDarkMode, onCheckedChange = onDarkModeChange)
+                Text("Dark Mode", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = textColor)
+                Switch(checked = darkMode, onCheckedChange = onDarkModeChange)
             }
 
             Spacer(modifier = Modifier.height(24.dp))
-            Divider()
+            HorizontalDivider()
 
-            // 6. DAILY VERSE - with label
             Button(
-                onClick = onDailyVerseClick,
+                onClick = onDailyVerse,
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5EEDD)),
+                colors = ButtonDefaults.buttonColors(containerColor = panel),
                 shape = RoundedCornerShape(24.dp)
             ) {
-                Icon(Icons.Default.MenuBook, contentDescription = null, tint = Color.Black)
+                Icon(Icons.Default.MenuBook, contentDescription = null, tint = textColor)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Daily Verse", color = Color.Black, fontSize = 16.sp)
+                Text("Daily Verse", color = textColor, fontSize = 16.sp)
             }
 
-            // 7. NOTES - with label
             Button(
-                onClick = onNotesClick,
+                onClick = onShowNotes,
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5EEDD)),
+                colors = ButtonDefaults.buttonColors(containerColor = panel),
                 shape = RoundedCornerShape(24.dp)
             ) {
-                Icon(Icons.Default.Notes, contentDescription = null, tint = Color.Black)
+                Icon(Icons.Default.Notes, contentDescription = null, tint = textColor)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Notes", color = Color.Black, fontSize = 16.sp)
+                Text("Notes ($notesCount)", color = textColor, fontSize = 16.sp)
             }
 
             Spacer(modifier = Modifier.height(40.dp))
