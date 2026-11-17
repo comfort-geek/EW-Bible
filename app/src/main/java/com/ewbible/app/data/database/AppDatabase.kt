@@ -41,13 +41,9 @@ abstract class AppDatabase : RoomDatabase() {
                     var highlightsBackup: List<HighlightBackup> = emptyList()
 
                     if (needsAssetUpdate) {
-                        // 1. Backup user data BEFORE deleting
                         notesBackup = readNotes(appContext)
                         highlightsBackup = readHighlights(appContext)
-
-                        // 2. Delete old DB so createFromAsset copies the new one
                         appContext.deleteDatabase(DB_NAME)
-                        // FIXED: do NOT save prefs here - save only after verified copy
                         INSTANCE = null
                     }
 
@@ -57,10 +53,8 @@ abstract class AppDatabase : RoomDatabase() {
                         DB_NAME
                     )
                         .createFromAsset("ewbible.db")
-                        // FIXED: removed fallbackToDestructiveMigration() - it wiped the prepopulated DB
                         .build()
 
-                    // 3. Verify copy + restore user data, then mark as done
                     if (needsAssetUpdate) {
                         val count = runCatching {
                             val c = instance.openHelper.readableDatabase
@@ -84,12 +78,9 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        // Tries snake_case first (matches your BibleDao: book_id, note_text)
-        // Falls back to camelCase if your entities use bookId / noteText
         private fun readNotes(context: Context): List<NoteBackup> {
             val dbFile = context.getDatabasePath(DB_NAME)
             if (!dbFile.exists()) return emptyList()
-            // Try snake_case, then camelCase
             readNotesWithColumns(dbFile.path,
                 "SELECT book_id, chapter, verse, note_text, timestamp FROM notes"
             ).let { if (it.isNotEmpty()) return it }
@@ -165,7 +156,6 @@ abstract class AppDatabase : RoomDatabase() {
         ) {
             runCatching {
                 val sqlite: SupportSQLiteDatabase = db.openHelper.writableDatabase
-                // Detect which column naming the NEW DB uses
                 val notesCols = getColumns(sqlite, "notes")
                 val notesSql = if ("book_id" in notesCols) {
                     "INSERT OR REPLACE INTO notes (book_id, chapter, verse, note_text, timestamp) VALUES (?,?,?,?,?)"
