@@ -9,6 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     entities = [BookEntity::class, VerseEntity::class, SummaryEntity::class, CommentaryEntity::class, NoteEntity::class, HighlightEntity::class],
     version = 3, exportSchema = false
 )
+@TypeConverters(CommentaryTypeConverters::class) // <-- Added this so Room handles the commentary decompression automatically
 abstract class AppDatabase : RoomDatabase() {
     abstract fun bibleDao(): BibleDao
 
