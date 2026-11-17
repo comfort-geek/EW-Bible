@@ -37,17 +37,17 @@ fun BookDrawer(
     otBookEntities: List<BookEntity>,
     ntBookEntities: List<BookEntity>,
     chapterCounts: Map<Int, Int>,
-    selectedBook: String,
+    selectedBookId: Int,
     selectedChapter: Int,
-    expandedBook: String?,
+    expandedBookId: Int?,
     background: Color,
     textColor: Color,
     panel: Color,
     gold: Color,
     secondaryText: Color,
-    onOpenBook: (String, Int) -> Unit,
-    onSelectBook: (String) -> Unit,
-    onToggleBook: (String) -> Unit,
+    onOpenBook: (Int, Int) -> Unit,
+    onSelectBook: (Int) -> Unit,
+    onToggleBook: (Int) -> Unit,
 ) {
     ModalDrawerSheet(
         drawerShape = RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp),
@@ -56,21 +56,19 @@ fun BookDrawer(
         drawerContentColor = textColor,
     ) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            // FIX 4: Title 22.sp -> 18.sp, same as Settings
             Text("Books", color = textColor, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(12.dp))
             if (otBookEntities.isEmpty() && ntBookEntities.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = gold) }
             } else {
-                // FIX 1: bottom padding so last book not cut
                 LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 80.dp)) {
                     item { Text("Old Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp); Spacer(Modifier.height(8.dp)) }
                     items(otBookEntities, key = { it.id }) { book ->
-                        BookDrawerRow(book, chapterCounts[book.id] ?: 1, selectedBook, selectedChapter, expandedBook, textColor, panel, gold, secondaryText, onOpenBook, onSelectBook, onToggleBook)
+                        BookDrawerRow(book, chapterCounts[book.id] ?: 1, selectedBookId, selectedChapter, expandedBookId, textColor, panel, gold, secondaryText, onOpenBook, onSelectBook, onToggleBook)
                     }
                     item { Spacer(modifier = Modifier.height(12.dp)); Text("New Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp); Spacer(Modifier.height(8.dp)) }
                     items(ntBookEntities, key = { it.id }) { book ->
-                        BookDrawerRow(book, chapterCounts[book.id] ?: 1, selectedBook, selectedChapter, expandedBook, textColor, panel, gold, secondaryText, onOpenBook, onSelectBook, onToggleBook)
+                        BookDrawerRow(book, chapterCounts[book.id] ?: 1, selectedBookId, selectedChapter, expandedBookId, textColor, panel, gold, secondaryText, onOpenBook, onSelectBook, onToggleBook)
                     }
                 }
             }
@@ -83,24 +81,24 @@ fun BookDrawer(
 private fun BookDrawerRow(
     book: BookEntity,
     chapterCount: Int,
-    selectedBook: String,
+    selectedBookId: Int,
     selectedChapter: Int,
-    expandedBook: String?,
+    expandedBookId: Int?,
     textColor: Color,
     panel: Color,
     gold: Color,
     secondaryText: Color,
-    onOpenBook: (String, Int) -> Unit,
-    onSelectBook: (String) -> Unit,
-    onToggleBook: (String) -> Unit,
+    onOpenBook: (Int, Int) -> Unit,
+    onSelectBook: (Int) -> Unit,
+    onToggleBook: (Int) -> Unit,
 ) {
-    val isSelected = selectedBook == book.name
-    val isExpanded = expandedBook == book.name
+    val isSelected = selectedBookId == book.id
+    val isExpanded = expandedBookId == book.id
     Column {
         Row(
             modifier = Modifier.fillMaxWidth().clickable {
-                onToggleBook(book.name)
-                if (!isExpanded) onSelectBook(book.name)
+                onToggleBook(book.id)
+                if (!isExpanded) onSelectBook(book.id)
             }.padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -108,8 +106,6 @@ private fun BookDrawerRow(
             Text(if (isExpanded) "▾" else "▸", color = secondaryText)
         }
         if (isExpanded) {
-            // FIX 14: Numbers only, small, centered - NOT full width
-            // Centered 232dp box = 5 x 40dp + spacing, so 1 2 3 4 5 line up
             Box(
                 modifier = Modifier.fillMaxWidth(),
                 contentAlignment = Alignment.Center
@@ -120,7 +116,7 @@ private fun BookDrawerRow(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     for (chapter in 1..chapterCount.coerceAtLeast(1)) {
-                        val isChapterSelected = selectedBook == book.name && selectedChapter == chapter
+                        val isChapterSelected = selectedBookId == book.id && selectedChapter == chapter
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
@@ -128,8 +124,7 @@ private fun BookDrawerRow(
                                     if (isChapterSelected) gold else panel,
                                     RoundedCornerShape(10.dp)
                                 )
-                                // FIX 13: Tap chapter -> onOpenBook -> HomeScreen closes drawer
-                                .clickable { onOpenBook(book.name, chapter) },
+                                .clickable { onOpenBook(book.id, chapter) },
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
