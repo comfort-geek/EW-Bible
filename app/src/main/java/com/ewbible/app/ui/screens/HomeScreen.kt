@@ -90,6 +90,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
     }
     fun openBook(bookName: String, chapter: Int) { openBook(BookCatalog.id(bookName), chapter) }
 
+    // SWIPE - Bible ONLY. Open EW swipe lives inside OpenEWContent WebView, so they never fight.
     val swipeModifier = Modifier.pointerInput(currentBookId, state.selectedChapter, state.selectedTab) {
         awaitPointerEventScope {
             var downX = 0f; var downY = 0f; var tracking = false
@@ -114,10 +115,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
     }
 
     if (!state.isReadingRestored) {
-        Box(
-            modifier = Modifier.fillMaxSize().background(background),
-            contentAlignment = Alignment.Center
-        ) {
+        Box(modifier = Modifier.fillMaxSize().background(background), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(color = gold)
                 Spacer(modifier = Modifier.height(12.dp))
@@ -162,6 +160,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
             if (state.selectedTab == "Bible") {
                 Text(text = "$currentBookName ${state.selectedChapter}", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
+            // SWIPE ONLY ON BIBLE
             Box(modifier = Modifier.weight(1f).fillMaxWidth().then(if (state.selectedTab == "Bible") swipeModifier else Modifier)) {
                 when (state.selectedTab) {
                     "Bible" -> BibleContent(
@@ -171,8 +170,8 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         onVerseClick = { viewModel.selectVerse(it) }, onVerseLongClick = { viewModel.selectVerse(it) }
                     )
                     "Open EW" -> OpenEWContent(
-                        commentaryHtml = state.commentaryHtml, summaryText = state.summaryText, fontSize = state.fontSize,
-                        textColor = textColor, secondaryText = textColor.copy(alpha = 0.6f), hasError = state.commentaryError,
+                        commentaryHtml = state.commentaryHtml, fontSize = state.fontSize,
+                        textColor = textColor, hasError = state.commentaryError,
                         isLoading = state.commentaryHtml.isBlank() && !state.commentaryError,
                         bookName = currentBookName, chapter = state.selectedChapter,
                         onVerseClick = { book, chapter, verse ->
@@ -211,7 +210,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 Box(modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
                     Text(text = state.linkedVerseText.ifBlank { "Loading..." }, color = textColor, fontSize = state.fontSize.sp, lineHeight = (state.fontSize + 8).sp)
                 }
-                // FIX: Duplicate bottom Close REMOVED - top-right X already closes it.
                 Button(
                     onClick = { showLinkedVerseSheet = false; openBook(linkedVerseBook, linkedVerseChapter); viewModel.selectTab("Bible"); viewModel.selectVerse(linkedVerseNum) },
                     colors = ButtonDefaults.buttonColors(containerColor = gold),
