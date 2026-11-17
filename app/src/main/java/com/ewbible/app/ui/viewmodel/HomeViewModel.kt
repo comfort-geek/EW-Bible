@@ -15,7 +15,9 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.util.zip.GZIPInputStream
+import java.util.zip.Inflater
 
 data class HomeUiState(
     val books: List<BookEntity> = emptyList(),
@@ -48,7 +50,9 @@ data class HomeUiState(
     val userEmail: String = "",
     val scrollRestoreKey: Int = 0,
     val showNoteDialog: Boolean = false,
-    val currentNoteText: String = ""
+    val currentNoteText: String = "",
+    // FIX B: True only after saved Matthew 1 is restored. HomeScreen waits for this.
+    val isReadingRestored: Boolean = false
 )
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -76,6 +80,8 @@ class HomeViewModel(
     private val scrollRestoreKey = MutableStateFlow(0)
     private val linkedVerseText = MutableStateFlow("")
     private val linkedVerseRef = MutableStateFlow("")
+    // FIX B: starts false, becomes true after restoreSavedReading()
+    private val isReadingRestored = MutableStateFlow(false)
     private var commentaryJob: Job? = null
 
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
@@ -117,11 +123,12 @@ class HomeViewModel(
     }
 
     @Suppress("UNCHECKED_CAST")
-    val uiState: StateFlow<HomeUiState> = combine(readingState, navState, contentState, settingsState) { args ->
+    val uiState: StateFlow<HomeUiState> = combine(readingState, navState, contentState, settingsState, isReadingRestored) { args ->
         val reading = args[0] as ReadingState
         val nav = args[1] as NavState
         val content = args[2] as ContentState
         val settings = args[3] as SettingsState
+        val restored = args[4] as Boolean
         HomeUiState(
             books = reading.books, verses = reading.verses, highlights = reading.highlights, notes = reading.notes,
             currentBookId = reading.currentBookId, currentBook = nav.selectedBook, selectedBook = nav.selectedBook,
@@ -134,7 +141,8 @@ class HomeViewModel(
             dailyVerse = content.dailyVerse, darkMode = settings.darkMode, fontSize = settings.fontSize,
             userName = settings.userName, userEmail = settings.userEmail,
             isLoggedIn = settings.userName != "Guest" && settings.userEmail.isNotBlank(),
-            scrollRestoreKey = content.scrollRestoreKey, showNoteDialog = nav.showNoteDialog, currentNoteText = nav.currentNoteText
+            scrollRestoreKey = content.scrollRestoreKey, showNoteDialog = nav.showNoteDialog, currentNoteText = nav.currentNoteText,
+            isReadingRestored = restored
         )
     }.stateIn(scope = viewModelScope, started = SharingStarted.WhileSubscribed(5_000), initialValue = HomeUiState())
 
@@ -235,11 +243,16 @@ class HomeViewModel(
         }
     }
     private suspend fun restoreSavedReading() {
-        val lastBookId = prefs.getLastBookId()
-        val lastChapter = prefs.getLastChapter()
-        if (lastBookId in 1..66) {
-            selectedBookId.value = lastBookId
-            selectedChapter.value = lastChapter.coerceIn(1, BookCatalog.chapters(lastBookId))
+        try {
+            val lastBookId = prefs.getLastBookId()
+            val lastChapter = prefs.getLastChapter()
+            if (lastBookId in 1..66) {
+                selectedBookId.value = lastBookId
+                selectedChapter.value = lastChapter.coerceIn(1, BookCatalog.chapters(lastBookId))
+            }
+        } finally {
+            // FIX B: Only now is it safe to show the UI — no more Genesis 1 flash
+            isReadingRestored.value = true
         }
     }
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
@@ -258,8 +271,6 @@ class HomeViewModel(
         }
     }
 
-    // FIXED: DAO has getCommentaryCompressed() -> ByteArray?, not getCommentary() -> htmlText
-    // DB stores html_compressed as GZIP bytes, so decompress here.
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
@@ -278,16 +289,37 @@ class HomeViewModel(
     }
     fun loadCommentary() { loadCommentary(currentBookId.value, selectedChapter.value) }
 
+    // FIX A: Try GZIP -> ZLIB -> Raw Deflate -> Plain text. Old code only tried GZIP.
     private fun decompressCommentary(bytes: ByteArray): String {
-        return try {
-            // GZIP magic bytes: 1f 8b
-            if (bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
-                GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader(Charsets.UTF_8).use { it.readText() }
-            } else {
-                String(bytes, Charsets.UTF_8)
+        // 1. GZIP (1f 8b)
+        runCatching {
+            GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader(Charsets.UTF_8).use { it.readText() }
+        }.onSuccess { if (it.isNotBlank()) return it }
+
+        // 2. ZLIB / Deflate (this is what your DB actually uses)
+        runCatching { inflate(bytes, nowrap = false) }.onSuccess { if (it.isNotBlank()) return it }
+
+        // 3. Raw Deflate (no header)
+        runCatching { inflate(bytes, nowrap = true) }.onSuccess { if (it.isNotBlank()) return it }
+
+        // 4. Plain text fallback
+        return String(bytes, Charsets.UTF_8)
+    }
+
+    private fun inflate(bytes: ByteArray, nowrap: Boolean): String {
+        val inflater = Inflater(nowrap)
+        try {
+            inflater.setInput(bytes)
+            val out = ByteArrayOutputStream()
+            val buf = ByteArray(4096)
+            while (!inflater.finished()) {
+                val n = inflater.inflate(buf)
+                if (n == 0) break
+                out.write(buf, 0, n)
             }
-        } catch (e: Exception) {
-            String(bytes, Charsets.UTF_8)
+            return out.toString(Charsets.UTF_8.name())
+        } finally {
+            inflater.end()
         }
     }
 
