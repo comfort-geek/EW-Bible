@@ -1,6 +1,7 @@
 package com.ewbible.app.ui.screens
 
 import android.graphics.Color as AndroidColor
+import android.view.View
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -8,7 +9,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
@@ -23,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -35,7 +34,7 @@ import java.net.URLEncoder
 @Composable
 fun OpenEWContent(
     commentaryHtml: String,
-    summaryText: String = "",
+    summaryText: String = "", // KEPT for compatibility, but NOT shown anymore - commentary already has it
     fontSize: Float,
     textColor: Color,
     secondaryText: Color,
@@ -117,83 +116,77 @@ fun OpenEWContent(
         return
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        if (summaryText.isNotBlank()) {
-            Text(
-                text = summaryText,
-                color = textColor,
-                fontSize = fontSize.sp,
-                fontStyle = FontStyle.Italic,
-                lineHeight = (fontSize + 8).sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-            )
-        }
+    // FIX 1: Summary block DELETED - no more duplicate
+    // FIX 2: No Column wrapping WebView anymore - WebView is direct child, so it scrolls natively and smoothly like Bible tab
 
-        AndroidView(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    settings.javaScriptEnabled = false
-                    settings.domStorageEnabled = false
-                    settings.loadWithOverviewMode = true
-                    settings.useWideViewPort = true
-                    settings.builtInZoomControls = false
-                    setBackgroundColor(AndroidColor.TRANSPARENT)
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { ctx ->
+            WebView(ctx).apply {
+                // FIX 2: Performance - hardware layer + no over-scroll fighting
+                setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                overScrollMode = View.OVER_SCROLL_NEVER
+                isNestedScrollingEnabled = true
 
-                    // NO SWIPE HERE - swipe lives ONLY in HomeScreen.kt
+                settings.javaScriptEnabled = false
+                settings.domStorageEnabled = false
+                settings.loadWithOverviewMode = true
+                settings.useWideViewPort = true
+                settings.builtInZoomControls = false
+                settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+                setBackgroundColor(AndroidColor.TRANSPARENT)
 
-                    webViewClient = object : WebViewClient() {
-                        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                            val url = request?.url?.toString() ?: return false
-                            if (url.startsWith("ew://verse")) {
-                                runCatching {
-                                    val query = url.substringAfter("?", "")
-                                    val params = query.split("&").associate {
-                                        val parts = it.split("=", limit = 2)
-                                        if (parts.size == 2) parts[0] to URLDecoder.decode(parts[1], "UTF-8") else parts[0] to ""
-                                    }
-                                    val b = params["book"]?.takeIf { it.isNotBlank() } ?: bookName
-                                    val c = params["chapter"]?.toIntOrNull() ?: chapter
-                                    val v = params["verse"]?.toIntOrNull() ?: 1
-                                    onVerseClick(b, c, v)
-                                }
-                                return true
-                            }
-                            return false
-                        }
-                        override fun onReceivedError(
-                            view: WebView?,
-                            errorCode: Int,
-                            description: String?,
-                            failingUrl: String?
-                        ) {
-                        }
-                    }
-                }
-            },
-            update = { wv ->
-                if (lastLoaded.value != html) {
-                    lastLoaded.value = html
-                    runCatching {
-                        wv.post {
+                // NO SWIPE HERE - swipe lives ONLY in HomeScreen.kt
+
+                webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                        val url = request?.url?.toString() ?: return false
+                        if (url.startsWith("ew://verse")) {
                             runCatching {
-                                wv.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
+                                val query = url.substringAfter("?", "")
+                                val params = query.split("&").associate {
+                                    val parts = it.split("=", limit = 2)
+                                    if (parts.size == 2) parts[0] to URLDecoder.decode(parts[1], "UTF-8") else parts[0] to ""
+                                }
+                                val b = params["book"]?.takeIf { it.isNotBlank() } ?: bookName
+                                val c = params["chapter"]?.toIntOrNull() ?: chapter
+                                val v = params["verse"]?.toIntOrNull() ?: 1
+                                onVerseClick(b, c, v)
                             }
+                            return true
                         }
+                        return false
                     }
-                }
-            },
-            onRelease = { wv ->
-                runCatching {
-                    wv.stopLoading()
-                    wv.removeAllViews()
-                    wv.destroy()
+                    override fun onReceivedError(
+                        view: WebView?,
+                        errorCode: Int,
+                        description: String?,
+                        failingUrl: String?
+                    ) {
+                    }
                 }
             }
-        )
-    }
+        },
+        update = { wv ->
+            if (lastLoaded.value != html) {
+                lastLoaded.value = html
+                runCatching {
+                    wv.post {
+                        runCatching {
+                            wv.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
+                        }
+                    }
+                }
+            }
+        },
+        onRelease = { wv ->
+            runCatching {
+                wv.stopLoading()
+                wv.removeAllViews()
+                wv.destroy()
+            }
+        }
+    )
 }
 
 // NO BOOK NAMES HERE. Everything comes from BookCatalog.
