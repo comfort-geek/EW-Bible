@@ -19,12 +19,14 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.database.BookCatalog
@@ -78,12 +80,45 @@ fun BibleContent(
     onVerseLongClick: (Int) -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
+
+    // FIXED: Single source of truth via Catalog — HomeScreen passes id, we never trust raw values
+    val safeBookId = selectedBookId.coerceIn(1, 66)
+    val bookName = BookCatalog.name(safeBookId)
+    val maxChapter = BookCatalog.chapters(safeBookId)
+    val safeChapter = selectedChapter.coerceIn(1, maxChapter)
+
+    // NOTE: NO swipe here. Swipe lives ONLY in HomeScreen (swipeModifier on the outer Box).
+    // Adding swipe here would double-fire nextChapter() / previousChapter().
+
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
         contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
     ) {
-        item(key = "summary-$selectedBookId-$selectedChapter") {
+        // FIXED: Header was missing — HomeScreen already shows "James 1" at top,
+        // this is inside the list so it scrolls away correctly and always matches Catalog
+        item(key = "header-$safeBookId-$safeChapter") {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = bookName,
+                    color = textColor,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = "Chapter $safeChapter of $maxChapter",
+                    color = gold,
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
+        item(key = "summary-$safeBookId-$safeChapter") {
             if (summary != null) {
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
@@ -101,10 +136,22 @@ fun BibleContent(
                         Text(summary.application, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
                     }
                 }
-            } else {
-                Spacer(modifier = Modifier.height(0.dp))
             }
         }
+
+        // FIXED: Empty state — before it showed blank if verses didn't load
+        if (versesList.isEmpty()) {
+            item(key = "empty-$safeBookId-$safeChapter") {
+                Text(
+                    text = "No verses loaded for $bookName $safeChapter.",
+                    color = textColor.copy(alpha = 0.6f),
+                    fontSize = fontSize.sp,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
         itemsIndexed(
             versesList,
             key = { _, verse -> "${verse.bookId}-${verse.chapter}-${verse.verse}" }
