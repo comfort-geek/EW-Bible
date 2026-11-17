@@ -201,10 +201,35 @@ class HomeViewModel(
         scrollRestoreKey.update { it + 1 }
         saveReadingProgress()
     }
-    fun previousChapter() { if (selectedChapter.value > 1) selectChapter(selectedChapter.value - 1) }
+    // FIX: Cross-book navigation - swipe past last/first chapter goes to next/prev book
+    fun previousChapter() {
+        if (selectedChapter.value > 1) {
+            selectChapter(selectedChapter.value - 1)
+            return
+        }
+        // At chapter 1 -> go to last chapter of previous book
+        val prevBookId = currentBookId.value - 1
+        if (prevBookId < 1) return // Already Genesis 1, nowhere to go
+        selectedBookId.value = prevBookId
+        selectedChapter.value = BookCatalog.chapters(prevBookId)
+        selectedVerse.value = null
+        scrollRestoreKey.update { it + 1 }
+        saveReadingProgress()
+    }
     fun nextChapter() {
         val max = BookCatalog.chapters(currentBookId.value)
-        if (selectedChapter.value < max) selectChapter(selectedChapter.value + 1)
+        if (selectedChapter.value < max) {
+            selectChapter(selectedChapter.value + 1)
+            return
+        }
+        // At last chapter -> go to chapter 1 of next book
+        val nextBookId = currentBookId.value + 1
+        if (nextBookId > 66) return // Already Revelation 22, nowhere to go
+        selectedBookId.value = nextBookId
+        selectedChapter.value = 1
+        selectedVerse.value = null
+        scrollRestoreKey.update { it + 1 }
+        saveReadingProgress()
     }
     fun selectVerse(verse: Int?) {
         selectedVerse.value = verse
