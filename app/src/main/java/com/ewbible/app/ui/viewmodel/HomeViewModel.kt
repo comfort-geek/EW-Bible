@@ -66,7 +66,10 @@ class HomeViewModel(
     private val commentary = MutableStateFlow("")
     private val commentaryError = MutableStateFlow(false)
     private val summaryState = MutableStateFlow<SummaryEntity?>(null)
-    private val chapterCounts = MutableStateFlow<Map<Int, Int>>(emptyMap())
+    // FIXED: Start from BookCatalog, never empty. DB is only an override later.
+    private val chapterCounts = MutableStateFlow<Map<Int, Int>>(
+        BookCatalog.all.associate { it.id to it.chapters }
+    )
     private val searchResults = MutableStateFlow<List<VerseSearchResult>>(emptyList())
     private val dailyVerse = MutableStateFlow("")
     private val scrollRestoreKey = MutableStateFlow(0)
@@ -136,7 +139,18 @@ class HomeViewModel(
 
     init {
         viewModelScope.launch { restoreSavedReading() }
-        viewModelScope.launch { chapterCounts.value = dao.getChapterCounts().associate { it.bookId to it.chapterCount } }
+        // FIXED: Don't overwrite Catalog with empty/wrong DB result.
+        // Merge DB on top of Catalog, only if it has sane values.
+        viewModelScope.launch {
+            runCatching {
+                val fromDb = dao.getChapterCounts().associate { it.bookId to it.chapterCount }
+                if (fromDb.isNotEmpty()) {
+                    chapterCounts.value = BookCatalog.all.associate { it.id to it.chapters } + fromDb.filterValues { it > 0 }
+                }
+            }.onFailure {
+                Log.e("HomeViewModel", "getChapterCounts failed, keeping BookCatalog counts", it)
+            }
+        }
         viewModelScope.launch {
             combine(currentBookId, selectedChapter, selectedTab) { bookId, chapter, tab -> Triple(bookId, chapter, tab) }
                 .collectLatest { (bookId, chapter, tab) ->
@@ -171,17 +185,19 @@ class HomeViewModel(
         saveReadingProgress()
     }
     fun selectBook(bookName: String) = selectBook(BookCatalog.id(bookName))
+    // FIXED: Clamp to BookCatalog max, never go out of range
     fun selectChapter(chapter: Int) {
-        selectedChapter.value = chapter
+        val max = BookCatalog.chapters(currentBookId.value)
+        selectedChapter.value = chapter.coerceIn(1, max)
         selectedVerse.value = null
         scrollRestoreKey.update { it + 1 }
         saveReadingProgress()
     }
     fun previousChapter() { if (selectedChapter.value > 1) selectChapter(selectedChapter.value - 1) }
+    // FIXED: Use BookCatalog, not nullable map
     fun nextChapter() {
-        val max = chapterCounts.value[currentBookId.value]
-        if (max == null) selectChapter(selectedChapter.value + 1)
-        else if (selectedChapter.value < max) selectChapter(selectedChapter.value + 1)
+        val max = BookCatalog.chapters(currentBookId.value)
+        if (selectedChapter.value < max) selectChapter(selectedChapter.value + 1)
     }
     fun selectVerse(verse: Int?) {
         selectedVerse.value = verse
@@ -193,9 +209,11 @@ class HomeViewModel(
         }
     }
     fun clearSelection() { selectedVerse.value = null }
+    // FIXED: Clamp book + chapter
     fun openBook(bookId: Int, chapter: Int) {
-        selectedBookId.value = bookId.coerceIn(1, 66)
-        selectedChapter.value = chapter
+        val safeId = bookId.coerceIn(1, 66)
+        selectedBookId.value = safeId
+        selectedChapter.value = chapter.coerceIn(1, BookCatalog.chapters(safeId))
         selectedVerse.value = null
         scrollRestoreKey.update { it + 1 }
         saveReadingProgress()
@@ -217,12 +235,13 @@ class HomeViewModel(
             prefs.saveLastReading(bookId = currentBookId.value, chapter = selectedChapter.value, verse = verse?.verse ?: (selectedVerse.value ?: 1), scrollIndex = scrollIndex, scrollOffset = scrollOffset)
         }
     }
+    // FIXED: Clamp restored chapter to that book's max
     private suspend fun restoreSavedReading() {
         val lastBookId = prefs.getLastBookId()
         val lastChapter = prefs.getLastChapter()
         if (lastBookId in 1..66) {
             selectedBookId.value = lastBookId
-            selectedChapter.value = lastChapter
+            selectedChapter.value = lastChapter.coerceIn(1, BookCatalog.chapters(lastBookId))
         }
     }
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
