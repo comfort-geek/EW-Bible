@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.auth.GoogleAuth
+import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
@@ -54,7 +55,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var expandedBook by remember { mutableStateOf<String?>(null) }
     var showHighlightPicker by remember { mutableStateOf(false) }
     var showBibleCom by remember { mutableStateOf(false) }
-    // NEW: Linked verse bottom sheet - stays in Open EW
     var showLinkedVerseSheet by remember { mutableStateOf(false) }
     var linkedVerseBook by remember { mutableStateOf("") }
     var linkedVerseChapter by remember { mutableStateOf(1) }
@@ -68,6 +68,10 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val panel = if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9)
     val textColor = if (isDark) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
 
+    // WIRED: Single source of truth - ID 1-66. Name is display only.
+    val currentBookId = state.currentBookId
+    val currentBookName = BookCatalog.name(currentBookId)
+
     LaunchedEffect(state.verses) {
         if (state.verses.isEmpty()) return@LaunchedEffect
         if (hasRestoredScroll) return@LaunchedEffect
@@ -78,8 +82,9 @@ fun HomeScreen(viewModel: HomeViewModel) {
         hasRestoredScroll = true
     }
 
-    fun openBook(bookName: String, chapter: Int) {
-        viewModel.openBook(bookName, chapter)
+    // WIRED: Primary - ID version. Bible + Commentary both use this ID.
+    fun openBook(bookId: Int, chapter: Int) {
+        viewModel.openBook(bookId, chapter)
         expandedBook = null
         hasRestoredScroll = true
         scope.launch {
@@ -88,7 +93,12 @@ fun HomeScreen(viewModel: HomeViewModel) {
         }
     }
 
-    val swipeModifier = Modifier.pointerInput(state.currentBook, state.selectedChapter, state.selectedTab) {
+    // OVERLOAD - keeps BookDrawer / Search / Notes working, converts name -> ID once
+    fun openBook(bookName: String, chapter: Int) {
+        openBook(BookCatalog.id(bookName), chapter)
+    }
+
+    val swipeModifier = Modifier.pointerInput(currentBookId, state.selectedChapter, state.selectedTab) {
         awaitPointerEventScope {
             var downX = 0f
             var downY = 0f
@@ -125,7 +135,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 otBookEntities = state.books.filter { it.id <= 39 }.sortedBy { it.id },
                 ntBookEntities = state.books.filter { it.id >= 40 }.sortedBy { it.id },
                 chapterCounts = state.chapterCounts,
-                selectedBook = state.currentBook,
+                selectedBook = currentBookName,
                 selectedChapter = state.selectedChapter,
                 expandedBook = expandedBook,
                 background = background,
@@ -134,7 +144,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 gold = gold,
                 secondaryText = textColor.copy(alpha = 0.6f),
                 onOpenBook = { book, chapter -> openBook(book, chapter) },
-                onSelectBook = { book -> viewModel.selectBook(book) },
+                onSelectBook = { book -> viewModel.selectBook(BookCatalog.id(book)) },
                 onToggleBook = { book ->
                     expandedBook = if (expandedBook == book) null else book
                 }
@@ -173,7 +183,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
 
             if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") {
                 Text(
-                    text = "${state.currentBook} ${state.selectedChapter}",
+                    text = "$currentBookName ${state.selectedChapter}",
                     color = textColor,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp,
@@ -189,7 +199,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
             ) {
                 when (state.selectedTab) {
                     "Bible" -> BibleContent(
-                        selectedBook = state.currentBook,
+                        selectedBookId = currentBookId,
                         selectedChapter = state.selectedChapter,
                         summary = state.summary,
                         versesList = state.verses,
@@ -209,7 +219,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         textColor = textColor,
                         secondaryText = textColor.copy(alpha = 0.6f),
                         hasError = state.commentaryError,
-                        bookName = state.currentBook,
+                        bookName = currentBookName,
                         chapter = state.selectedChapter,
                         onVerseClick = { book, chapter, verse ->
                             linkedVerseBook = book
@@ -338,7 +348,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         onClose = { settingsOpen = false },
         onFontSizeChange = { viewModel.setFontSize(it) },
         onDarkModeChange = { viewModel.setDarkMode(it) },
-        // FIXED: Random every open - load a new random verse BEFORE opening dialog
         onDailyVerse = {
             settingsOpen = false
             viewModel.loadDailyVerse()
@@ -396,13 +405,13 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxWidth().height(400.dp)) {
                         items(state.notes, key = { "${it.bookId}-${it.chapter}-${it.verse}-${it.timestamp}" }) { note ->
-                            val bookName = state.books.firstOrNull { it.id == note.bookId }?.name ?: "Book ${note.bookId}"
+                            val bookName = BookCatalog.name(note.bookId)
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
                                         showAllNotes = false
-                                        openBook(bookName, note.chapter)
+                                        openBook(note.bookId, note.chapter)
                                         viewModel.selectVerse(note.verse)
                                     }
                                     .padding(vertical = 8.dp)
@@ -433,7 +442,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
             title = { Text("Note", color = textColor) },
             text = {
                 NotesCard(
-                    selectedBook = state.currentBook,
+                    selectedBook = currentBookName,
                     selectedChapter = state.selectedChapter,
                     selectedVerse = state.selectedVerse,
                     noteText = noteText,
@@ -479,7 +488,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         )
     }
 
-    // Bible.com WebView - opens INSIDE app, no Chrome bar
     if (showBibleCom) {
         WebViewScreen(
             url = "https://www.bible.com",
