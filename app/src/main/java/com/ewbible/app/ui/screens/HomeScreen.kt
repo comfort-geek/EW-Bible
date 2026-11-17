@@ -169,7 +169,8 @@ fun HomeScreen(viewModel: HomeViewModel) {
                             linkedVerseBook = book; linkedVerseChapter = chapter; linkedVerseNum = verse
                             viewModel.loadLinkedVerse(book, chapter, verse); showLinkedVerseSheet = true
                         },
-                        onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() }
+                        onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() },
+                        onRetry = { viewModel.loadCommentary() }
                     )
                     "Search" -> SearchContent(
                         searchQuery = searchQuery, searchFilter = state.searchFilter, verseResults = state.searchResults,
