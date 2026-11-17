@@ -17,10 +17,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -33,7 +31,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.ewbible.app.data.database.BookCatalog
 import java.net.URLDecoder
 import java.net.URLEncoder
-import kotlin.math.abs
 
 @Composable
 fun OpenEWContent(
@@ -43,19 +40,17 @@ fun OpenEWContent(
     textColor: Color,
     secondaryText: Color,
     hasError: Boolean = false,
-    isLoading: Boolean = false, // NEW: wired from HomeViewModel
+    isLoading: Boolean = false,
     bookName: String = "",
     chapter: Int = 1,
     onVerseClick: (book: String, chapter: Int, verse: Int) -> Unit = { _, _, _ -> },
     onNextChapter: () -> Unit = {},
     onPreviousChapter: () -> Unit = {},
-    onRetry: () -> Unit = {}, // NEW: fixes dead-end in screenshot
+    onRetry: () -> Unit = {},
 ) {
-    var webViewFailed by remember { mutableStateOf(false) }
     val lastLoaded = remember(bookName, chapter) { mutableStateOf("") }
 
     LaunchedEffect(bookName, chapter) {
-        webViewFailed = false
         lastLoaded.value = ""
     }
 
@@ -92,7 +87,6 @@ fun OpenEWContent(
         """.trimIndent()
     }
 
-    // NEW: Loading state — before, loading looked like blank/error
     if (isLoading) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -104,13 +98,8 @@ fun OpenEWContent(
         return
     }
 
-    // FIXED: Same error text as screenshot, but now with Retry + header
     if (hasError && linkedHtml.isBlank() && summaryText.isBlank()) {
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
-            if (bookName.isNotBlank()) {
-                Text(text = "$bookName $chapter", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Spacer(modifier = Modifier.height(12.dp))
-            }
             Text(
                 text = "Could not load commentary. Please try again.",
                 color = secondaryText,
@@ -153,25 +142,7 @@ fun OpenEWContent(
                     settings.builtInZoomControls = false
                     setBackgroundColor(AndroidColor.TRANSPARENT)
 
-                    var downX = 0f
-                    var downY = 0f
-                    setOnTouchListener { _, event ->
-                        when (event.action) {
-                            android.view.MotionEvent.ACTION_DOWN -> {
-                                downX = event.x
-                                downY = event.y
-                            }
-                            android.view.MotionEvent.ACTION_UP -> {
-                                val dx = event.x - downX
-                                val dy = event.y - downY
-                                if (abs(dx) > 180 && abs(dx) > abs(dy) * 2) {
-                                    if (dx < 0) onNextChapter() else onPreviousChapter()
-                                    return@setOnTouchListener true
-                                }
-                            }
-                        }
-                        false
-                    }
+                    // NO SWIPE HERE - swipe lives ONLY in HomeScreen.kt
 
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -198,7 +169,6 @@ fun OpenEWContent(
                             description: String?,
                             failingUrl: String?
                         ) {
-                            // Intentionally empty: do not show error for loadDataWithBaseURL
                         }
                     }
                 }
@@ -226,82 +196,11 @@ fun OpenEWContent(
     }
 }
 
-// Aliases found in commentary HTML -> canonical BookCatalog name
-private val BOOK_ALIASES = mapOf(
-    "Psalm" to "Psalms",
-    "Ps" to "Psalms",
-    "Song" to "Song of Solomon",
-    "Song of Songs" to "Song of Solomon",
-    "Canticles" to "Song of Solomon",
-    "1 Sam" to "1 Samuel",
-    "2 Sam" to "2 Samuel",
-    "1 Kgs" to "1 Kings",
-    "2 Kgs" to "2 Kings",
-    "1 Chr" to "1 Chronicles",
-    "2 Chr" to "2 Chronicles",
-    "1 Cor" to "1 Corinthians",
-    "2 Cor" to "2 Corinthians",
-    "1 Thess" to "1 Thessalonians",
-    "2 Thess" to "2 Thessalonians",
-    "1 Tim" to "1 Timothy",
-    "2 Tim" to "2 Timothy",
-    "1 Pet" to "1 Peter",
-    "2 Pet" to "2 Peter",
-    "1 Jn" to "1 John",
-    "2 Jn" to "2 John",
-    "3 Jn" to "3 John",
-    "Phil" to "Philippians",
-    "Philem" to "Philemon",
-    "Rev" to "Revelation",
-    "Gen" to "Genesis",
-    "Ex" to "Exodus",
-    "Lev" to "Leviticus",
-    "Num" to "Numbers",
-    "Deut" to "Deuteronomy",
-    "Josh" to "Joshua",
-    "Judg" to "Judges",
-    "Neh" to "Nehemiah",
-    "Esth" to "Esther",
-    "Eccl" to "Ecclesiastes",
-    "Isa" to "Isaiah",
-    "Jer" to "Jeremiah",
-    "Lam" to "Lamentations",
-    "Ezek" to "Ezekiel",
-    "Dan" to "Daniel",
-    "Hos" to "Hosea",
-    "Joel" to "Joel",
-    "Amos" to "Amos",
-    "Obad" to "Obadiah",
-    "Jonah" to "Jonah",
-    "Mic" to "Micah",
-    "Nah" to "Nahum",
-    "Hab" to "Habakkuk",
-    "Zeph" to "Zephaniah",
-    "Hag" to "Haggai",
-    "Zech" to "Zechariah",
-    "Mal" to "Malachi",
-    "Matt" to "Matthew",
-    "Mk" to "Mark",
-    "Lk" to "Luke",
-    "Jn" to "John",
-    "Rom" to "Romans",
-    "Gal" to "Galatians",
-    "Eph" to "Ephesians",
-    "Col" to "Colossians",
-    "Heb" to "Hebrews",
-    "Jas" to "James"
-)
-
-private fun normalizeBookName(raw: String): String {
-    val trimmed = raw.trim()
-    return BOOK_ALIASES[trimmed] ?: trimmed
-}
-
+// NO BOOK NAMES HERE. Everything comes from BookCatalog.
 private fun linkifyVerses(html: String, currentBook: String): String {
     if (html.isBlank()) return html
 
-    // Canonical names from BookCatalog + aliases, longest first so "1 John" wins over "John"
-    val allNames = (BookCatalog.all.map { it.name } + BOOK_ALIASES.keys)
+    val allNames = BookCatalog.allDisplayNames()
         .distinct()
         .sortedByDescending { it.length }
         .joinToString("|") { Regex.escape(it) }
@@ -310,7 +209,7 @@ private fun linkifyVerses(html: String, currentBook: String): String {
 
     val fullPattern = Regex("\\b($allNames)\\s+(\\d+):(\\d+)\\b(?![^<]*</a>)")
     result = fullPattern.replace(result) { m ->
-        val book = normalizeBookName(m.groupValues[1])
+        val book = BookCatalog.canonicalName(m.groupValues[1])
         val ch = m.groupValues[2]
         val vs = m.groupValues[3]
         """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
@@ -321,7 +220,7 @@ private fun linkifyVerses(html: String, currentBook: String): String {
         result = barePattern.replace(result) { m ->
             val ch = m.groupValues[1]
             val vs = m.groupValues[2]
-            """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(normalizeBookName(currentBook), "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
+            """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(BookCatalog.canonicalName(currentBook), "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
         }
     }
 
