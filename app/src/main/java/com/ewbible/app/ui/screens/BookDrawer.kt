@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.database.BookEntity
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -64,11 +65,37 @@ fun BookDrawer(
                 LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 80.dp)) {
                     item { Text("Old Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp); Spacer(Modifier.height(8.dp)) }
                     items(otBookEntities, key = { it.id }) { book ->
-                        BookDrawerRow(book, chapterCounts[book.id] ?: 1, selectedBookId, selectedChapter, expandedBookId, textColor, panel, gold, secondaryText, onOpenBook, onSelectBook, onToggleBook)
+                        BookDrawerRow(
+                            book = book,
+                            chapterCount = chapterCounts[book.id] ?: BookCatalog.chapters(book.id),
+                            selectedBookId = selectedBookId,
+                            selectedChapter = selectedChapter,
+                            expandedBookId = expandedBookId,
+                            textColor = textColor,
+                            panel = panel,
+                            gold = gold,
+                            secondaryText = secondaryText,
+                            onOpenBook = onOpenBook,
+                            onSelectBook = onSelectBook,
+                            onToggleBook = onToggleBook
+                        )
                     }
                     item { Spacer(modifier = Modifier.height(12.dp)); Text("New Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp); Spacer(Modifier.height(8.dp)) }
                     items(ntBookEntities, key = { it.id }) { book ->
-                        BookDrawerRow(book, chapterCounts[book.id] ?: 1, selectedBookId, selectedChapter, expandedBookId, textColor, panel, gold, secondaryText, onOpenBook, onSelectBook, onToggleBook)
+                        BookDrawerRow(
+                            book = book,
+                            chapterCount = chapterCounts[book.id] ?: BookCatalog.chapters(book.id),
+                            selectedBookId = selectedBookId,
+                            selectedChapter = selectedChapter,
+                            expandedBookId = expandedBookId,
+                            textColor = textColor,
+                            panel = panel,
+                            gold = gold,
+                            secondaryText = secondaryText,
+                            onOpenBook = onOpenBook,
+                            onSelectBook = onSelectBook,
+                            onToggleBook = onToggleBook
+                        )
                     }
                 }
             }
