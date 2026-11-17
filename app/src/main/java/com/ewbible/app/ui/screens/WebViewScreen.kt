@@ -27,7 +27,16 @@ fun WebViewScreen(
 ) {
     var progress by remember { mutableStateOf(0) }
 
-    Column(modifier = Modifier.fillMaxSize().background(background)) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(background)
+            // FIX: This was missing. Without this, top goes under status bar,
+            // bottom goes under Android back/home/recents keys.
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
+    ) {
         // YOUR header - no Chrome bar
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
@@ -60,21 +69,33 @@ fun WebViewScreen(
             )
         }
 
-        AndroidView(
-            modifier = Modifier.fillMaxSize().weight(1f),
-            factory = { context ->
-                WebView(context).apply {
-                    webViewClient = object : WebViewClient() {
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            progress = 100
+        // FIX: Extra bottom padding INSIDE the WebView area too.
+        // Bible.com has its own bottom tab bar - this lifts it
+        // above the Android keys so you can actually tap it.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .navigationBarsPadding()
+        ) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { context ->
+                    WebView(context).apply {
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                progress = 100
+                            }
                         }
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.mediaPlaybackRequiresUserGesture = false
+                        settings.useWideViewPort = true
+                        settings.loadWithOverviewMode = true
+                        loadUrl(url)
                     }
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.mediaPlaybackRequiresUserGesture = false
-                    loadUrl(url)
                 }
-            }
-        )
+            )
+        }
     }
 }
