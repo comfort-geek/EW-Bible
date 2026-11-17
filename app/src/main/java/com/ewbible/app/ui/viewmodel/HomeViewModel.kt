@@ -14,6 +14,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
+import java.util.zip.GZIPInputStream
 
 data class HomeUiState(
     val books: List<BookEntity> = emptyList(),
@@ -256,8 +258,8 @@ class HomeViewModel(
         }
     }
 
-    // STEP 5 FIXED: No more getCommentaryCompressed / CommentaryUtils.decompress
-    // Room + converter now returns htmlText already decompressed
+    // FIXED: DAO has getCommentaryCompressed() -> ByteArray?, not getCommentary() -> htmlText
+    // DB stores html_compressed as GZIP bytes, so decompress here.
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
@@ -265,7 +267,8 @@ class HomeViewModel(
             commentary.value = ""
             try {
                 val html = withContext(Dispatchers.IO) {
-                    dao.getCommentary(bookId, chapter)?.htmlText
+                    val compressed = dao.getCommentaryCompressed(bookId, chapter)
+                    if (compressed == null) null else decompressCommentary(compressed)
                 }
                 if (html.isNullOrBlank()) { commentary.value = ""; commentaryError.value = true }
                 else { commentary.value = html; commentaryError.value = false }
@@ -274,6 +277,20 @@ class HomeViewModel(
         }
     }
     fun loadCommentary() { loadCommentary(currentBookId.value, selectedChapter.value) }
+
+    private fun decompressCommentary(bytes: ByteArray): String {
+        return try {
+            // GZIP magic bytes: 1f 8b
+            if (bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
+                GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } else {
+                String(bytes, Charsets.UTF_8)
+            }
+        } catch (e: Exception) {
+            String(bytes, Charsets.UTF_8)
+        }
+    }
+
     fun loadDailyVerse() {
         viewModelScope.launch {
             runCatching {
