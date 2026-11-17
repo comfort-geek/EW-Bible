@@ -162,7 +162,8 @@ fun HomeScreen(viewModel: HomeViewModel) {
             if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") {
                 Text(text = "$currentBookName ${state.selectedChapter}", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
-            Box(modifier = Modifier.weight(1f).fillMaxWidth().then(if (state.selectedTab == "Bible") swipeModifier else Modifier)) {
+            // FIX: Swipe now active on BOTH Bible + Open EW
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().then(if (state.selectedTab == "Bible" || state.selectedTab == "Open EW") swipeModifier else Modifier)) {
                 when (state.selectedTab) {
                     "Bible" -> BibleContent(
                         selectedBookId = currentBookId, selectedChapter = state.selectedChapter, summary = state.summary,
