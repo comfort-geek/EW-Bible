@@ -113,7 +113,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         }
     }
 
-    // FIX B: Don't show Genesis 1 while restoring. Wait until ViewModel has restored Matthew 1.
     if (!state.isReadingRestored) {
         Box(
             modifier = Modifier.fillMaxSize().background(background),
@@ -130,9 +129,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        // FIX OPEN EW: Drawer edge-swipe ONLY on Bible tab.
-        // On Open EW, WebView scroll was fighting drawer swipe.
-        // Drawer still opens via hamburger icon on all tabs.
         gesturesEnabled = state.selectedTab == "Bible",
         drawerContent = {
             BookDrawer(
@@ -163,15 +159,9 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 }
                 IconButton(onClick = { settingsOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Settings", tint = textColor) }
             }
-            // FIX OPEN EW: Title ONLY on Bible tab.
-            // Open EW commentary already has its own heading "Hebrews 2 – Jesus, Our Elder Brother"
-            // Showing this too was the duplicate.
             if (state.selectedTab == "Bible") {
                 Text(text = "$currentBookName ${state.selectedChapter}", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
-            // FIX OPEN EW: Swipe ONLY on Bible tab.
-            // Open EW uses WebView - HomeScreen swipe with PointerEventPass.Initial was
-            // intercepting its scroll before WebView could handle it, causing lag.
             Box(modifier = Modifier.weight(1f).fillMaxWidth().then(if (state.selectedTab == "Bible") swipeModifier else Modifier)) {
                 when (state.selectedTab) {
                     "Bible" -> BibleContent(
@@ -221,11 +211,13 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 Box(modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
                     Text(text = state.linkedVerseText.ifBlank { "Loading..." }, color = textColor, fontSize = state.fontSize.sp, lineHeight = (state.fontSize + 8).sp)
                 }
-                Row(modifier = Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = { showLinkedVerseSheet = false; openBook(linkedVerseBook, linkedVerseChapter); viewModel.selectTab("Bible"); viewModel.selectVerse(linkedVerseNum) }, colors = ButtonDefaults.buttonColors(containerColor = gold), modifier = Modifier.weight(1f)) {
-                        Text("Open in Bible", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                    OutlinedButton(onClick = { showLinkedVerseSheet = false }, modifier = Modifier.weight(1f)) { Text("Close", color = textColor) }
+                // FIX: Duplicate bottom Close REMOVED - top-right X already closes it.
+                Button(
+                    onClick = { showLinkedVerseSheet = false; openBook(linkedVerseBook, linkedVerseChapter); viewModel.selectTab("Bible"); viewModel.selectVerse(linkedVerseNum) },
+                    colors = ButtonDefaults.buttonColors(containerColor = gold),
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                ) {
+                    Text("Open in Bible", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             }
         }
