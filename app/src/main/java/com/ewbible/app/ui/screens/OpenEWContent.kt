@@ -50,6 +50,17 @@ private val linkedHtmlCache = object : LinkedHashMap<String, String>(30, 0.75f, 
     override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > 30
 }
 
+// NEW: The DB HTML has <b><i> that never close, so the whole chapter stays bold+italic.
+// Strip ALL <b>/<i>/<strong>/<em> from the body. Headings + verse links get bold back via CSS below.
+private fun cleanCommentaryHtml(html: String): String {
+    var result = html
+    result = result.replace(Regex("(?i)</?(b|strong|i|em)>"), "")
+    // Also strip inline styles that force bold/italic on big blocks
+    result = result.replace(Regex("(?i)font-weight\\s*:\\s*(bold|[700-900])\\s*;?"), "")
+    result = result.replace(Regex("(?i)font-style\\s*:\\s*italic\\s*;?"), "")
+    return result
+}
+
 @Composable
 fun OpenEWContent(
     commentaryHtml: String,
@@ -59,8 +70,6 @@ fun OpenEWContent(
     isLoading: Boolean = false,
     bookName: String = "",
     chapter: Int = 1,
-    // CHANGED: now passes endVerse too. Romans 8:1-11 -> (Romans, 8, 1, 11)
-    // Single verse Romans 8:1 -> (Romans, 8, 1, 1)
     onVerseClick: (book: String, chapter: Int, verse: Int, endVerse: Int) -> Unit = { _, _, _, _ -> },
     onNextChapter: () -> Unit = {},
     onPreviousChapter: () -> Unit = {},
@@ -75,7 +84,7 @@ fun OpenEWContent(
             val body = if (t.contains("<body", ignoreCase = true)) {
                 t.substringAfter("<body", "").substringAfter(">", "").substringBeforeLast("</body>", t)
             } else t
-            linkifyVerses(body, bookName)
+            linkifyVerses(cleanCommentaryHtml(body), bookName)
         }
     }
 
@@ -87,9 +96,11 @@ fun OpenEWContent(
         <!doctype html>
         <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-            body { color: $textColorCss; background: transparent; font-family: sans-serif; font-size: ${fontSize}px; line-height: 1.6; margin: 8px; padding-bottom: 80px; }
+            body { color: $textColorCss; background: transparent; font-family: sans-serif; font-size: ${fontSize}px; line-height: 1.6; margin: 0; padding: 16px 16px 80px 16px; font-weight: normal !important; font-style: normal !important; }
+            p, div, span, li { font-weight: normal !important; font-style: normal !important; }
             p { margin: 0 0 1em; }
-            h1, h2, h3, h4 { color: $textColorCss; line-height: 1.3; }
+            h1, h2, h3, h4 { color: $textColorCss; line-height: 1.3; font-weight: bold !important; font-style: normal !important; margin: 16px 0 8px 0; }
+            h1:first-child, h2:first-child { margin-top: 0; }
             a { color: #C9A227; font-weight: bold; text-decoration: underline; }
             a.verse-link { color: #C9A227; font-weight: bold; }
             .empty { color: $secondaryColorCss; }
@@ -186,7 +197,6 @@ fun OpenEWContent(
 private fun linkifyVerses(html: String, currentBook: String): String {
     if (html.isBlank()) return html
     var result = html
-    // "Romans 8:1-11" -> ONE link, href has verse=1 & endVerse=11, display is full "Romans 8:1-11"
     result = FULL_VERSE_REGEX.replace(result) { m ->
         val book = BookCatalog.canonicalName(m.groupValues[1])
         val ch = m.groupValues[2]
@@ -195,7 +205,6 @@ private fun linkifyVerses(html: String, currentBook: String): String {
         """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs&endVerse=$end">${m.value}</a>"""
     }
     if (currentBook.isNotBlank()) {
-        // "8:1-11" -> ONE link, href has verse=1 & endVerse=11
         result = BARE_VERSE_REGEX.replace(result) { m ->
             val ch = m.groupValues[1]
             val vs = m.groupValues[2]
