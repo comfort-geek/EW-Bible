@@ -4,6 +4,7 @@ import android.app.Activity
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -66,7 +67,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val activity = context as Activity
     val scope = rememberCoroutineScope()
     val state by viewModel.uiState.collectAsState()
-    val isDark = state.darkMode ?: androidx.compose.foundation.isSystemInDarkTheme()
+    val isDark = state.darkMode ?: isSystemInDarkTheme()
     val prefs = remember { AppPreferences(context) }
     val googleAuth = remember { GoogleAuth(context) }
     val savedScrollIndex by prefs.lastScrollIndex.collectAsState(initial = 0)
@@ -75,6 +76,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var showAllNotes by remember { mutableStateOf(false) }
     var dailyVerseDialog by remember { mutableStateOf(false) }
     var hasRestoredScroll by remember { mutableStateOf(false) }
+    var lastBookChapter by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var expandedBook by remember { mutableStateOf<Int?>(null) }
     var showHighlightPicker by remember { mutableStateOf(false) }
@@ -92,14 +94,20 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val currentBookId = state.currentBookId
     val currentBookName = BookCatalog.name(currentBookId)
 
+    // FIX: Only act when book/chapter actually changes, not on every verses recompose
     LaunchedEffect(state.verses, state.currentBookId, state.selectedChapter) {
         if (state.verses.isEmpty()) return@LaunchedEffect
+        val key = state.currentBookId to state.selectedChapter
         if (!hasRestoredScroll && (savedScrollIndex > 0 || savedScrollOffset > 0)) {
             val target = savedScrollIndex.coerceIn(0, (state.verses.size + 2).coerceAtLeast(0))
             runCatching { listState.scrollToItem(target, savedScrollOffset) }
             hasRestoredScroll = true
-        } else if (hasRestoredScroll) {
+            lastBookChapter = key
+        } else if (lastBookChapter != null && lastBookChapter != key) {
             runCatching { listState.scrollToItem(0) }
+            lastBookChapter = key
+        } else if (lastBookChapter == null) {
+            lastBookChapter = key
         }
     }
 
