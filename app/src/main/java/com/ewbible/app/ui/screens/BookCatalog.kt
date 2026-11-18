@@ -83,7 +83,7 @@ object BookCatalog {
     private val byName = all.associateBy { it.name.lowercase() }
     private val byKey = all.associateBy { it.key.lowercase() }
 
-    // All aliases -> id. Keys are normalized in id() before lookup.
+    // FIX: alias -> id, lookup is case-insensitive via id()
     private val aliases = mapOf(
         "psalm" to 19, "ps" to 19,
         "song" to 22, "song of songs" to 22, "canticles" to 22, "song-of-songs" to 22,
@@ -115,6 +115,20 @@ object BookCatalog {
         "philem" to 57, "heb" to 58, "jas" to 59
     )
 
+    // FIX: Proper display forms for aliases - no more "Song Of Songs" Title-Case bug.
+    // These are what OpenEW actually writes in commentary.
+    private val aliasDisplayNames = listOf(
+        "Psalm", "Ps",
+        "Song of Songs", "Song",
+        "1 Sam", "2 Sam", "1 Kgs", "2 Kgs", "1 Chr", "2 Chr", "1 Chron", "2 Chron",
+        "1 Cor", "2 Cor", "1 Thess", "2 Thess", "1 Tim", "2 Tim",
+        "1 Pet", "2 Pet", "1 Jn", "2 Jn", "3 Jn", "Rev",
+        "Gen", "Ex", "Lev", "Num", "Deut", "Josh", "Judg", "Neh", "Esth",
+        "Eccl", "Isa", "Jer", "Lam", "Ezek", "Dan", "Hos", "Obad", "Mic", "Nah", "Hab",
+        "Zeph", "Hag", "Zech", "Mal", "Matt", "Mk", "Lk", "Jn",
+        "Rom", "Gal", "Eph", "Phil", "Col", "Philem", "Heb", "Jas"
+    )
+
     fun name(id: Int): String = byId[id]?.name ?: "Genesis"
     fun key(id: Int): String = byId[id]?.key ?: "genesis"
 
@@ -123,7 +137,6 @@ object BookCatalog {
             .replace('_', '-')
             .replace(Regex("\\s+"), " ")
             .trim()
-        // Try exact, then alias, then hyphen<->space variants
         return byName[clean]?.id
             ?: byKey[clean]?.id
             ?: aliases[clean]
@@ -131,7 +144,7 @@ object BookCatalog {
             ?: byKey[clean.replace(' ', '-')]?.id
             ?: aliases[clean.replace('-', ' ')]
             ?: aliases[clean.replace(' ', '-')]
-            ?: 1 // fallback Genesis, same as before
+            ?: 1
     }
     fun testament(id: Int): String = byId[id]?.testament ?: "OT"
     fun chapters(id: Int): Int = byId[id]?.chapters ?: 1
@@ -142,14 +155,10 @@ object BookCatalog {
         testament = info.testament
     )
 
-    // NEW - for OpenEW linkify only, no new book data, just exposes what is already here
     fun canonicalName(raw: String): String = name(id(raw))
 
+    // FIX: canonical names + clean alias display names, no duplicates, no "Of" bug
     fun allDisplayNames(): List<String> {
-        return all.map { it.name } + aliases.keys.map { raw ->
-            raw.split(" ", "-").joinToString(" ") { part ->
-                part.replaceFirstChar { c -> c.uppercase() }
-            }
-        }
+        return (all.map { it.name } + aliasDisplayNames).distinct()
     }
 }
