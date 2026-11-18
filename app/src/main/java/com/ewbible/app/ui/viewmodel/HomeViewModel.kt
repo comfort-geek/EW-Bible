@@ -79,6 +79,13 @@ class HomeViewModel(
     private val linkedVerseRef = MutableStateFlow("")
     private var commentaryJob: Job? = null
 
+    // Fast commentary cache - LRU, max 30 chapters
+    private val commentaryCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
+            return size > 30
+        }
+    }
+
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
     val currentBookId: StateFlow<Int> = selectedBookId.asStateFlow()
 
@@ -139,7 +146,6 @@ class HomeViewModel(
                 }
             }.onFailure { Log.e("HomeViewModel", "getChapterCounts failed, keeping BookCatalog counts", it) }
         }
-        // SAFE: only top-level 2-arg combine, no .combine() extension
         viewModelScope.launch {
             combine(currentBookId, selectedChapter) { bookId, chapter -> bookId to chapter }
                 .collectLatest { (bookId, chapter) ->
@@ -268,6 +274,14 @@ class HomeViewModel(
         }
     }
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
+        val key = "$bookId-$chapter"
+        synchronized(commentaryCache) {
+            commentaryCache[key]?.let { cached ->
+                commentary.value = cached
+                commentaryError.value = false
+                return
+            }
+        }
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
             commentaryError.value = false
@@ -277,7 +291,11 @@ class HomeViewModel(
                     if (compressed == null) null else decompressCommentary(compressed)
                 }
                 if (html.isNullOrBlank()) { commentary.value = ""; commentaryError.value = true }
-                else { commentary.value = html; commentaryError.value = false }
+                else {
+                    synchronized(commentaryCache) { commentaryCache[key] = html }
+                    commentary.value = html
+                    commentaryError.value = false
+                }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) {
                 Log.e("HomeViewModel", "loadCommentary failed book=$bookId ch=$chapter", e)
@@ -287,38 +305,58 @@ class HomeViewModel(
         }
     }
     fun loadCommentary() { loadCommentary(currentBookId.value, selectedChapter.value) }
+
+    // FAST: detect format from magic bytes, 1 pass, no try-3-times
     private fun decompressCommentary(bytes: ByteArray): String {
-        runCatching {
-            val inflater = Inflater()
-            inflater.setInput(bytes)
-            val out = ByteArrayOutputStream()
-            val buf = ByteArray(8192)
-            while (!inflater.finished()) {
-                val n = inflater.inflate(buf)
-                if (n == 0) break
-                out.write(buf, 0, n)
+        if (bytes.isEmpty()) return ""
+        if (bytes.size > 2 && bytes[0] == '<'.code.toByte()) {
+            return String(bytes, Charsets.UTF_8)
+        }
+        val isGzip = bytes.size >= 2 && bytes[0] == 0x1F.toByte() && bytes[1] == 0x8B.toByte()
+        val isZlib = bytes.size >= 2 && bytes[0] == 0x78.toByte()
+        return when {
+            isGzip -> {
+                GZIPInputStream(ByteArrayInputStream(bytes)).use {
+                    it.readBytes().toString(Charsets.UTF_8)
+                }
             }
-            inflater.end()
-            out.toString(Charsets.UTF_8.name())
-        }.onSuccess { if (it.isNotBlank()) return it }
-        runCatching {
-            GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader(Charsets.UTF_8).use { it.readText() }
-        }.onSuccess { if (it.isNotBlank()) return it }
-        runCatching {
-            val inflater = Inflater(true)
-            inflater.setInput(bytes)
-            val out = ByteArrayOutputStream()
-            val buf = ByteArray(8192)
-            while (!inflater.finished()) {
-                val n = inflater.inflate(buf)
-                if (n == 0) break
-                out.write(buf, 0, n)
+            isZlib -> {
+                val inflater = Inflater()
+                try {
+                    inflater.setInput(bytes)
+                    val out = ByteArrayOutputStream(bytes.size * 3)
+                    val buf = ByteArray(16384)
+                    while (!inflater.finished()) {
+                        val n = inflater.inflate(buf)
+                        if (n == 0) break
+                        out.write(buf, 0, n)
+                    }
+                    out.toString(Charsets.UTF_8.name())
+                } finally {
+                    inflater.end()
+                }
             }
-            inflater.end()
-            out.toString(Charsets.UTF_8.name())
-        }.onSuccess { if (it.isNotBlank()) return it }
-        return String(bytes, Charsets.UTF_8)
+            else -> {
+                val inflater = Inflater(true)
+                try {
+                    inflater.setInput(bytes)
+                    val out = ByteArrayOutputStream(bytes.size * 3)
+                    val buf = ByteArray(16384)
+                    while (!inflater.finished()) {
+                        val n = inflater.inflate(buf)
+                        if (n == 0) break
+                        out.write(buf, 0, n)
+                    }
+                    out.toString(Charsets.UTF_8.name())
+                } catch (_: Exception) {
+                    String(bytes, Charsets.UTF_8)
+                } finally {
+                    inflater.end()
+                }
+            }
+        }
     }
+
     fun loadDailyVerse() {
         viewModelScope.launch {
             runCatching {
