@@ -78,6 +78,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var dailyVerseDialog by remember { mutableStateOf(false) }
     var hasRestoredScroll by remember { mutableStateOf(false) }
     var lastBookChapter by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var pendingScrollKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var expandedBook by remember { mutableStateOf<Int?>(null) }
     var showHighlightPicker by remember { mutableStateOf(false) }
@@ -101,8 +102,18 @@ fun HomeScreen(viewModel: HomeViewModel) {
         if (state.isReadingRestored) initialLoadDone = true
     }
 
-    // FIXED: Only on book/chapter change, NOT on every verses list emission
+    // FIX 1: Chapter changed -> remember we need to scroll (don't scroll yet, verses not loaded)
     LaunchedEffect(state.currentBookId, state.selectedChapter) {
+        val key = state.currentBookId to state.selectedChapter
+        if (lastBookChapter != null && lastBookChapter != key) {
+            pendingScrollKey = key
+        } else if (lastBookChapter == null) {
+            lastBookChapter = key
+        }
+    }
+
+    // FIX 2: Verses arrived -> now do the scroll
+    LaunchedEffect(state.verses) {
         if (state.verses.isEmpty()) return@LaunchedEffect
         val key = state.currentBookId to state.selectedChapter
         if (!hasRestoredScroll && (savedScrollIndex > 0 || savedScrollOffset > 0)) {
@@ -110,16 +121,17 @@ fun HomeScreen(viewModel: HomeViewModel) {
             runCatching { listState.scrollToItem(target, savedScrollOffset) }
             hasRestoredScroll = true
             lastBookChapter = key
-        } else if (lastBookChapter != null && lastBookChapter != key) {
+            pendingScrollKey = null
+        } else if (pendingScrollKey == key) {
             runCatching { listState.scrollToItem(0) }
             lastBookChapter = key
-        } else if (lastBookChapter == null) {
-            lastBookChapter = key
+            pendingScrollKey = null
         }
     }
 
     fun openBook(bookId: Int, chapter: Int) {
         hasRestoredScroll = true
+        pendingScrollKey = null
         expandedBook = null
         viewModel.openBook(bookId, chapter)
         scope.launch {
@@ -171,9 +183,14 @@ fun HomeScreen(viewModel: HomeViewModel) {
             if (state.selectedTab == "Bible") {
                 Text(text = "$currentBookName ${state.selectedChapter}", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
-            // FIXED: KEEP ALL TABS ALIVE - no destroy on switch, no reload
+            // FIXED: KEEP ALL TABS ALIVE - no destroy on switch, no reload + block touches on hidden tabs
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                Box(modifier = Modifier.fillMaxSize().then(if (state.selectedTab == "Bible") Modifier else Modifier.alpha(0f).size(0.dp))) {
+                // Bible - visible when selected
+                Box(modifier = Modifier.fillMaxSize()
+                    .then(if (state.selectedTab == "Bible") Modifier else Modifier.alpha(0f))
+                    .then(if (state.selectedTab == "Bible") Modifier else Modifier.size(0.dp))
+                    .then(if (state.selectedTab == "Bible") Modifier else Modifier.clickable(enabled = false) {})
+                ) {
                     BibleContent(
                         selectedBookId = currentBookId, selectedChapter = state.selectedChapter, summary = state.summary,
                         versesList = state.verses, currentHighlightMap = state.highlights, fontSize = state.fontSize,
@@ -183,7 +200,12 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         summaryLoading = state.summaryLoading
                     )
                 }
-                Box(modifier = Modifier.fillMaxSize().then(if (state.selectedTab == "Open EW") Modifier else Modifier.alpha(0f).size(0.dp))) {
+                // Open EW - visible when selected
+                Box(modifier = Modifier.fillMaxSize()
+                    .then(if (state.selectedTab == "Open EW") Modifier else Modifier.alpha(0f))
+                    .then(if (state.selectedTab == "Open EW") Modifier else Modifier.size(0.dp))
+                    .then(if (state.selectedTab == "Open EW") Modifier else Modifier.clickable(enabled = false) {})
+                ) {
                     OpenEWContent(
                         commentaryHtml = state.commentaryHtml, fontSize = state.fontSize,
                         textColor = textColor, hasError = state.commentaryError,
@@ -199,7 +221,12 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         onRetry = { viewModel.loadCommentary() }
                     )
                 }
-                Box(modifier = Modifier.fillMaxSize().then(if (state.selectedTab == "Search") Modifier else Modifier.alpha(0f).size(0.dp))) {
+                // Search - visible when selected
+                Box(modifier = Modifier.fillMaxSize()
+                    .then(if (state.selectedTab == "Search") Modifier else Modifier.alpha(0f))
+                    .then(if (state.selectedTab == "Search") Modifier else Modifier.size(0.dp))
+                    .then(if (state.selectedTab == "Search") Modifier else Modifier.clickable(enabled = false) {})
+                ) {
                     SearchContent(
                         searchQuery = searchQuery, searchFilter = state.searchFilter, verseResults = state.searchResults,
                         textColor = textColor, gold = gold, fontSize = state.fontSize,
