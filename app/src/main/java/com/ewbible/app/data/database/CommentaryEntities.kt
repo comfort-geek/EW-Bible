@@ -2,6 +2,7 @@ package com.ewbible.app.data.database
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 @Entity(tableName = "books")
@@ -12,7 +13,11 @@ data class BookEntity(
     val testament: String
 )
 
-@Entity(tableName = "verses", primaryKeys = ["book_id", "chapter", "verse"])
+@Entity(
+    tableName = "verses",
+    primaryKeys = ["book_id", "chapter", "verse"],
+    indices = [Index(value = ["text"])]
+)
 data class VerseEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
