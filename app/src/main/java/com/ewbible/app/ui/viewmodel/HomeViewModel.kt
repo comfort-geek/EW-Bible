@@ -97,33 +97,66 @@ class HomeViewModel(
     }
     val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
 
-    // Split combine into 3 groups because combine() max is 20 flows
-    private val readingFlow = combine(
-        books, verses, highlights, notes,
-        currentBookId, selectedBookName, selectedChapter, selectedVerse, selectedTab
-    ) { booksList, versesList, highlightsMap, notesList, bookId, bookName, chapter, verse, tab ->
-        // Use Triple / data holder via list to keep types safe - re-packed below
-        ReadingPart(booksList, versesList, highlightsMap, notesList, bookId, bookName, chapter, verse, tab)
-    }
+    // FIX: ONLY 2-arg combine() used everywhere. No 3, 4, 9, 12-arg combine.
+    private val readingFlow: Flow<ReadingPart> =
+        combine(
+            combine(books, verses) { b, v -> b to v },
+            combine(highlights, notes) { h, n -> h to n }
+        ) { g1, g2 ->
+            combine(
+                combine(currentBookId, selectedBookName) { id, name -> id to name },
+                combine(selectedChapter, selectedVerse) { c, v -> c to v }
+            ) { g3, g4 ->
+                ReadingPart(
+                    books = g1.first, verses = g1.second,
+                    highlights = g2.first, notes = g2.second,
+                    bookId = g3.first, bookName = g3.second,
+                    chapter = g4.first, verse = g4.second, tab = selectedTab.value
+                )
+            }
+        }.flatMapLatest { it }.combine(selectedTab) { part, tab -> part.copy(tab = tab) }
 
-    private val contentFlow = combine(
-        commentary, showNoteDialog, currentNoteText,
-        linkedVerseText, linkedVerseRef, commentaryError,
-        summaryState, chapterCounts, searchResults, searchFilter,
-        dailyVerse, scrollRestoreKey
-    ) { commentaryHtml, showNote, noteText, linkedText, linkedRef, commentaryErr, summary, counts, searchRes, filter, daily, scrollKey ->
-        ContentPart(commentaryHtml, showNote, noteText, linkedText, linkedRef, commentaryErr, summary, counts, searchRes, filter, daily, scrollKey)
-    }
+    private val contentFlow: Flow<ContentPart> =
+        combine(
+            combine(commentary, showNoteDialog) { a, b -> a to b },
+            combine(currentNoteText, linkedVerseText) { a, b -> a to b }
+        ) { g1, g2 ->
+            combine(
+                combine(linkedVerseRef, commentaryError) { a, b -> a to b },
+                combine(summaryState, chapterCounts) { a, b -> a to b }
+            ) { g3, g4 ->
+                combine(
+                    combine(searchResults, searchFilter) { a, b -> a to b },
+                    combine(dailyVerse, scrollRestoreKey) { a, b -> a to b }
+                ) { g5, g6 ->
+                    ContentPart(
+                        commentaryHtml = g1.first, showNote = g1.second,
+                        noteText = g2.first, linkedText = g2.second,
+                        linkedRef = g3.first, commentaryErr = g3.second,
+                        summary = g4.first, counts = g4.second,
+                        searchRes = g5.first, filter = g5.second,
+                        daily = g6.first, scrollKey = g6.second
+                    )
+                }
+            }
+        }.flatMapLatest { it }.flatMapLatest { it }
 
-    private val prefsFlow = combine(
-        prefs.isDarkMode, prefs.fontSize, prefs.userName, prefs.userEmail, isReadingRestored
-    ) { dark, font, user, email, restored ->
-        PrefsPart(dark, font, user, email, restored)
-    }
+    private val prefsFlow: Flow<PrefsPart> =
+        combine(
+            combine(prefs.isDarkMode, prefs.fontSize) { a, b -> a to b },
+            combine(prefs.userName, prefs.userEmail) { a, b -> a to b }
+        ) { g1, g2 ->
+            combine(isReadingRestored) { restored ->
+                PrefsPart(dark = g1.first, font = g1.second, user = g2.first, email = g2.second, restored = restored)
+            }
+        }.flatMapLatest { it }
 
     val uiState: StateFlow<HomeUiState> = combine(
-        readingFlow, contentFlow, prefsFlow
-    ) { reading, content, pref ->
+        combine(readingFlow, contentFlow) { r, c -> r to c },
+        prefsFlow
+    ) { rc, pref ->
+        val reading = rc.first
+        val content = rc.second
         HomeUiState(
             books = reading.books,
             verses = reading.verses,
@@ -215,7 +248,8 @@ class HomeViewModel(
             }
         }
         viewModelScope.launch {
-            combine(currentBookId, selectedChapter, selectedTab) { bookId, chapter, tab -> Triple(bookId, chapter, tab) }
+            combine(currentBookId, selectedChapter) { bookId, chapter -> bookId to chapter }
+                .combine(selectedTab) { bc, tab -> Triple(bc.first, bc.second, tab) }
                 .collectLatest { (bookId, chapter, tab) ->
                     loadSummary(bookId, chapter)
                     if (tab == "Open EW") loadCommentary(bookId, chapter)
