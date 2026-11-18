@@ -85,7 +85,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var linkedVerseBook by remember { mutableStateOf("") }
     var linkedVerseChapter by remember { mutableStateOf(1) }
     var linkedVerseNum by remember { mutableStateOf(1) }
-    var linkedVerseEnd by remember { mutableStateOf(1) } // FIX: holds end of range, e.g. 11 for Romans 8:1-11
+    var linkedVerseEnd by remember { mutableStateOf(1) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
     val gold = Color(0xFFC9A227)
@@ -175,14 +175,14 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         versesList = state.verses, currentHighlightMap = state.highlights, fontSize = state.fontSize,
                         gold = gold, panel = panel, textColor = textColor, listState = listState,
                         onVerseClick = { viewModel.selectVerse(it) }, onVerseLongClick = { viewModel.selectVerse(it) },
-                        onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() }
+                        onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() },
+                        summaryLoading = state.summaryLoading
                     )
                     "Open EW" -> OpenEWContent(
                         commentaryHtml = state.commentaryHtml, fontSize = state.fontSize,
                         textColor = textColor, hasError = state.commentaryError,
                         isLoading = state.commentaryHtml.isBlank() && !state.commentaryError,
                         bookName = currentBookName, chapter = state.selectedChapter,
-                        // FIX: now receives endVerse
                         onVerseClick = { book, chapter, verse, endVerse ->
                             linkedVerseBook = book; linkedVerseChapter = chapter
                             linkedVerseNum = verse; linkedVerseEnd = endVerse
@@ -215,7 +215,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         ModalBottomSheet(onDismissRequest = { showLinkedVerseSheet = false }, containerColor = background, contentColor = textColor) {
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).padding(bottom = 24.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    // FIX: shows "Romans 8:1-11" when range, "Romans 8:1" when single
                     Text(
                         text = state.linkedVerseRef.ifBlank {
                             if (linkedVerseEnd > linkedVerseNum) "$linkedVerseBook $linkedVerseChapter:$linkedVerseNum-$linkedVerseEnd"
