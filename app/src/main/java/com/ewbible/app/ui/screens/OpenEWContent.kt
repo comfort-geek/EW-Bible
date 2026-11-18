@@ -38,11 +38,13 @@ private val ALL_NAMES_PATTERN: String by lazy {
         .sortedByDescending { it.length }
         .joinToString("|") { Regex.escape(it) }
 }
+
+// FIX #2: Now captures "-11" as group 4 -> "Romans 8:1-11" is ONE link
 private val FULL_VERSE_REGEX: Regex by lazy {
-    Regex("\\b($ALL_NAMES_PATTERN)\\s+(\\d+):(\\d+)\\b(?![^<]*</a>)")
+    Regex("\\b($ALL_NAMES_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?\\b(?![^<]*</a>)")
 }
 private val BARE_VERSE_REGEX: Regex by lazy {
-    Regex("(?<![\\w:])\\b(\\d+):(\\d+)\\b(?![^<]*</a>)")
+    Regex("(?<![\\w:])\\b(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?\\b(?![^<]*</a>)")
 }
 
 private val linkedHtmlCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
@@ -182,13 +184,16 @@ fun OpenEWContent(
 private fun linkifyVerses(html: String, currentBook: String): String {
     if (html.isBlank()) return html
     var result = html
+    // Full: "Romans 8:1-11" -> one <a> with whole text, href points to start verse 1
     result = FULL_VERSE_REGEX.replace(result) { m ->
         val book = BookCatalog.canonicalName(m.groupValues[1])
         val ch = m.groupValues[2]
         val vs = m.groupValues[3]
+        // m.value already = "Romans 8:1-11" including range, so display stays full
         """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
     }
     if (currentBook.isNotBlank()) {
+        // Bare: "8:1-11" inside Romans 8 -> links to Romans 8:1, displays "8:1-11"
         result = BARE_VERSE_REGEX.replace(result) { m ->
             val ch = m.groupValues[1]
             val vs = m.groupValues[2]
