@@ -32,8 +32,7 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import kotlin.math.abs
 
-// FIX: Build these ONCE for whole app, not on every chapter.
-// This was your biggest slowdown - 66 book names Regex rebuilt every time.
+// Build ONCE for whole app, not on every chapter
 private val ALL_NAMES_PATTERN: String by lazy {
     BookCatalog.allDisplayNames()
         .distinct()
@@ -47,7 +46,7 @@ private val BARE_VERSE_REGEX: Regex by lazy {
     Regex("(?<![\\w:])\\b(\\d+):(\\d+)\\b(?![^<]*</a>)")
 }
 
-// FIX: Cache linkified HTML so going back to same chapter is instant
+// Cache linkified HTML so going back to same chapter is instant
 private val linkedHtmlCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
     override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
         return size > 30
@@ -68,7 +67,6 @@ fun OpenEWContent(
     onPreviousChapter: () -> Unit = {},
     onRetry: () -> Unit = {},
 ) {
-    // FIX: Cache key includes book+chapter, so linkify runs once per chapter
     val cacheKey = remember(bookName, chapter) { "$bookName-$chapter" }
 
     val linkedHtml = remember(commentaryHtml, cacheKey) {
@@ -122,8 +120,7 @@ fun OpenEWContent(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // FIX: Keep WebView ALWAYS in tree, just overlay loading on top.
-        // Before, isLoading hid the WebView -> it got destroyed -> slow every time.
+        // Keep WebView ALWAYS in tree, just overlay loading on top
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
@@ -136,7 +133,6 @@ fun OpenEWContent(
                     settings.loadWithOverviewMode = true
                     settings.useWideViewPort = true
                     settings.builtInZoomControls = false
-                    // FIX: Was LOAD_NO_CACHE - now allows WebView to cache
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
                     setBackgroundColor(AndroidColor.TRANSPARENT)
                     webViewClient = object : WebViewClient() {
@@ -182,13 +178,12 @@ fun OpenEWContent(
                 }
             },
             update = { wv ->
-                // FIX: Only reload if html actually changed
+                // Only reload if html actually changed
                 if (wv.tag != html.hashCode()) {
                     wv.tag = html.hashCode()
                     wv.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
                 }
             }
-            // FIX: NO onRelease destroy() anymore - keep WebView alive
         )
 
         if (isLoading && linkedHtml.isBlank()) {
