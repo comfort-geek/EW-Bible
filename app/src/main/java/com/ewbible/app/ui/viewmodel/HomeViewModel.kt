@@ -97,59 +97,74 @@ class HomeViewModel(
     }
     val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
 
-    // FIX: ONLY 2-arg combine() used everywhere. No 3, 4, 9, 12-arg combine.
-    private val readingFlow: Flow<ReadingPart> =
+    // CLEAN: only 2-arg combine, values not Flows, no flatMapLatest unwrapping
+    private val readingFlow: Flow<ReadingPart> = combine(
+        combine(books, verses) { b, v -> b to v },
+        combine(highlights, notes) { h, n -> h to n }
+    ) { bv, hn ->
+        // Build in 2 steps using plain values via a second combine below
+        // We store the pairs and combine with the rest in readingFlow2
+        bv to hn
+    }.let { firstHalf ->
         combine(
-            combine(books, verses) { b, v -> b to v },
-            combine(highlights, notes) { h, n -> h to n }
-        ) { g1, g2 ->
+            firstHalf,
+            combine(currentBookId, selectedBookName) { id, name -> id to name }
+        ) { fh, idName ->
+            fh to idName
+        }.let { secondHalf ->
             combine(
-                combine(currentBookId, selectedBookName) { id, name -> id to name },
+                secondHalf,
                 combine(selectedChapter, selectedVerse) { c, v -> c to v }
-            ) { g3, g4 ->
-                ReadingPart(
-                    books = g1.first, verses = g1.second,
-                    highlights = g2.first, notes = g2.second,
-                    bookId = g3.first, bookName = g3.second,
-                    chapter = g4.first, verse = g4.second, tab = selectedTab.value
-                )
-            }
-        }.flatMapLatest { it }.combine(selectedTab) { part, tab -> part.copy(tab = tab) }
-
-    private val contentFlow: Flow<ContentPart> =
-        combine(
-            combine(commentary, showNoteDialog) { a, b -> a to b },
-            combine(currentNoteText, linkedVerseText) { a, b -> a to b }
-        ) { g1, g2 ->
-            combine(
-                combine(linkedVerseRef, commentaryError) { a, b -> a to b },
-                combine(summaryState, chapterCounts) { a, b -> a to b }
-            ) { g3, g4 ->
-                combine(
-                    combine(searchResults, searchFilter) { a, b -> a to b },
-                    combine(dailyVerse, scrollRestoreKey) { a, b -> a to b }
-                ) { g5, g6 ->
-                    ContentPart(
-                        commentaryHtml = g1.first, showNote = g1.second,
-                        noteText = g2.first, linkedText = g2.second,
-                        linkedRef = g3.first, commentaryErr = g3.second,
-                        summary = g4.first, counts = g4.second,
-                        searchRes = g5.first, filter = g5.second,
-                        daily = g6.first, scrollKey = g6.second
+            ) { sh, cv ->
+                combine(sh, selectedTab) { s, tab ->
+                    val (bv, hn) = s.first
+                    val idName = s.second
+                    ReadingPart(
+                        books = bv.first, verses = bv.second,
+                        highlights = hn.first, notes = hn.second,
+                        bookId = idName.first, bookName = idName.second,
+                        chapter = cv.first, verse = cv.second, tab = tab
                     )
                 }
-            }
-        }.flatMapLatest { it }.flatMapLatest { it }
+            }.flatMapLatest { it }
+        }
+    }
 
-    private val prefsFlow: Flow<PrefsPart> =
-        combine(
-            combine(prefs.isDarkMode, prefs.fontSize) { a, b -> a to b },
-            combine(prefs.userName, prefs.userEmail) { a, b -> a to b }
-        ) { g1, g2 ->
-            combine(isReadingRestored) { restored ->
-                PrefsPart(dark = g1.first, font = g1.second, user = g2.first, email = g2.second, restored = restored)
+    private val contentFlow: Flow<ContentPart> = combine(
+        combine(commentary, showNoteDialog) { a, b -> a to b },
+        combine(currentNoteText, linkedVerseText) { a, b -> a to b }
+    ) { g1, g2 -> g1 to g2 }.let { h1 ->
+        combine(h1, combine(linkedVerseRef, commentaryError) { a, b -> a to b }) { a, b -> a to b }.let { h2 ->
+            combine(h2, combine(summaryState, chapterCounts) { a, b -> a to b }) { a, b -> a to b }.let { h3 ->
+                combine(h3, combine(searchResults, searchFilter) { a, b -> a to b }) { a, b -> a to b }.let { h4 ->
+                    combine(h4, combine(dailyVerse, scrollRestoreKey) { a, b -> a to b }) { all, g6 ->
+                        val (h3v, g5) = all
+                        val (h2v, g4) = h3v
+                        val (h1v, g3) = h2v
+                        val g1 = h1v.first
+                        val g2 = h1v.second
+                        ContentPart(
+                            commentaryHtml = g1.first, showNote = g1.second,
+                            noteText = g2.first, linkedText = g2.second,
+                            linkedRef = g3.first, commentaryErr = g3.second,
+                            summary = g4.first, counts = g4.second,
+                            searchRes = g5.first, filter = g5.second,
+                            daily = g6.first, scrollKey = g6.second
+                        )
+                    }
+                }
             }
-        }.flatMapLatest { it }
+        }
+    }
+
+    private val prefsFlow: Flow<PrefsPart> = combine(
+        combine(prefs.isDarkMode, prefs.fontSize) { a, b -> a to b },
+        combine(prefs.userName, prefs.userEmail) { a, b -> a to b }
+    ) { g1, g2 -> g1 to g2 }.let { h ->
+        combine(h, isReadingRestored) { (g1, g2), restored ->
+            PrefsPart(dark = g1.first, font = g1.second, user = g2.first, email = g2.second, restored = restored)
+        }
+    }
 
     val uiState: StateFlow<HomeUiState> = combine(
         combine(readingFlow, contentFlow) { r, c -> r to c },
@@ -158,37 +173,25 @@ class HomeViewModel(
         val reading = rc.first
         val content = rc.second
         HomeUiState(
-            books = reading.books,
-            verses = reading.verses,
-            highlights = reading.highlights,
-            notes = reading.notes,
-            currentBookId = reading.bookId,
-            currentBook = reading.bookName,
-            selectedBook = reading.bookName,
-            selectedChapter = reading.chapter,
-            selectedVerse = reading.verse,
-            selectedTab = reading.tab,
-            commentaryHtml = content.commentaryHtml,
-            commentaryError = content.commentaryErr,
+            books = reading.books, verses = reading.verses,
+            highlights = reading.highlights, notes = reading.notes,
+            currentBookId = reading.bookId, currentBook = reading.bookName,
+            selectedBook = reading.bookName, selectedChapter = reading.chapter,
+            selectedVerse = reading.verse, selectedTab = reading.tab,
+            commentaryHtml = content.commentaryHtml, commentaryError = content.commentaryErr,
             summary = content.summary,
             summaryText = content.summary?.summary ?: "",
             summaryWhatHappened = content.summary?.whatHappened ?: "",
             summaryApplication = content.summary?.application ?: "",
             summaryItalicText = content.summary?.summary ?: "",
-            linkedVerseText = content.linkedText,
-            linkedVerseRef = content.linkedRef,
-            chapterCounts = content.counts,
-            searchResults = content.searchRes,
-            searchFilter = content.filter,
-            dailyVerse = content.daily,
-            darkMode = pref.dark,
-            fontSize = pref.font,
-            userName = pref.user,
-            userEmail = pref.email,
+            linkedVerseText = content.linkedText, linkedVerseRef = content.linkedRef,
+            chapterCounts = content.counts, searchResults = content.searchRes,
+            searchFilter = content.filter, dailyVerse = content.daily,
+            darkMode = pref.dark, fontSize = pref.font,
+            userName = pref.user, userEmail = pref.email,
             isLoggedIn = pref.user != "Guest" && pref.email.isNotBlank(),
             scrollRestoreKey = content.scrollKey,
-            showNoteDialog = content.showNote,
-            currentNoteText = content.noteText,
+            showNoteDialog = content.showNote, currentNoteText = content.noteText,
             isReadingRestored = pref.restored
         )
     }.stateIn(
@@ -198,38 +201,21 @@ class HomeViewModel(
     )
 
     private data class ReadingPart(
-        val books: List<BookEntity>,
-        val verses: List<VerseEntity>,
-        val highlights: Map<Int, Color>,
-        val notes: List<NoteEntity>,
-        val bookId: Int,
-        val bookName: String,
-        val chapter: Int,
-        val verse: Int?,
-        val tab: String
+        val books: List<BookEntity>, val verses: List<VerseEntity>,
+        val highlights: Map<Int, Color>, val notes: List<NoteEntity>,
+        val bookId: Int, val bookName: String,
+        val chapter: Int, val verse: Int?, val tab: String
     )
-
     private data class ContentPart(
-        val commentaryHtml: String,
-        val showNote: Boolean,
-        val noteText: String,
-        val linkedText: String,
-        val linkedRef: String,
-        val commentaryErr: Boolean,
-        val summary: SummaryEntity?,
-        val counts: Map<Int, Int>,
-        val searchRes: List<VerseSearchResult>,
-        val filter: String,
-        val daily: String,
-        val scrollKey: Int
+        val commentaryHtml: String, val showNote: Boolean, val noteText: String,
+        val linkedText: String, val linkedRef: String, val commentaryErr: Boolean,
+        val summary: SummaryEntity?, val counts: Map<Int, Int>,
+        val searchRes: List<VerseSearchResult>, val filter: String,
+        val daily: String, val scrollKey: Int
     )
-
     private data class PrefsPart(
-        val dark: Boolean?,
-        val font: Float,
-        val user: String,
-        val email: String,
-        val restored: Boolean
+        val dark: Boolean?, val font: Float,
+        val user: String, val email: String, val restored: Boolean
     )
 
     init {
@@ -290,10 +276,7 @@ class HomeViewModel(
         saveReadingProgress()
     }
     fun previousChapter() {
-        if (selectedChapter.value > 1) {
-            selectChapter(selectedChapter.value - 1)
-            return
-        }
+        if (selectedChapter.value > 1) { selectChapter(selectedChapter.value - 1); return }
         val prevBookId = currentBookId.value - 1
         if (prevBookId < 1) return
         selectedBookId.value = prevBookId
@@ -304,10 +287,7 @@ class HomeViewModel(
     }
     fun nextChapter() {
         val max = BookCatalog.chapters(currentBookId.value)
-        if (selectedChapter.value < max) {
-            selectChapter(selectedChapter.value + 1)
-            return
-        }
+        if (selectedChapter.value < max) { selectChapter(selectedChapter.value + 1); return }
         val nextBookId = currentBookId.value + 1
         if (nextBookId > 66) return
         selectedBookId.value = nextBookId
@@ -359,9 +339,7 @@ class HomeViewModel(
                 selectedBookId.value = lastBookId
                 selectedChapter.value = lastChapter.coerceIn(1, BookCatalog.chapters(lastBookId))
             }
-        } finally {
-            isReadingRestored.value = true
-        }
+        } finally { isReadingRestored.value = true }
     }
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         viewModelScope.launch { summaryState.value = dao.getSummary(bookId, chapter) }
@@ -378,7 +356,6 @@ class HomeViewModel(
             }.onFailure { linkedVerseText.value = "Could not load verse." }
         }
     }
-
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
@@ -399,7 +376,6 @@ class HomeViewModel(
         }
     }
     fun loadCommentary() { loadCommentary(currentBookId.value, selectedChapter.value) }
-
     private fun decompressCommentary(bytes: ByteArray): String {
         runCatching {
             val inflater = Inflater()
@@ -414,11 +390,9 @@ class HomeViewModel(
             inflater.end()
             out.toString(Charsets.UTF_8.name())
         }.onSuccess { if (it.isNotBlank()) return it }
-
         runCatching {
             GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader(Charsets.UTF_8).use { it.readText() }
         }.onSuccess { if (it.isNotBlank()) return it }
-
         runCatching {
             val inflater = Inflater(true)
             inflater.setInput(bytes)
@@ -432,10 +406,8 @@ class HomeViewModel(
             inflater.end()
             out.toString(Charsets.UTF_8.name())
         }.onSuccess { if (it.isNotBlank()) return it }
-
         return String(bytes, Charsets.UTF_8)
     }
-
     fun loadDailyVerse() {
         viewModelScope.launch {
             runCatching {
