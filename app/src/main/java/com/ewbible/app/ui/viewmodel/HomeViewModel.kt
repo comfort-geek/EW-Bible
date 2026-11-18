@@ -66,7 +66,8 @@ class HomeViewModel(
     private val selectedTab = MutableStateFlow("Bible")
     private val searchQuery = MutableStateFlow("")
     private val searchFilter = MutableStateFlow("All")
-    private val showNoteDialog = MutableStateFlow(false)
+    // FIXED: renamed - was showNoteDialog, collided with fun showNoteDialog()
+    private val showNoteDialogState = MutableStateFlow(false)
     private val currentNoteText = MutableStateFlow("")
     private val commentary = MutableStateFlow("")
     private val commentaryError = MutableStateFlow(false)
@@ -83,7 +84,7 @@ class HomeViewModel(
     private val linkedVerseText = MutableStateFlow("")
     private val linkedVerseRef = MutableStateFlow("")
     private var commentaryJob: Job? = null
-    // NEW: guard - restore runs once, never again
+    // Guard - restore runs once, never again
     private var restoreDone = false
 
     private val commentaryCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
@@ -136,7 +137,7 @@ class HomeViewModel(
         viewModelScope.launch { scrollRestoreKey.collect { k -> _uiState.update { it.copy(scrollRestoreKey = k) } } }
         viewModelScope.launch { linkedVerseText.collect { t -> _uiState.update { it.copy(linkedVerseText = t) } } }
         viewModelScope.launch { linkedVerseRef.collect { r -> _uiState.update { it.copy(linkedVerseRef = r) } } }
-        viewModelScope.launch { showNoteDialog.collect { b -> _uiState.update { it.copy(showNoteDialog = b) } } }
+        viewModelScope.launch { showNoteDialogState.collect { b -> _uiState.update { it.copy(showNoteDialog = b) } } }
         viewModelScope.launch { currentNoteText.collect { t -> _uiState.update { it.copy(currentNoteText = t) } } }
         viewModelScope.launch { isReadingRestored.collect { b -> _uiState.update { it.copy(isReadingRestored = b) } } }
         viewModelScope.launch { runCatching { prefs.isDarkMode.collect { d -> _uiState.update { it.copy(darkMode = d) } } } }
@@ -391,8 +392,8 @@ class HomeViewModel(
             }.onFailure { dailyVerse.value = "Thy word is a lamp unto my feet, and a light unto my path.\n— Psalm 119:105" }
         }
     }
-    fun showNoteDialog() { if (selectedVerse.value == null) return; showNoteDialog.value = true }
-    fun dismissNoteDialog() { showNoteDialog.value = false }
+    fun showNoteDialog() { if (selectedVerse.value == null) return; showNoteDialogState.value = true }
+    fun dismissNoteDialog() { showNoteDialogState.value = false }
     fun saveNote(noteText: String) {
         val verseNum = selectedVerse.value ?: return
         viewModelScope.launch {
