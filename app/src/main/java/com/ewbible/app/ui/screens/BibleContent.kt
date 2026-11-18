@@ -19,6 +19,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -48,6 +52,7 @@ fun BibleContent(
     onVerseLongClick: (Int) -> Unit,
     onNextChapter: () -> Unit = {},
     onPreviousChapter: () -> Unit = {},
+    summaryLoading: Boolean = false,
 ) {
     BibleContent(
         selectedBookId = BookCatalog.id(selectedBook),
@@ -63,7 +68,8 @@ fun BibleContent(
         onVerseClick = onVerseClick,
         onVerseLongClick = onVerseLongClick,
         onNextChapter = onNextChapter,
-        onPreviousChapter = onPreviousChapter
+        onPreviousChapter = onPreviousChapter,
+        summaryLoading = summaryLoading
     )
 }
 
@@ -83,6 +89,7 @@ fun BibleContent(
     onVerseLongClick: (Int) -> Unit,
     onNextChapter: () -> Unit = {},
     onPreviousChapter: () -> Unit = {},
+    summaryLoading: Boolean = false,
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -91,13 +98,33 @@ fun BibleContent(
     val maxChapter = BookCatalog.chapters(safeBookId)
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
 
+    // ZERO-JUMP FIX - keep old chapter until new one is fully ready
+    // No visual change: no fixed height, no inner scroll, same Card
+    var visibleSummary by remember { mutableStateOf<SummaryEntity?>(null) }
+    var visibleVerses by remember { mutableStateOf<List<VerseEntity>>(emptyList()) }
+    var visibleKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    val currentKey = safeBookId to safeChapter
+
+    if (visibleKey == null) {
+        visibleSummary = summary
+        visibleVerses = versesList
+        visibleKey = currentKey
+    }
+
+    if (!summaryLoading && visibleKey != currentKey) {
+        visibleSummary = summary
+        visibleVerses = versesList
+        visibleKey = currentKey
+    }
+
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
         contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
     ) {
-        item(key = "summary-$safeBookId-$safeChapter") {
-            if (summary != null) {
+        item(key = "summary-${visibleKey?.first}-${visibleKey?.second}") {
+            val s = visibleSummary
+            if (s != null) {
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                     colors = CardDefaults.cardColors(containerColor = panel),
@@ -105,20 +132,20 @@ fun BibleContent(
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text(summary.summary, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
+                        Text(s.summary, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
                         Spacer(modifier = Modifier.height(8.dp))
                         Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Text(summary.whatHappened, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
+                        Text(s.whatHappened, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
                         Spacer(modifier = Modifier.height(8.dp))
                         Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        Text(summary.application, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
+                        Text(s.application, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
                     }
                 }
             }
         }
 
-        if (versesList.isEmpty()) {
-            item(key = "empty-$safeBookId-$safeChapter") {
+        if (visibleVerses.isEmpty()) {
+            item(key = "empty-${visibleKey?.first}-${visibleKey?.second}") {
                 Text(
                     text = "No verses loaded for $bookName $safeChapter.",
                     color = textColor.copy(alpha = 0.6f),
@@ -130,7 +157,7 @@ fun BibleContent(
         }
 
         itemsIndexed(
-            versesList,
+            visibleVerses,
             key = { _, verse -> "${verse.bookId}-${verse.chapter}-${verse.verse}" }
         ) { _, verse ->
             val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
