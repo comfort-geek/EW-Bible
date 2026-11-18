@@ -81,7 +81,6 @@ class HomeViewModel(
     private val linkedVerseRef = MutableStateFlow("")
     private var commentaryJob: Job? = null
 
-    // Cache so we never decompress twice - 30 chapters, LRU
     private val commentaryCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 30
     }
@@ -271,29 +270,40 @@ class HomeViewModel(
         viewModelScope.launch { runCatching { summaryState.value = dao.getSummary(bookId, chapter) } }
     }
     fun loadSummary() { loadSummary(currentBookId.value, selectedChapter.value) }
-    fun loadLinkedVerse(bookName: String, chapter: Int, verse: Int) {
+
+    // FIX #2: Range support - Romans 8:1-11 loads verses 1..11, not just 1
+    // Keep old 3-arg call working too (defaults endVerse = verse)
+    fun loadLinkedVerse(bookName: String, chapter: Int, verse: Int, endVerse: Int = verse) {
         viewModelScope.launch {
             val bookId = runCatching { BookCatalog.id(bookName) }.getOrDefault(1)
-            linkedVerseRef.value = "${BookCatalog.name(bookId)} $chapter:$verse"
+            val bookDisplay = BookCatalog.name(bookId)
+            val safeEnd = maxOf(verse, endVerse)
+            linkedVerseRef.value = if (safeEnd > verse) "$bookDisplay $chapter:$verse-$safeEnd"
+                                   else "$bookDisplay $chapter:$verse"
             linkedVerseText.value = "Loading..."
             runCatching {
                 val list = dao.getVerses(bookId, chapter).first()
-                linkedVerseText.value = list.firstOrNull { it.verse == verse }?.text ?: "Verse not found."
+                val range = list.filter { it.verse in verse..safeEnd }.sortedBy { it.verse }
+                linkedVerseText.value = if (range.isEmpty()) {
+                    "Verse not found."
+                } else if (range.size == 1) {
+                    range.first().text
+                } else {
+                    // "1. There is therefore...\n\n2. For the law..."
+                    range.joinToString("\n\n") { "${it.verse}. ${it.text}" }
+                }
             }.onFailure { linkedVerseText.value = "Could not load verse." }
         }
     }
 
-    // --- COMMENTARY: FIXED - cancel old job, no stuck guard ---
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
-        // 1. Cache hit - kill any old job first, then show instantly
         commentaryCache[key]?.let {
             commentaryJob?.cancel()
             commentaryError.value = false
             commentary.value = it
             return
         }
-        // 2. FIXED: Always cancel old job, no early return that could stick
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
             try {
@@ -322,7 +332,6 @@ class HomeViewModel(
     }
     fun loadCommentary() { loadCommentary(currentBookId.value, selectedChapter.value) }
 
-    // --- FAST ZLIB DECOMPRESS: check header, 1 pass, no guessing ---
     private fun decompressCommentary(bytes: ByteArray): String {
         if (bytes.isEmpty()) return ""
         if (bytes.size > 2 && bytes[0] == '<'.code.toByte()) return String(bytes, Charsets.UTF_8)
