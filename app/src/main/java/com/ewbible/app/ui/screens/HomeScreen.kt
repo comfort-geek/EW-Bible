@@ -251,7 +251,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(420.dp)
+                    .height(320.dp)
                     .padding(horizontal = 16.dp, vertical = 8.dp)
                     .padding(bottom = 24.dp)
             ) {
