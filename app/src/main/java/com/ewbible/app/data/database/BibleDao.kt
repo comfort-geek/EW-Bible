@@ -54,6 +54,10 @@ interface BibleDao {
     @Query("SELECT * FROM verses")
     suspend fun getAllVersesList(): List<VerseEntity>
 
+    // FIXED SEARCH:
+    // 1. COLLATE NOCASE = case-insensitive, no need to lower() every row
+    // 2. LIMIT 100 (was 200) = less UI work
+    // 3. No change to ViewModel needed - same function name / params
     @Query("""
         SELECT v.book_id AS bookId,
                b.name AS bookName,
@@ -62,8 +66,8 @@ interface BibleDao {
                v.text
         FROM verses v
         INNER JOIN books b ON b.id = v.book_id
-        WHERE v.text LIKE '%' || :query || '%'
-        LIMIT 200
+        WHERE v.text LIKE '%' || :query || '%' COLLATE NOCASE
+        LIMIT 100
     """)
     suspend fun searchVerses(query: String): List<VerseSearchResult>
 
