@@ -24,6 +24,7 @@ data class HomeUiState(
     val highlights: Map<Int, Color> = emptyMap(),
     val notes: List<NoteEntity> = emptyList(),
     val summary: SummaryEntity? = null,
+    val summaryLoading: Boolean = false,
     val summaryText: String = "",
     val summaryWhatHappened: String = "",
     val summaryApplication: String = "",
@@ -70,6 +71,8 @@ class HomeViewModel(
     private val commentary = MutableStateFlow("")
     private val commentaryError = MutableStateFlow(false)
     private val summaryState = MutableStateFlow<SummaryEntity?>(null)
+    private val _summaryLoading = MutableStateFlow(false)
+    val summaryLoading: StateFlow<Boolean> = _summaryLoading.asStateFlow()
     private val isReadingRestored = MutableStateFlow(false)
     private val chapterCounts = MutableStateFlow<Map<Int, Int>>(
         BookCatalog.all.associate { it.id to it.chapters }
@@ -123,6 +126,7 @@ class HomeViewModel(
         viewModelScope.launch { summaryState.collect { s -> _uiState.update {
             it.copy(summary = s, summaryText = s?.summary ?: "", summaryWhatHappened = s?.whatHappened ?: "", summaryApplication = s?.application ?: "", summaryItalicText = s?.summary ?: "")
         } } }
+        viewModelScope.launch { summaryLoading.collect { b -> _uiState.update { it.copy(summaryLoading = b) } } }
         viewModelScope.launch { chapterCounts.collect { m -> _uiState.update { it.copy(chapterCounts = m) } } }
         viewModelScope.launch { searchResults.collect { r -> _uiState.update { it.copy(searchResults = r) } } }
         viewModelScope.launch { searchFilter.collect { f -> _uiState.update { it.copy(searchFilter = f) } } }
@@ -267,7 +271,11 @@ class HomeViewModel(
         } finally { isReadingRestored.value = true }
     }
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
-        viewModelScope.launch { runCatching { summaryState.value = dao.getSummary(bookId, chapter) } }
+        viewModelScope.launch {
+            _summaryLoading.value = true
+            runCatching { summaryState.value = dao.getSummary(bookId, chapter) }
+            _summaryLoading.value = false
+        }
     }
     fun loadSummary() { loadSummary(currentBookId.value, selectedChapter.value) }
 
