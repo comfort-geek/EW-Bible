@@ -83,6 +83,8 @@ class HomeViewModel(
     private val linkedVerseText = MutableStateFlow("")
     private val linkedVerseRef = MutableStateFlow("")
     private var commentaryJob: Job? = null
+    // NEW: guard - restore runs once, never again
+    private var restoreDone = false
 
     private val commentaryCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 30
@@ -139,7 +141,7 @@ class HomeViewModel(
         viewModelScope.launch { isReadingRestored.collect { b -> _uiState.update { it.copy(isReadingRestored = b) } } }
         viewModelScope.launch { runCatching { prefs.isDarkMode.collect { d -> _uiState.update { it.copy(darkMode = d) } } } }
         viewModelScope.launch { runCatching { prefs.fontSize.collect { f -> _uiState.update { it.copy(fontSize = f) } } } }
-        viewModelScope.launch { runCatching { prefs.userName.collect { n -> _uiState.update { it.copy(userName = n, isLoggedIn = n != "Guest" && _uiState.value.userEmail.isNotBlank()) } } } }
+        viewModelScope.launch { runCatching { prefs.userName.collect { n -> _uiState.update { it.copy(userName = n, isLoggedIn = n != "Guest" && _uiState.value.userEmail.isNotBlank()) } } } } }
         viewModelScope.launch { runCatching { prefs.userEmail.collect { e -> _uiState.update { it.copy(userEmail = e, isLoggedIn = _uiState.value.userName != "Guest" && e.isNotBlank()) } } } }
 
         viewModelScope.launch { restoreSavedReading() }
@@ -257,6 +259,8 @@ class HomeViewModel(
         }
     }
     private suspend fun restoreSavedReading() {
+        // FIXED: never run twice, never set isReadingRestored back to false
+        if (restoreDone) return
         try {
             val lastBookId = runCatching { prefs.getLastBookId() }.getOrDefault(1)
             val lastChapter = runCatching { prefs.getLastChapter() }.getOrDefault(1)
@@ -268,7 +272,10 @@ class HomeViewModel(
             Log.e("HomeViewModel", "restoreSavedReading failed, using Genesis 1", e)
             selectedBookId.value = 1
             selectedChapter.value = 1
-        } finally { isReadingRestored.value = true }
+        } finally {
+            restoreDone = true
+            isReadingRestored.value = true // only ever goes false -> true, never back
+        }
     }
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         viewModelScope.launch {
