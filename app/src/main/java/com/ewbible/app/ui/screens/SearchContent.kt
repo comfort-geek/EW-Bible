@@ -1,5 +1,6 @@
 package com.ewbible.app.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -35,22 +36,13 @@ fun SearchContent(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             singleLine = true
         )
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("All", "Old Testament", "New Testament", "Gospel", "Prophecy").forEach { filter ->
                 val selected = searchFilter == filter
                 Text(
-                    text = filter,
-                    color = if (selected) Color.White else textColor,
-                    fontSize = 12.sp,
-                    modifier = Modifier
-                        .clickable { onFilterChange(filter) }
-                        .background(
-                            color = if (selected) gold else textColor.copy(alpha = 0.1f),
-                            shape = RoundedCornerShape(16.dp)
-                        )
+                    text = filter, color = if (selected) Color.White else textColor, fontSize = 12.sp,
+                    modifier = Modifier.clickable { onFilterChange(filter) }
+                        .background(if (selected) gold else textColor.copy(alpha = 0.1f), RoundedCornerShape(16.dp))
                         .padding(horizontal = 12.dp, vertical = 6.dp)
                 )
             }
@@ -66,16 +58,8 @@ fun SearchContent(
         }
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(verseResults) { result ->
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onOpenVerse(result.bookId, result.chapter, result.verse) }
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                ) {
-                    Text(
-                        "${BookCatalog.name(result.bookId)} ${result.chapter}:${result.verse}",
-                        color = gold, fontSize = 13.sp
-                    )
+                Column(modifier = Modifier.fillMaxWidth().clickable { onOpenVerse(result.bookId, result.chapter, result.verse) }.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Text("${BookCatalog.name(result.bookId)} ${result.chapter}:${result.verse}", color = gold, fontSize = 13.sp)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(result.text, color = textColor, fontSize = fontSize.sp)
                 }
