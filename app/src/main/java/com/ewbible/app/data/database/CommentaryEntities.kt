@@ -2,7 +2,6 @@ package com.ewbible.app.data.database
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
-import androidx.room.Index
 import androidx.room.PrimaryKey
 
 @Entity(tableName = "books")
@@ -59,13 +58,9 @@ data class CommentaryEntity(
     }
 }
 
-@Entity(
-    tableName = "notes",
-    indices = [
-        Index(value = ["book_id", "chapter", "verse"]),
-        Index(value = ["timestamp"])
-    ]
-)
+// NO @Index here on purpose - adding one = schema change = needs version 4
+// notes table is small (user notes only), so no index needed on v3
+@Entity(tableName = "notes")
 data class NoteEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     @ColumnInfo(name = "book_id") val bookId: Int,
