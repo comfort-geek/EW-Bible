@@ -71,9 +71,7 @@ class HomeViewModel(
     private val commentaryError = MutableStateFlow(false)
     private val summaryState = MutableStateFlow<SummaryEntity?>(null)
     private val isReadingRestored = MutableStateFlow(false)
-    private val chapterCounts = MutableStateFlow<Map<Int, Int>>(
-        BookCatalog.all.associate { it.id to it.chapters }
-    )
+    private val chapterCounts = MutableStateFlow<Map<Int, Int>>(BookCatalog.all.associate { it.id to it.chapters })
     private val searchResults = MutableStateFlow<List<VerseSearchResult>>(emptyList())
     private val dailyVerse = MutableStateFlow("")
     private val scrollRestoreKey = MutableStateFlow(0)
@@ -83,7 +81,6 @@ class HomeViewModel(
 
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
     val currentBookId: StateFlow<Int> = selectedBookId.asStateFlow()
-    private val selectedBookName: Flow<String> = selectedBookId.map { BookCatalog.name(it) }
 
     val verses: Flow<List<VerseEntity>> = selectedBookId.flatMapLatest { bookId ->
         selectedChapter.flatMapLatest { chapter -> dao.getVerses(bookId, chapter) }
@@ -97,149 +94,63 @@ class HomeViewModel(
     }
     val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
 
-    // CLEAN: only 2-arg combine, values not Flows, no flatMapLatest unwrapping
-    private val readingFlow: Flow<ReadingPart> = combine(
-        combine(books, verses) { b, v -> b to v },
-        combine(highlights, notes) { h, n -> h to n }
-    ) { bv, hn ->
-        // Build in 2 steps using plain values via a second combine below
-        // We store the pairs and combine with the rest in readingFlow2
-        bv to hn
-    }.let { firstHalf ->
-        combine(
-            firstHalf,
-            combine(currentBookId, selectedBookName) { id, name -> id to name }
-        ) { fh, idName ->
-            fh to idName
-        }.let { secondHalf ->
-            combine(
-                secondHalf,
-                combine(selectedChapter, selectedVerse) { c, v -> c to v }
-            ) { sh, cv ->
-                combine(sh, selectedTab) { s, tab ->
-                    val (bv, hn) = s.first
-                    val idName = s.second
-                    ReadingPart(
-                        books = bv.first, verses = bv.second,
-                        highlights = hn.first, notes = hn.second,
-                        bookId = idName.first, bookName = idName.second,
-                        chapter = cv.first, verse = cv.second, tab = tab
-                    )
-                }
-            }.flatMapLatest { it }
-        }
-    }
-
-    private val contentFlow: Flow<ContentPart> = combine(
-        combine(commentary, showNoteDialog) { a, b -> a to b },
-        combine(currentNoteText, linkedVerseText) { a, b -> a to b }
-    ) { g1, g2 -> g1 to g2 }.let { h1 ->
-        combine(h1, combine(linkedVerseRef, commentaryError) { a, b -> a to b }) { a, b -> a to b }.let { h2 ->
-            combine(h2, combine(summaryState, chapterCounts) { a, b -> a to b }) { a, b -> a to b }.let { h3 ->
-                combine(h3, combine(searchResults, searchFilter) { a, b -> a to b }) { a, b -> a to b }.let { h4 ->
-                    combine(h4, combine(dailyVerse, scrollRestoreKey) { a, b -> a to b }) { all, g6 ->
-                        val (h3v, g5) = all
-                        val (h2v, g4) = h3v
-                        val (h1v, g3) = h2v
-                        val g1 = h1v.first
-                        val g2 = h1v.second
-                        ContentPart(
-                            commentaryHtml = g1.first, showNote = g1.second,
-                            noteText = g2.first, linkedText = g2.second,
-                            linkedRef = g3.first, commentaryErr = g3.second,
-                            summary = g4.first, counts = g4.second,
-                            searchRes = g5.first, filter = g5.second,
-                            daily = g6.first, scrollKey = g6.second
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    private val prefsFlow: Flow<PrefsPart> = combine(
-        combine(prefs.isDarkMode, prefs.fontSize) { a, b -> a to b },
-        combine(prefs.userName, prefs.userEmail) { a, b -> a to b }
-    ) { g1, g2 -> g1 to g2 }.let { h ->
-        combine(h, isReadingRestored) { (g1, g2), restored ->
-            PrefsPart(dark = g1.first, font = g1.second, user = g2.first, email = g2.second, restored = restored)
-        }
-    }
-
-    val uiState: StateFlow<HomeUiState> = combine(
-        combine(readingFlow, contentFlow) { r, c -> r to c },
-        prefsFlow
-    ) { rc, pref ->
-        val reading = rc.first
-        val content = rc.second
-        HomeUiState(
-            books = reading.books, verses = reading.verses,
-            highlights = reading.highlights, notes = reading.notes,
-            currentBookId = reading.bookId, currentBook = reading.bookName,
-            selectedBook = reading.bookName, selectedChapter = reading.chapter,
-            selectedVerse = reading.verse, selectedTab = reading.tab,
-            commentaryHtml = content.commentaryHtml, commentaryError = content.commentaryErr,
-            summary = content.summary,
-            summaryText = content.summary?.summary ?: "",
-            summaryWhatHappened = content.summary?.whatHappened ?: "",
-            summaryApplication = content.summary?.application ?: "",
-            summaryItalicText = content.summary?.summary ?: "",
-            linkedVerseText = content.linkedText, linkedVerseRef = content.linkedRef,
-            chapterCounts = content.counts, searchResults = content.searchRes,
-            searchFilter = content.filter, dailyVerse = content.daily,
-            darkMode = pref.dark, fontSize = pref.font,
-            userName = pref.user, userEmail = pref.email,
-            isLoggedIn = pref.user != "Guest" && pref.email.isNotBlank(),
-            scrollRestoreKey = content.scrollKey,
-            showNoteDialog = content.showNote, currentNoteText = content.noteText,
-            isReadingRestored = pref.restored
-        )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = HomeUiState()
-    )
-
-    private data class ReadingPart(
-        val books: List<BookEntity>, val verses: List<VerseEntity>,
-        val highlights: Map<Int, Color>, val notes: List<NoteEntity>,
-        val bookId: Int, val bookName: String,
-        val chapter: Int, val verse: Int?, val tab: String
-    )
-    private data class ContentPart(
-        val commentaryHtml: String, val showNote: Boolean, val noteText: String,
-        val linkedText: String, val linkedRef: String, val commentaryErr: Boolean,
-        val summary: SummaryEntity?, val counts: Map<Int, Int>,
-        val searchRes: List<VerseSearchResult>, val filter: String,
-        val daily: String, val scrollKey: Int
-    )
-    private data class PrefsPart(
-        val dark: Boolean?, val font: Float,
-        val user: String, val email: String, val restored: Boolean
-    )
+    // NO combine() for uiState - single MutableStateFlow updated by collectors
+    private val _uiState = MutableStateFlow(HomeUiState())
+    val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     init {
+        viewModelScope.launch { books.collect { list -> _uiState.update { it.copy(books = list) } } }
+        viewModelScope.launch { verses.collect { list -> _uiState.update { it.copy(verses = list) } } }
+        viewModelScope.launch { highlights.collect { map -> _uiState.update { it.copy(highlights = map) } } }
+        viewModelScope.launch { notes.collect { list -> _uiState.update { it.copy(notes = list) } } }
+        viewModelScope.launch { selectedBookId.collect { id ->
+            _uiState.update { it.copy(currentBookId = id, currentBook = BookCatalog.name(id), selectedBook = BookCatalog.name(id)) }
+        } }
+        viewModelScope.launch { selectedChapter.collect { c -> _uiState.update { it.copy(selectedChapter = c) } } }
+        viewModelScope.launch { selectedVerse.collect { v -> _uiState.update { it.copy(selectedVerse = v) } } }
+        viewModelScope.launch { selectedTab.collect { t -> _uiState.update { it.copy(selectedTab = t) } } }
+        viewModelScope.launch { commentary.collect { h -> _uiState.update { it.copy(commentaryHtml = h) } } }
+        viewModelScope.launch { commentaryError.collect { e -> _uiState.update { it.copy(commentaryError = e) } } }
+        viewModelScope.launch { summaryState.collect { s -> _uiState.update {
+            it.copy(summary = s, summaryText = s?.summary ?: "", summaryWhatHappened = s?.whatHappened ?: "", summaryApplication = s?.application ?: "", summaryItalicText = s?.summary ?: "")
+        } } }
+        viewModelScope.launch { chapterCounts.collect { m -> _uiState.update { it.copy(chapterCounts = m) } } }
+        viewModelScope.launch { searchResults.collect { r -> _uiState.update { it.copy(searchResults = r) } } }
+        viewModelScope.launch { searchFilter.collect { f -> _uiState.update { it.copy(searchFilter = f) } } }
+        viewModelScope.launch { dailyVerse.collect { d -> _uiState.update { it.copy(dailyVerse = d) } } }
+        viewModelScope.launch { scrollRestoreKey.collect { k -> _uiState.update { it.copy(scrollRestoreKey = k) } } }
+        viewModelScope.launch { linkedVerseText.collect { t -> _uiState.update { it.copy(linkedVerseText = t) } } }
+        viewModelScope.launch { linkedVerseRef.collect { r -> _uiState.update { it.copy(linkedVerseRef = r) } } }
+        viewModelScope.launch { showNoteDialog.collect { b -> _uiState.update { it.copy(showNoteDialog = b) } } }
+        viewModelScope.launch { currentNoteText.collect { t -> _uiState.update { it.copy(currentNoteText = t) } } }
+        viewModelScope.launch { isReadingRestored.collect { b -> _uiState.update { it.copy(isReadingRestored = b) } } }
+        viewModelScope.launch { prefs.isDarkMode.collect { d -> _uiState.update { it.copy(darkMode = d) } } }
+        viewModelScope.launch { prefs.fontSize.collect { f -> _uiState.update { it.copy(fontSize = f) } } }
+        viewModelScope.launch { prefs.userName.collect { n -> _uiState.update { it.copy(userName = n, isLoggedIn = n != "Guest" && _uiState.value.userEmail.isNotBlank()) } } }
+        viewModelScope.launch { prefs.userEmail.collect { e -> _uiState.update { it.copy(userEmail = e, isLoggedIn = _uiState.value.userName != "Guest" && e.isNotBlank()) } } }
+
         viewModelScope.launch { restoreSavedReading() }
         viewModelScope.launch {
             runCatching {
                 val fromDb = dao.getChapterCounts().associate { it.bookId to it.chapterCount }
                 if (fromDb.isNotEmpty()) {
                     val catalog = BookCatalog.all.associate { it.id to it.chapters }
-                    chapterCounts.value = catalog.mapValues { (id, catalogCount) ->
-                        maxOf(catalogCount, fromDb[id] ?: 0)
-                    }
+                    chapterCounts.value = catalog.mapValues { (id, catalogCount) -> maxOf(catalogCount, fromDb[id] ?: 0) }
                 }
-            }.onFailure {
-                Log.e("HomeViewModel", "getChapterCounts failed, keeping BookCatalog counts", it)
-            }
+            }.onFailure { Log.e("HomeViewModel", "getChapterCounts failed, keeping BookCatalog counts", it) }
         }
+        // SAFE: only top-level 2-arg combine, no .combine() extension
         viewModelScope.launch {
             combine(currentBookId, selectedChapter) { bookId, chapter -> bookId to chapter }
-                .combine(selectedTab) { bc, tab -> Triple(bc.first, bc.second, tab) }
-                .collectLatest { (bookId, chapter, tab) ->
+                .collectLatest { (bookId, chapter) ->
                     loadSummary(bookId, chapter)
-                    if (tab == "Open EW") loadCommentary(bookId, chapter)
+                    if (selectedTab.value == "Open EW") loadCommentary(bookId, chapter)
                 }
+        }
+        viewModelScope.launch {
+            selectedTab.collectLatest { tab ->
+                if (tab == "Open EW") loadCommentary(currentBookId.value, selectedChapter.value)
+            }
         }
         viewModelScope.launch {
             combine(searchQuery.debounce(300L).distinctUntilChanged(), searchFilter) { q, f -> q to f }
