@@ -85,6 +85,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var linkedVerseBook by remember { mutableStateOf("") }
     var linkedVerseChapter by remember { mutableStateOf(1) }
     var linkedVerseNum by remember { mutableStateOf(1) }
+    var linkedVerseEnd by remember { mutableStateOf(1) } // FIX: holds end of range, e.g. 11 for Romans 8:1-11
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
     val gold = Color(0xFFC9A227)
@@ -94,7 +95,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val currentBookId = state.currentBookId
     val currentBookName = BookCatalog.name(currentBookId)
 
-    // FIX: Only act when book/chapter actually changes, not on every verses recompose
     LaunchedEffect(state.verses, state.currentBookId, state.selectedChapter) {
         if (state.verses.isEmpty()) return@LaunchedEffect
         val key = state.currentBookId to state.selectedChapter
@@ -182,9 +182,12 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         textColor = textColor, hasError = state.commentaryError,
                         isLoading = state.commentaryHtml.isBlank() && !state.commentaryError,
                         bookName = currentBookName, chapter = state.selectedChapter,
-                        onVerseClick = { book, chapter, verse ->
-                            linkedVerseBook = book; linkedVerseChapter = chapter; linkedVerseNum = verse
-                            viewModel.loadLinkedVerse(book, chapter, verse); showLinkedVerseSheet = true
+                        // FIX: now receives endVerse
+                        onVerseClick = { book, chapter, verse, endVerse ->
+                            linkedVerseBook = book; linkedVerseChapter = chapter
+                            linkedVerseNum = verse; linkedVerseEnd = endVerse
+                            viewModel.loadLinkedVerse(book, chapter, verse, endVerse)
+                            showLinkedVerseSheet = true
                         },
                         onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() },
                         onRetry = { viewModel.loadCommentary() }
@@ -212,7 +215,14 @@ fun HomeScreen(viewModel: HomeViewModel) {
         ModalBottomSheet(onDismissRequest = { showLinkedVerseSheet = false }, containerColor = background, contentColor = textColor) {
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).padding(bottom = 24.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = state.linkedVerseRef.ifBlank { "$linkedVerseBook $linkedVerseChapter:$linkedVerseNum" }, color = gold, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    // FIX: shows "Romans 8:1-11" when range, "Romans 8:1" when single
+                    Text(
+                        text = state.linkedVerseRef.ifBlank {
+                            if (linkedVerseEnd > linkedVerseNum) "$linkedVerseBook $linkedVerseChapter:$linkedVerseNum-$linkedVerseEnd"
+                            else "$linkedVerseBook $linkedVerseChapter:$linkedVerseNum"
+                        },
+                        color = gold, fontWeight = FontWeight.Bold, fontSize = 16.sp
+                    )
                     IconButton(onClick = { showLinkedVerseSheet = false }) { Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor) }
                 }
                 Box(modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
