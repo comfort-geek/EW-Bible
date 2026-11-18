@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -86,6 +87,8 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var linkedVerseChapter by remember { mutableStateOf(1) }
     var linkedVerseNum by remember { mutableStateOf(1) }
     var linkedVerseEnd by remember { mutableStateOf(1) }
+    // NEW: once app has loaded once, never show full-screen Loading again
+    var initialLoadDone by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
     val gold = Color(0xFFC9A227)
@@ -94,6 +97,11 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val textColor = if (isDark) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
     val currentBookId = state.currentBookId
     val currentBookName = BookCatalog.name(currentBookId)
+
+    // NEW: remember that first load finished, so tab switches don't re-trigger it
+    LaunchedEffect(state.isReadingRestored) {
+        if (state.isReadingRestored) initialLoadDone = true
+    }
 
     LaunchedEffect(state.verses, state.currentBookId, state.selectedChapter) {
         if (state.verses.isEmpty()) return@LaunchedEffect
@@ -122,10 +130,15 @@ fun HomeScreen(viewModel: HomeViewModel) {
     }
     fun openBook(bookName: String, chapter: Int) { openBook(BookCatalog.id(bookName), chapter) }
 
-    if (!state.isReadingRestored) {
+    // FIXED: only show on very first app open, never on tab switch
+    if (!state.isReadingRestored && !initialLoadDone) {
         Box(modifier = Modifier.fillMaxSize().background(background), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                CircularProgressIndicator(color = gold)
+                CircularProgressIndicator(
+                    color = gold,
+                    modifier = Modifier.size(40.dp),
+                    strokeWidth = 4.dp
+                )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text("Loading...", color = textColor)
             }
