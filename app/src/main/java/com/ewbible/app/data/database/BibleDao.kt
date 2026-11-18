@@ -1,6 +1,10 @@
 package com.ewbible.app.data.database
 
-import androidx.room.*
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 data class BookChapterCount(
@@ -51,13 +55,6 @@ interface BibleDao {
     @Query("SELECT * FROM verses WHERE book_id = :bookId AND chapter = :chapter ORDER BY verse")
     fun getVerses(bookId: Int, chapter: Int): Flow<List<VerseEntity>>
 
-    @Query("SELECT * FROM verses")
-    suspend fun getAllVersesList(): List<VerseEntity>
-
-    // FIXED SEARCH:
-    // 1. COLLATE NOCASE = case-insensitive, no need to lower() every row
-    // 2. LIMIT 100 (was 200) = less UI work
-    // 3. No change to ViewModel needed - same function name / params
     @Query("""
         SELECT v.book_id AS bookId,
                b.name AS bookName,
