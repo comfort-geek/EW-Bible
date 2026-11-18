@@ -85,16 +85,19 @@ class HomeViewModel(
     private var commentaryJob: Job? = null
     private var restoreDone = false
 
+    // Caches for instant, no-delay navigation
     private val commentaryCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 30
     }
     private val summaryCache = mutableMapOf<String, SummaryEntity?>()
     private val versesCache = mutableMapOf<String, List<VerseEntity>>()
+    // FIX: Prevent double Room hit when loadSummary called twice quickly for same chapter
     private val summaryLoadingKeys = mutableSetOf<String>()
 
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
     val currentBookId: StateFlow<Int> = selectedBookId.asStateFlow()
 
+    // combine + distinct + shareIn(replay=1) = survives tab switch, no reload
     val verses: Flow<List<VerseEntity>> = combine(selectedBookId, selectedChapter) { bookId, chapter ->
         bookId to chapter
     }
@@ -107,6 +110,7 @@ class HomeViewModel(
                     .distinctUntilChanged()
                     .map { list ->
                         if (list.isNotEmpty()) versesCache[key] = list
+                        // Never emit empty if we have cached data - kills "No verses" flash
                         if (list.isEmpty() && cached != null) cached else list
                     }
                     .onStart { if (cached != null) emit(cached) }
@@ -135,11 +139,12 @@ class HomeViewModel(
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     init {
-        // FIX: Restore FIRST, then start all book/chapter dependent collectors.
-        // This stops Genesis 1 -> Exodus 3 double-load.
+        // FIX 1: Restore FIRST, before any book/chapter collector starts.
+        // This stops the Genesis 1 -> Exodus 3 double-load flash.
         viewModelScope.launch {
             restoreSavedReading()
 
+            // Now that we know the real book/chapter, start collectors
             launch { books.collect { list -> _uiState.update { it.copy(books = list) } } }
             launch { verses.collect { list -> _uiState.update { it.copy(verses = list) } } }
             launch { highlights.collect { map -> _uiState.update { it.copy(highlights = map) } } }
@@ -173,7 +178,7 @@ class HomeViewModel(
             launch { currentNoteText.collect { t -> _uiState.update { it.copy(currentNoteText = t) } } }
             launch { isReadingRestored.collect { b -> _uiState.update { it.copy(isReadingRestored = b) } } }
 
-            // Summary for restored chapter - only once, after restore
+            // FIX 2: Summary collector AFTER restore - no Genesis 1 load
             launch {
                 combine(currentBookId, selectedChapter) { bookId, chapter -> bookId to chapter }
                     .distinctUntilChanged()
@@ -182,16 +187,18 @@ class HomeViewModel(
                     }
             }
 
-            // Commentary only when on Open EW tab, only after restore
+            // FIX 3: Commentary only when user is actually on Open EW tab, AFTER restore
             launch {
                 selectedTab.collectLatest { tab ->
                     if (tab == "Open EW") loadCommentary(currentBookId.value, selectedChapter.value)
                 }
             }
 
+            // Load summary for restored chapter immediately
             loadSummary(selectedBookId.value, selectedChapter.value)
         }
 
+        // Prefs - independent of book/chapter, can start immediately
         viewModelScope.launch {
             runCatching {
                 prefs.isDarkMode.collect { d ->
@@ -342,6 +349,7 @@ class HomeViewModel(
         }
     }
 
+    // FIX: Cached summary + in-flight guard = instant, no spinner on revisit, no double Room hit
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
         summaryCache[key]?.let { cached ->
