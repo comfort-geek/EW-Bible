@@ -40,8 +40,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Catch crashes and save them to a file, so we can see them without a computer
+        // 1. Start crash catcher - must be FIRST, before anything can crash
         CrashReporter.init(this)
+        CrashReporter.breadcrumb(this, "MainActivity.onCreate")
 
         // Single instances - not inside Composables
         val database = AppDatabase.getInstance(applicationContext)
