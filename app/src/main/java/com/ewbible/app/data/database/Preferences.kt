@@ -2,7 +2,12 @@ package com.ewbible.app.data.preferences
 
 import android.content.Context
 import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.*
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -63,7 +68,6 @@ class AppPreferences(private val context: Context) {
             prefs[LAST_CHAPTER] = chapter
             prefs[LAST_VERSE] = verse
             prefs[LAST_SCROLL_INDEX] = scrollIndex.coerceAtLeast(0)
-            // FIXED: was 'offset' - didn't exist, wouldn't compile
             prefs[LAST_SCROLL_OFFSET] = scrollOffset.coerceAtLeast(0)
         }
     }
