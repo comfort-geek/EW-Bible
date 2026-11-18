@@ -7,13 +7,15 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [BookEntity::class, VerseEntity::class, SummaryEntity::class, CommentaryEntity::class, NoteEntity::class, HighlightEntity::class],
-    version = 3, exportSchema = false
+    version = 3,
+    exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun bibleDao(): BibleDao
 
     companion object {
-        @Volatile private var INSTANCE: AppDatabase? = null
+        @Volatile
+        private var INSTANCE: AppDatabase? = null
         private const val DB_NAME = "ewbible.db"
 
         fun getInstance(context: Context): AppDatabase {
@@ -24,7 +26,7 @@ abstract class AppDatabase : RoomDatabase() {
                     DB_NAME
                 )
                     .createFromAsset("ewbible.db")
-                    .fallbackToDestructiveMigration(false)
+                    .fallbackToDestructiveMigration()
                     .build()
                     .also { INSTANCE = it }
             }
