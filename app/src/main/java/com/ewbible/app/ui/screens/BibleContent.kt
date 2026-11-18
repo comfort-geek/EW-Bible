@@ -120,23 +120,33 @@ fun BibleContent(
     val bookName = BookCatalog.name(safeBookId)
     val maxChapter = BookCatalog.chapters(safeBookId)
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
-
-    var visibleSummary by remember { mutableStateOf<SummaryEntity?>(null) }
-    var visibleVerses by remember { mutableStateOf<List<VerseEntity>>(emptyList()) }
-    var visibleKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     val currentKey = safeBookId to safeChapter
 
-    if (visibleKey == null) {
-        visibleSummary = summary
-        visibleVerses = versesList
-        visibleKey = currentKey
+    // FIXED: Keep previous chapter visible while new one loads,
+    // but NEVER lock in an empty list as final data.
+    var displayedSummary by remember { mutableStateOf<SummaryEntity?>(null) }
+    var displayedVerses by remember { mutableStateOf<List<VerseEntity>>(emptyList()) }
+    var displayedKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+
+    // Update when:
+    // 1. Chapter changed -> show new chapter
+    // 2. Same chapter, but verses arrived late (was empty, now has data) -> update
+    // 3. Same chapter, but summary arrived late -> update
+    val shouldUpdate = displayedKey != currentKey ||
+        (displayedKey == currentKey && displayedVerses.isEmpty() && versesList.isNotEmpty()) ||
+        (displayedKey == currentKey && displayedSummary == null && summary != null)
+
+    if (shouldUpdate) {
+        displayedSummary = summary
+        displayedVerses = versesList
+        displayedKey = currentKey
     }
 
-    if (!summaryLoading && visibleKey != currentKey) {
-        visibleSummary = summary
-        visibleVerses = versesList
-        visibleKey = currentKey
-    }
+    // If we are on a brand new chapter and have no cached data yet,
+    // show the incoming data directly so first open is instant.
+    // If we are still on same chapter, displayedVerses already has the fix above.
+    val finalSummary = if (displayedKey == currentKey) displayedSummary else summary
+    val finalVerses = if (displayedKey == currentKey) displayedVerses else versesList
 
     Box(
         modifier = Modifier
@@ -151,8 +161,8 @@ fun BibleContent(
             modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
             contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
         ) {
-            item(key = "summary-${visibleKey?.first}-${visibleKey?.second}") {
-                val s = visibleSummary
+            item(key = "summary-${currentKey.first}-${currentKey.second}") {
+                val s = finalSummary
                 if (s != null) {
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
@@ -173,10 +183,10 @@ fun BibleContent(
                 }
             }
 
-            if (visibleVerses.isEmpty()) {
-                item(key = "empty-${visibleKey?.first}-${visibleKey?.second}") {
+            if (finalVerses.isEmpty()) {
+                item(key = "empty-${currentKey.first}-${currentKey.second}") {
                     Text(
-                        text = "No verses loaded for $bookName $safeChapter.",
+                        text = if (summaryLoading) "Loading..." else "No verses loaded for $bookName $safeChapter.",
                         color = textColor.copy(alpha = 0.6f),
                         fontSize = fontSize.sp,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
@@ -186,7 +196,7 @@ fun BibleContent(
             }
 
             itemsIndexed(
-                visibleVerses,
+                finalVerses,
                 key = { _, verse -> "${verse.bookId}-${verse.chapter}-${verse.verse}" }
             ) { _, verse ->
                 val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
