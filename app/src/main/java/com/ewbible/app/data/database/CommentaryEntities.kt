@@ -2,6 +2,7 @@ package com.ewbible.app.data.database
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 @Entity(tableName = "books")
@@ -23,7 +24,10 @@ data class VerseEntity(
     val text: String
 )
 
-@Entity(tableName = "summaries", primaryKeys = ["book_id", "chapter"])
+@Entity(
+    tableName = "summaries",
+    primaryKeys = ["book_id", "chapter"]
+)
 data class SummaryEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
@@ -32,7 +36,10 @@ data class SummaryEntity(
     val application: String
 )
 
-@Entity(tableName = "commentary", primaryKeys = ["book_id", "chapter"])
+@Entity(
+    tableName = "commentary",
+    primaryKeys = ["book_id", "chapter"]
+)
 data class CommentaryEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
@@ -43,6 +50,7 @@ data class CommentaryEntity(
         if (other !is CommentaryEntity) return false
         return bookId == other.bookId && chapter == other.chapter && htmlCompressed.contentEquals(other.htmlCompressed)
     }
+
     override fun hashCode(): Int {
         var result = bookId
         result = 31 * result + chapter
@@ -51,7 +59,13 @@ data class CommentaryEntity(
     }
 }
 
-@Entity(tableName = "notes")
+@Entity(
+    tableName = "notes",
+    indices = [
+        Index(value = ["book_id", "chapter", "verse"]),
+        Index(value = ["timestamp"])
+    ]
+)
 data class NoteEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     @ColumnInfo(name = "book_id") val bookId: Int,
@@ -61,7 +75,10 @@ data class NoteEntity(
     val timestamp: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "highlights", primaryKeys = ["book_id", "chapter", "verse"])
+@Entity(
+    tableName = "highlights",
+    primaryKeys = ["book_id", "chapter", "verse"]
+)
 data class HighlightEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
