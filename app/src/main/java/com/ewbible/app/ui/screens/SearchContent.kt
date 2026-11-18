@@ -17,9 +17,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -47,47 +48,6 @@ fun OpenEWContent(
     onPreviousChapter: () -> Unit = {},
     onRetry: () -> Unit = {},
 ) {
-    val lastLoaded = remember(bookName, chapter) { mutableStateOf("") }
-
-    LaunchedEffect(bookName, chapter) {
-        lastLoaded.value = ""
-    }
-
-    val renderedHtml = remember(commentaryHtml) {
-        runCatching {
-            val t = commentaryHtml.trim()
-            if (t.contains("<body", ignoreCase = true)) {
-                t.substringAfter("<body", "").substringAfter(">", "").substringBeforeLast("</body>", t)
-            } else t
-        }.getOrDefault("")
-    }
-
-    // NO SUMMARY - removed completely. No summaryText, no strip regex.
-    val linkedHtml = remember(renderedHtml, bookName) {
-        linkifyVerses(renderedHtml, bookName)
-    }
-
-    val textColorCss = "#%06X".format(0xFFFFFF and textColor.toArgb())
-    // secondaryText removed - use dimmed textColor instead
-    val secondaryColorCss = "#%06X".format(0xFFFFFF and textColor.copy(alpha = 0.6f).toArgb())
-
-    val html = remember(linkedHtml, textColorCss, secondaryColorCss, fontSize) {
-        """
-        <!doctype html>
-        <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body { color: $textColorCss; background: transparent; font-family: sans-serif; font-size: ${fontSize}px; line-height: 1.6; margin: 8px; padding-bottom: 80px; }
-            p { margin: 0 0 1em; }
-            h1, h2, h3, h4 { color: $textColorCss; line-height: 1.3; }
-            a { color: #C9A227; font-weight: bold; text-decoration: underline; }
-            a.verse-link { color: #C9A227; font-weight: bold; }
-            .empty { color: $secondaryColorCss; }
-            blockquote { border-left: 3px solid #C9A227; margin-left: 0; padding-left: 12px; color: $secondaryColorCss; }
-        </style>
-        </head><body>${if (linkedHtml.isBlank()) "<p class=\"empty\">No commentary available for this chapter.</p>" else linkedHtml}</body></html>
-        """.trimIndent()
-    }
-
     if (isLoading) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -97,6 +57,17 @@ fun OpenEWContent(
             }
         }
         return
+    }
+
+    val renderedHtml = remember(commentaryHtml) {
+        val t = commentaryHtml.trim()
+        if (t.contains("<body", ignoreCase = true)) {
+            t.substringAfter("<body", "").substringAfter(">", "").substringBeforeLast("</body>", t)
+        } else t
+    }
+
+    val linkedHtml = remember(renderedHtml, bookName) {
+        linkifyVerses(renderedHtml, bookName)
     }
 
     if (hasError && linkedHtml.isBlank()) {
@@ -118,19 +89,44 @@ fun OpenEWContent(
         return
     }
 
+    val textColorCss = remember(textColor) { "#%06X".format(0xFFFFFF and textColor.toArgb()) }
+    val secondaryColorCss = remember(textColor) { "#%06X".format(0xFFFFFF and textColor.copy(alpha = 0.6f).toArgb()) }
+
+    val html = remember(linkedHtml, textColorCss, secondaryColorCss, fontSize) {
+        """
+        <!doctype html>
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            * { box-sizing: border-box; }
+            body { color: $textColorCss; background: transparent; font-family: sans-serif; font-size: ${fontSize}px; line-height: 1.6; margin: 8px; padding-bottom: 80px; word-wrap: break-word; }
+            p { margin: 0 0 1em; }
+            h1, h2, h3, h4 { color: $textColorCss; line-height: 1.3; }
+            a { color: #C9A227; font-weight: bold; text-decoration: underline; }
+            a.verse-link { color: #C9A227; font-weight: bold; }
+            .empty { color: $secondaryColorCss; }
+            blockquote { border-left: 3px solid #C9A227; margin-left: 0; padding-left: 12px; color: $secondaryColorCss; }
+            img { max-width: 100%; height: auto; }
+        </style>
+        </head><body>${if (linkedHtml.isBlank()) "<p class=\"empty\">No commentary available for this chapter.</p>" else linkedHtml}</body></html>
+        """.trimIndent()
+    }
+
+    var lastLoadedHtml by remember(bookName, chapter) { mutableStateOf("") }
+
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
             WebView(ctx).apply {
-                setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                setLayerType(View.LAYER_TYPE_SOFTWARE, null)
                 overScrollMode = View.OVER_SCROLL_NEVER
-                isNestedScrollingEnabled = true
                 settings.javaScriptEnabled = false
                 settings.domStorageEnabled = false
                 settings.loadWithOverviewMode = true
                 settings.useWideViewPort = true
                 settings.builtInZoomControls = false
+                settings.displayZoomControls = false
                 settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+                settings.setSupportZoom(false)
                 setBackgroundColor(AndroidColor.TRANSPARENT)
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -149,26 +145,35 @@ fun OpenEWContent(
                             }
                             return true
                         }
-                        return false
+                        return true
                     }
-                    override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {}
                 }
-                // SWIPE ONLY HERE - for Open EW. HomeScreen does NOT swipe Open EW, so no fight.
                 var downX = 0f
                 var downY = 0f
+                var isHorizontalSwipe = false
                 setOnTouchListener { _, event ->
                     when (event.action) {
                         MotionEvent.ACTION_DOWN -> {
                             downX = event.x
                             downY = event.y
+                            isHorizontalSwipe = false
                         }
-                        MotionEvent.ACTION_UP -> {
+                        MotionEvent.ACTION_MOVE -> {
+                            val dx = event.x - downX
+                            val dy = event.y - downY
+                            if (!isHorizontalSwipe && abs(dx) > 120 && abs(dx) > abs(dy) * 2f) {
+                                isHorizontalSwipe = true
+                            }
+                            if (isHorizontalSwipe) return@setOnTouchListener true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                             val dx = event.x - downX
                             val dy = event.y - downY
                             if (abs(dx) > 150 && abs(dx) > abs(dy) * 1.5f) {
                                 if (dx < 0) onNextChapter() else onPreviousChapter()
                                 return@setOnTouchListener true
                             }
+                            isHorizontalSwipe = false
                         }
                     }
                     false
@@ -176,20 +181,15 @@ fun OpenEWContent(
             }
         },
         update = { wv ->
-            if (lastLoaded.value != html) {
-                lastLoaded.value = html
-                runCatching {
-                    wv.post {
-                        runCatching {
-                            wv.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
-                        }
-                    }
-                }
+            if (lastLoadedHtml != html) {
+                lastLoadedHtml = html
+                wv.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
             }
         },
         onRelease = { wv ->
             runCatching {
                 wv.stopLoading()
+                wv.loadDataWithBaseURL(null, "", "text/html", "UTF-8", null)
                 wv.removeAllViews()
                 wv.destroy()
             }
@@ -197,22 +197,29 @@ fun OpenEWContent(
     )
 }
 
+private val verseFullPatternCache = mutableMapOf<String, Regex>()
+
 private fun linkifyVerses(html: String, currentBook: String): String {
     if (html.isBlank()) return html
+    var result = html
     val allNames = BookCatalog.allDisplayNames()
         .distinct()
         .sortedByDescending { it.length }
-        .joinToString("|") { Regex.escape(it) }
-    var result = html
-    val fullPattern = Regex("\\b($allNames)\\s+(\\d+):(\\d+)\\b(?![^<]*</a>)")
-    result = fullPattern.replace(result) { m ->
-        val book = BookCatalog.canonicalName(m.groupValues[1])
-        val ch = m.groupValues[2]
-        val vs = m.groupValues[3]
-        """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
+    if (allNames.isNotEmpty()) {
+        val key = allNames.joinToString("|")
+        val fullPattern = verseFullPatternCache.getOrPut(key) {
+            val escaped = allNames.joinToString("|") { Regex.escape(it) }
+            Regex("\\b($escaped)\\s+(\\d+):(\\d+)\\b")
+        }
+        result = fullPattern.replace(result) { m ->
+            val book = BookCatalog.canonicalName(m.groupValues[1])
+            val ch = m.groupValues[2]
+            val vs = m.groupValues[3]
+            """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
+        }
     }
     if (currentBook.isNotBlank()) {
-        val barePattern = Regex("(?<![\\w:])\\b(\\d+):(\\d+)\\b(?![^<]*</a>)")
+        val barePattern = Regex("(?<![\\w:])\\b(\\d+):(\\d+)\\b")
         result = barePattern.replace(result) { m ->
             val ch = m.groupValues[1]
             val vs = m.groupValues[2]
