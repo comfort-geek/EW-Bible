@@ -211,9 +211,16 @@ fun HomeScreen(viewModel: HomeViewModel) {
         }
     }
 
+    // FIXED LINKED-VERSE SHEET - fixed height, scrollable, not full screen
     if (showLinkedVerseSheet) {
         ModalBottomSheet(onDismissRequest = { showLinkedVerseSheet = false }, containerColor = background, contentColor = textColor) {
-            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).padding(bottom = 24.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(420.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(bottom = 24.dp)
+            ) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = state.linkedVerseRef.ifBlank {
@@ -224,7 +231,13 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     )
                     IconButton(onClick = { showLinkedVerseSheet = false }) { Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor) }
                 }
-                Box(modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = 8.dp)
+                ) {
                     Text(text = state.linkedVerseText.ifBlank { "Loading..." }, color = textColor, fontSize = state.fontSize.sp, lineHeight = (state.fontSize + 8).sp)
                 }
                 Button(
