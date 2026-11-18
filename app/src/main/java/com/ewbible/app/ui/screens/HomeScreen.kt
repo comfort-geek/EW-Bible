@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,7 +29,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -87,7 +85,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var linkedVerseChapter by remember { mutableStateOf(1) }
     var linkedVerseNum by remember { mutableStateOf(1) }
     var linkedVerseEnd by remember { mutableStateOf(1) }
-    // NEW: once app has loaded once, never show full-screen Loading again
     var initialLoadDone by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
@@ -98,7 +95,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val currentBookId = state.currentBookId
     val currentBookName = BookCatalog.name(currentBookId)
 
-    // NEW: remember that first load finished, so tab switches don't re-trigger it
     LaunchedEffect(state.isReadingRestored) {
         if (state.isReadingRestored) initialLoadDone = true
     }
@@ -130,18 +126,10 @@ fun HomeScreen(viewModel: HomeViewModel) {
     }
     fun openBook(bookName: String, chapter: Int) { openBook(BookCatalog.id(bookName), chapter) }
 
-    // FIXED: only show on very first app open, never on tab switch
+    // FIXED: no spinner, just Loading...
     if (!state.isReadingRestored && !initialLoadDone) {
         Box(modifier = Modifier.fillMaxSize().background(background), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                CircularProgressIndicator(
-                    color = gold,
-                    modifier = Modifier.size(40.dp),
-                    strokeWidth = 4.dp
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text("Loading...", color = textColor)
-            }
+            Text("Loading...", color = textColor, fontSize = 18.sp)
         }
         return
     }
@@ -224,7 +212,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         }
     }
 
-    // FIXED LINKED-VERSE SHEET - fixed height, scrollable, not full screen
     if (showLinkedVerseSheet) {
         ModalBottomSheet(onDismissRequest = { showLinkedVerseSheet = false }, containerColor = background, contentColor = textColor) {
             Column(
