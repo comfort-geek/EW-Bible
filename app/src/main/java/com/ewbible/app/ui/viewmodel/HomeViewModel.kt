@@ -283,27 +283,25 @@ class HomeViewModel(
         }
     }
 
-    // --- COMMENTARY: NEVER crash, NEVER show error on first launch ---
+    // --- COMMENTARY: FIXED - cancel old job, no stuck guard ---
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
-        // 1. Cache hit - instant, no DB, no decompress
+        // 1. Cache hit - kill any old job first, then show instantly
         commentaryCache[key]?.let {
+            commentaryJob?.cancel()
             commentaryError.value = false
             commentary.value = it
             return
         }
-        // 2. Already loading same chapter? Don't start second job
-        if (commentaryJob?.isActive == true && commentary.value.isNotBlank()) return
+        // 2. FIXED: Always cancel old job, no early return that could stick
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
-            // Don't clear old commentary while loading - prevents flicker / empty error
             try {
                 val html = withContext(Dispatchers.IO) {
                     val compressed = runCatching { dao.getCommentaryCompressed(bookId, chapter) }.getOrNull()
                     if (compressed == null || compressed.isEmpty()) null else decompressCommentary(compressed)
                 }
                 if (html.isNullOrBlank()) {
-                    // NO ERROR - show friendly placeholder, not "Failed to load"
                     val fallback = "<html><body><p><i>Commentary for ${BookCatalog.name(bookId)} $chapter is not available yet.</i></p></body></html>"
                     commentaryCache[key] = fallback
                     commentary.value = fallback
@@ -316,7 +314,6 @@ class HomeViewModel(
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) {
                 Log.e("HomeViewModel", "loadCommentary failed book=$bookId ch=$chapter", e)
-                // Still NO crash, NO error screen - show placeholder
                 val fallback = "<html><body><p><i>Commentary for ${BookCatalog.name(bookId)} $chapter is not available yet.</i></p></body></html>"
                 commentary.value = fallback
                 commentaryError.value = false
@@ -328,7 +325,6 @@ class HomeViewModel(
     // --- FAST ZLIB DECOMPRESS: check header, 1 pass, no guessing ---
     private fun decompressCommentary(bytes: ByteArray): String {
         if (bytes.isEmpty()) return ""
-        // Already plain HTML
         if (bytes.size > 2 && bytes[0] == '<'.code.toByte()) return String(bytes, Charsets.UTF_8)
         val isGzip = bytes.size >= 2 && bytes[0] == 0x1F.toByte() && bytes[1] == 0x8B.toByte()
         val isZlib = bytes.size >= 2 && bytes[0] == 0x78.toByte()
