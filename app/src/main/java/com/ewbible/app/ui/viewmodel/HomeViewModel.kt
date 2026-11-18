@@ -8,8 +8,6 @@ import androidx.lifecycle.viewModelScope
 import com.ewbible.app.data.database.*
 import com.ewbible.app.data.preferences.AppPreferences
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -54,7 +52,6 @@ data class HomeUiState(
     val isReadingRestored: Boolean = false
 )
 
-@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class HomeViewModel(
     private val dao: BibleDao,
     private val prefs: AppPreferences
@@ -82,22 +79,14 @@ class HomeViewModel(
     private val linkedVerseRef = MutableStateFlow("")
     private var commentaryJob: Job? = null
 
-    // SPEED FIX: Cache decompressed commentary. Key = "51-2"
-    // LinkedHashMap with LRU - keeps last 20 chapters, auto-evicts old ones
-    private val commentaryCache = object : LinkedHashMap<String, String>(20, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
-            return size > 20
-        }
-    }
-
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
     val currentBookId: StateFlow<Int> = selectedBookId.asStateFlow()
     private val selectedBookName: Flow<String> = selectedBookId.map { BookCatalog.name(it) }
 
-    val verses: Flow<List<VerseEntity>> = currentBookId.flatMapLatest { bookId ->
+    val verses: Flow<List<VerseEntity>> = selectedBookId.flatMapLatest { bookId ->
         selectedChapter.flatMapLatest { chapter -> dao.getVerses(bookId, chapter) }
     }
-    val highlights: Flow<Map<Int, Color>> = currentBookId.flatMapLatest { bookId ->
+    val highlights: Flow<Map<Int, Color>> = selectedBookId.flatMapLatest { bookId ->
         selectedChapter.flatMapLatest { chapter ->
             dao.getHighlights(bookId, chapter).map { list ->
                 list.associate { it.verse to parseHighlightColor(it.color) }
@@ -106,48 +95,74 @@ class HomeViewModel(
     }
     val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
 
-    private data class ReadingState(val books: List<BookEntity>, val verses: List<VerseEntity>, val highlights: Map<Int, Color>, val notes: List<NoteEntity>, val currentBookId: Int)
-    private data class NavState(val selectedBook: String, val selectedChapter: Int, val selectedVerse: Int?, val selectedTab: String, val commentaryHtml: String, val showNoteDialog: Boolean, val currentNoteText: String, val linkedVerseText: String, val linkedVerseRef: String)
-    private data class ContentState(val commentaryError: Boolean, val summary: SummaryEntity?, val chapterCounts: Map<Int, Int>, val searchResults: List<VerseSearchResult>, val searchFilter: String, val dailyVerse: String, val scrollRestoreKey: Int)
-    private data class SettingsState(val darkMode: Boolean?, val fontSize: Float, val userName: String, val userEmail: String)
-
-    @Suppress("UNCHECKED_CAST")
-    private val readingState = combine(books, verses, highlights, notes, currentBookId) { args ->
-        ReadingState(args[0] as List<BookEntity>, args[1] as List<VerseEntity>, args[2] as Map<Int, Color>, args[3] as List<NoteEntity>, args[4] as Int)
-    }
-    @Suppress("UNCHECKED_CAST")
-    private val navState = combine(selectedBookName, selectedChapter, selectedVerse, selectedTab, commentary, showNoteDialog, currentNoteText, linkedVerseText, linkedVerseRef) { args ->
-        NavState(args[0] as String, args[1] as Int, args[2] as Int?, args[3] as String, args[4] as String, args[5] as Boolean, args[6] as String, args[7] as String, args[8] as String)
-    }
-    @Suppress("UNCHECKED_CAST")
-    private val contentState = combine(commentaryError, summaryState, chapterCounts, searchResults, searchFilter, dailyVerse, scrollRestoreKey) { args ->
-        ContentState(args[0] as Boolean, args[1] as SummaryEntity?, args[2] as Map<Int, Int>, args[3] as List<VerseSearchResult>, args[4] as String, args[5] as String, args[6] as Int)
-    }
-    @Suppress("UNCHECKED_CAST")
-    private val settingsState = combine(prefs.isDarkMode, prefs.fontSize, prefs.userName, prefs.userEmail) { args ->
-        SettingsState(args[0] as Boolean?, args[1] as Float, args[2] as String, args[3] as String)
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    val uiState: StateFlow<HomeUiState> = combine(readingState, navState, contentState, settingsState, isReadingRestored) { args ->
-        val reading = args[0] as ReadingState
-        val nav = args[1] as NavState
-        val content = args[2] as ContentState
-        val settings = args[3] as SettingsState
-        val restored = args[4] as Boolean
+    val uiState: StateFlow<HomeUiState> = combine(
+        books,
+        verses,
+        highlights,
+        notes,
+        currentBookId,
+        selectedBookName,
+        selectedChapter,
+        selectedVerse,
+        selectedTab,
+        commentary,
+        showNoteDialog,
+        currentNoteText,
+        linkedVerseText,
+        linkedVerseRef,
+        commentaryError,
+        summaryState,
+        chapterCounts,
+        searchResults,
+        searchFilter,
+        dailyVerse,
+        scrollRestoreKey,
+        prefs.isDarkMode,
+        prefs.fontSize,
+        prefs.userName,
+        prefs.userEmail,
+        isReadingRestored
+    ) { args ->
+        @Suppress("UNCHECKED_CAST")
+        val booksList = args[0] as List<BookEntity>
+        val versesList = args[1] as List<VerseEntity>
+        val highlightsMap = args[2] as Map<Int, Color>
+        val notesList = args[3] as List<NoteEntity>
+        val bookId = args[4] as Int
+        val bookName = args[5] as String
+        val chapter = args[6] as Int
+        val verse = args[7] as Int?
+        val tab = args[8] as String
+        val commentaryHtml = args[9] as String
+        val showNote = args[10] as Boolean
+        val noteText = args[11] as String
+        val linkedText = args[12] as String
+        val linkedRef = args[13] as String
+        val commentaryErr = args[14] as Boolean
+        val summary = args[15] as SummaryEntity?
+        val counts = args[16] as Map<Int, Int>
+        val searchRes = args[17] as List<VerseSearchResult>
+        val filter = args[18] as String
+        val daily = args[19] as String
+        val scrollKey = args[20] as Int
+        val dark = args[21] as Boolean?
+        val font = args[22] as Float
+        val user = args[23] as String
+        val email = args[24] as String
+        val restored = args[25] as Boolean
         HomeUiState(
-            books = reading.books, verses = reading.verses, highlights = reading.highlights, notes = reading.notes,
-            currentBookId = reading.currentBookId, currentBook = nav.selectedBook, selectedBook = nav.selectedBook,
-            selectedChapter = nav.selectedChapter, selectedVerse = nav.selectedVerse, selectedTab = nav.selectedTab,
-            commentaryHtml = nav.commentaryHtml, commentaryError = content.commentaryError, summary = content.summary,
-            summaryText = content.summary?.summary ?: "", summaryWhatHappened = content.summary?.whatHappened ?: "",
-            summaryApplication = content.summary?.application ?: "", summaryItalicText = content.summary?.summary ?: "",
-            linkedVerseText = nav.linkedVerseText, linkedVerseRef = nav.linkedVerseRef,
-            chapterCounts = content.chapterCounts, searchResults = content.searchResults, searchFilter = content.searchFilter,
-            dailyVerse = content.dailyVerse, darkMode = settings.darkMode, fontSize = settings.fontSize,
-            userName = settings.userName, userEmail = settings.userEmail,
-            isLoggedIn = settings.userName != "Guest" && settings.userEmail.isNotBlank(),
-            scrollRestoreKey = content.scrollRestoreKey, showNoteDialog = nav.showNoteDialog, currentNoteText = nav.currentNoteText,
+            books = booksList, verses = versesList, highlights = highlightsMap, notes = notesList,
+            currentBookId = bookId, currentBook = bookName, selectedBook = bookName,
+            selectedChapter = chapter, selectedVerse = verse, selectedTab = tab,
+            commentaryHtml = commentaryHtml, commentaryError = commentaryErr, summary = summary,
+            summaryText = summary?.summary ?: "", summaryWhatHappened = summary?.whatHappened ?: "",
+            summaryApplication = summary?.application ?: "", summaryItalicText = summary?.summary ?: "",
+            linkedVerseText = linkedText, linkedVerseRef = linkedRef,
+            chapterCounts = counts, searchResults = searchRes, searchFilter = filter,
+            dailyVerse = daily, darkMode = dark, fontSize = font,
+            userName = user, userEmail = email,
+            isLoggedIn = user != "Guest" && email.isNotBlank(),
+            scrollRestoreKey = scrollKey, showNoteDialog = showNote, currentNoteText = noteText,
             isReadingRestored = restored
         )
     }.stateIn(scope = viewModelScope, started = SharingStarted.WhileSubscribed(5_000), initialValue = HomeUiState())
@@ -298,57 +313,28 @@ class HomeViewModel(
         }
     }
 
-    // SPEED FIXED VERSION
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
-        val key = "$bookId-$chapter"
-        // 1. Cache hit = instant, no DB, no decompress
-        commentaryCache[key]?.let {
-            commentaryError.value = false
-            commentary.value = it
-            preloadNextCommentary(bookId, chapter)
-            return
-        }
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
             commentaryError.value = false
-            // Don't blank the screen while loading - keep old html until new one arrives
             try {
                 val html = withContext(Dispatchers.IO) {
                     val compressed = dao.getCommentaryCompressed(bookId, chapter)
                     if (compressed == null) null else decompressCommentary(compressed)
                 }
                 if (html.isNullOrBlank()) { commentary.value = ""; commentaryError.value = true }
-                else {
-                    commentaryCache[key] = html
-                    commentary.value = html
-                    commentaryError.value = false
-                    preloadNextCommentary(bookId, chapter)
-                }
+                else { commentary.value = html; commentaryError.value = false }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { Log.e("HomeViewModel", "loadCommentary failed book=$bookId ch=$chapter", e); commentaryError.value = true; commentary.value = "" }
+            catch (e: Exception) {
+                Log.e("HomeViewModel", "loadCommentary failed book=$bookId ch=$chapter", e)
+                commentaryError.value = true
+                commentary.value = ""
+            }
         }
     }
     fun loadCommentary() { loadCommentary(currentBookId.value, selectedChapter.value) }
 
-    // Preload next chapter in background so swipe is instant
-    private fun preloadNextCommentary(bookId: Int, chapter: Int) {
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                val max = BookCatalog.chapters(bookId)
-                val (nextBook, nextChapter) = if (chapter < max) bookId to chapter + 1
-                    else if (bookId < 66) (bookId + 1) to 1 else return@launch
-                val nextKey = "$nextBook-$nextChapter"
-                if (commentaryCache.containsKey(nextKey)) return@launch
-                val compressed = dao.getCommentaryCompressed(nextBook, nextChapter) ?: return@launch
-                val html = decompressCommentary(compressed)
-                if (html.isNotBlank()) commentaryCache[nextKey] = html
-            }
-        }
-    }
-
-    // SPEED FIX: Try ZLIB first (your DB is zlib), then GZIP, then raw deflate
     private fun decompressCommentary(bytes: ByteArray): String {
-        // 1. ZLIB - this is what your DB actually uses, try first
         runCatching {
             val inflater = Inflater()
             inflater.setInput(bytes)
@@ -363,12 +349,10 @@ class HomeViewModel(
             out.toString(Charsets.UTF_8.name())
         }.onSuccess { if (it.isNotBlank()) return it }
 
-        // 2. GZIP - for old DBs
         runCatching {
             GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader(Charsets.UTF_8).use { it.readText() }
         }.onSuccess { if (it.isNotBlank()) return it }
 
-        // 3. Raw deflate
         runCatching {
             val inflater = Inflater(true)
             inflater.setInput(bytes)
