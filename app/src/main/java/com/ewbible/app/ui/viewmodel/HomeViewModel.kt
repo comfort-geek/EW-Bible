@@ -90,9 +90,8 @@ class HomeViewModel(
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 30
     }
     private val summaryCache = mutableMapOf<String, SummaryEntity?>()
-    private val versesCache = mutableMapOf<String, List<VerseEntity>>()
-    // FIX: Prevent double Room hit when loadSummary called twice quickly for same chapter
     private val summaryLoadingKeys = mutableSetOf<String>()
+    private val versesCache = mutableMapOf<String, List<VerseEntity>>()
 
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
     val currentBookId: StateFlow<Int> = selectedBookId.asStateFlow()
@@ -139,7 +138,7 @@ class HomeViewModel(
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     init {
-        // FIX 1: Restore FIRST, before any book/chapter collector starts.
+        // FIX: Restore FIRST, before any book/chapter collector starts.
         // This stops the Genesis 1 -> Exodus 3 double-load flash.
         viewModelScope.launch {
             restoreSavedReading()
@@ -178,7 +177,7 @@ class HomeViewModel(
             launch { currentNoteText.collect { t -> _uiState.update { it.copy(currentNoteText = t) } } }
             launch { isReadingRestored.collect { b -> _uiState.update { it.copy(isReadingRestored = b) } } }
 
-            // FIX 2: Summary collector AFTER restore - no Genesis 1 load
+            // FIX: Summary + Commentary collectors now INSIDE restore block - no Genesis 1 double-load
             launch {
                 combine(currentBookId, selectedChapter) { bookId, chapter -> bookId to chapter }
                     .distinctUntilChanged()
@@ -186,8 +185,6 @@ class HomeViewModel(
                         loadSummary(bookId, chapter)
                     }
             }
-
-            // FIX 3: Commentary only when user is actually on Open EW tab, AFTER restore
             launch {
                 selectedTab.collectLatest { tab ->
                     if (tab == "Open EW") loadCommentary(currentBookId.value, selectedChapter.value)
@@ -200,18 +197,10 @@ class HomeViewModel(
 
         // Prefs - independent of book/chapter, can start immediately
         viewModelScope.launch {
-            runCatching {
-                prefs.isDarkMode.collect { d ->
-                    _uiState.update { it.copy(darkMode = d) }
-                }
-            }
+            runCatching { prefs.isDarkMode.collect { d -> _uiState.update { it.copy(darkMode = d) } } }
         }
         viewModelScope.launch {
-            runCatching {
-                prefs.fontSize.collect { f ->
-                    _uiState.update { it.copy(fontSize = f) }
-                }
-            }
+            runCatching { prefs.fontSize.collect { f -> _uiState.update { it.copy(fontSize = f) } } }
         }
         viewModelScope.launch {
             runCatching {
@@ -349,7 +338,7 @@ class HomeViewModel(
         }
     }
 
-    // FIX: Cached summary + in-flight guard = instant, no spinner on revisit, no double Room hit
+    // FIX: Cached summary + in-flight guard = instant, no double Room hit
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
         summaryCache[key]?.let { cached ->
