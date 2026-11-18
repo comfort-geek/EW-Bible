@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.ewbible.app.data.database.*
 import com.ewbible.app.data.preferences.AppPreferences
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -52,6 +53,7 @@ data class HomeUiState(
     val isReadingRestored: Boolean = false
 )
 
+@OptIn(FlowPreview::class)
 class HomeViewModel(
     private val dao: BibleDao,
     private val prefs: AppPreferences
@@ -95,77 +97,107 @@ class HomeViewModel(
     }
     val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
 
+    // Split combine into 3 groups because combine() max is 20 flows
+    private val readingFlow = combine(
+        books, verses, highlights, notes,
+        currentBookId, selectedBookName, selectedChapter, selectedVerse, selectedTab
+    ) { booksList, versesList, highlightsMap, notesList, bookId, bookName, chapter, verse, tab ->
+        // Use Triple / data holder via list to keep types safe - re-packed below
+        ReadingPart(booksList, versesList, highlightsMap, notesList, bookId, bookName, chapter, verse, tab)
+    }
+
+    private val contentFlow = combine(
+        commentary, showNoteDialog, currentNoteText,
+        linkedVerseText, linkedVerseRef, commentaryError,
+        summaryState, chapterCounts, searchResults, searchFilter,
+        dailyVerse, scrollRestoreKey
+    ) { commentaryHtml, showNote, noteText, linkedText, linkedRef, commentaryErr, summary, counts, searchRes, filter, daily, scrollKey ->
+        ContentPart(commentaryHtml, showNote, noteText, linkedText, linkedRef, commentaryErr, summary, counts, searchRes, filter, daily, scrollKey)
+    }
+
+    private val prefsFlow = combine(
+        prefs.isDarkMode, prefs.fontSize, prefs.userName, prefs.userEmail, isReadingRestored
+    ) { dark, font, user, email, restored ->
+        PrefsPart(dark, font, user, email, restored)
+    }
+
     val uiState: StateFlow<HomeUiState> = combine(
-        books,
-        verses,
-        highlights,
-        notes,
-        currentBookId,
-        selectedBookName,
-        selectedChapter,
-        selectedVerse,
-        selectedTab,
-        commentary,
-        showNoteDialog,
-        currentNoteText,
-        linkedVerseText,
-        linkedVerseRef,
-        commentaryError,
-        summaryState,
-        chapterCounts,
-        searchResults,
-        searchFilter,
-        dailyVerse,
-        scrollRestoreKey,
-        prefs.isDarkMode,
-        prefs.fontSize,
-        prefs.userName,
-        prefs.userEmail,
-        isReadingRestored
-    ) { args ->
-        @Suppress("UNCHECKED_CAST")
-        val booksList = args[0] as List<BookEntity>
-        val versesList = args[1] as List<VerseEntity>
-        val highlightsMap = args[2] as Map<Int, Color>
-        val notesList = args[3] as List<NoteEntity>
-        val bookId = args[4] as Int
-        val bookName = args[5] as String
-        val chapter = args[6] as Int
-        val verse = args[7] as Int?
-        val tab = args[8] as String
-        val commentaryHtml = args[9] as String
-        val showNote = args[10] as Boolean
-        val noteText = args[11] as String
-        val linkedText = args[12] as String
-        val linkedRef = args[13] as String
-        val commentaryErr = args[14] as Boolean
-        val summary = args[15] as SummaryEntity?
-        val counts = args[16] as Map<Int, Int>
-        val searchRes = args[17] as List<VerseSearchResult>
-        val filter = args[18] as String
-        val daily = args[19] as String
-        val scrollKey = args[20] as Int
-        val dark = args[21] as Boolean?
-        val font = args[22] as Float
-        val user = args[23] as String
-        val email = args[24] as String
-        val restored = args[25] as Boolean
+        readingFlow, contentFlow, prefsFlow
+    ) { reading, content, pref ->
         HomeUiState(
-            books = booksList, verses = versesList, highlights = highlightsMap, notes = notesList,
-            currentBookId = bookId, currentBook = bookName, selectedBook = bookName,
-            selectedChapter = chapter, selectedVerse = verse, selectedTab = tab,
-            commentaryHtml = commentaryHtml, commentaryError = commentaryErr, summary = summary,
-            summaryText = summary?.summary ?: "", summaryWhatHappened = summary?.whatHappened ?: "",
-            summaryApplication = summary?.application ?: "", summaryItalicText = summary?.summary ?: "",
-            linkedVerseText = linkedText, linkedVerseRef = linkedRef,
-            chapterCounts = counts, searchResults = searchRes, searchFilter = filter,
-            dailyVerse = daily, darkMode = dark, fontSize = font,
-            userName = user, userEmail = email,
-            isLoggedIn = user != "Guest" && email.isNotBlank(),
-            scrollRestoreKey = scrollKey, showNoteDialog = showNote, currentNoteText = noteText,
-            isReadingRestored = restored
+            books = reading.books,
+            verses = reading.verses,
+            highlights = reading.highlights,
+            notes = reading.notes,
+            currentBookId = reading.bookId,
+            currentBook = reading.bookName,
+            selectedBook = reading.bookName,
+            selectedChapter = reading.chapter,
+            selectedVerse = reading.verse,
+            selectedTab = reading.tab,
+            commentaryHtml = content.commentaryHtml,
+            commentaryError = content.commentaryErr,
+            summary = content.summary,
+            summaryText = content.summary?.summary ?: "",
+            summaryWhatHappened = content.summary?.whatHappened ?: "",
+            summaryApplication = content.summary?.application ?: "",
+            summaryItalicText = content.summary?.summary ?: "",
+            linkedVerseText = content.linkedText,
+            linkedVerseRef = content.linkedRef,
+            chapterCounts = content.counts,
+            searchResults = content.searchRes,
+            searchFilter = content.filter,
+            dailyVerse = content.daily,
+            darkMode = pref.dark,
+            fontSize = pref.font,
+            userName = pref.user,
+            userEmail = pref.email,
+            isLoggedIn = pref.user != "Guest" && pref.email.isNotBlank(),
+            scrollRestoreKey = content.scrollKey,
+            showNoteDialog = content.showNote,
+            currentNoteText = content.noteText,
+            isReadingRestored = pref.restored
         )
-    }.stateIn(scope = viewModelScope, started = SharingStarted.WhileSubscribed(5_000), initialValue = HomeUiState())
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = HomeUiState()
+    )
+
+    private data class ReadingPart(
+        val books: List<BookEntity>,
+        val verses: List<VerseEntity>,
+        val highlights: Map<Int, Color>,
+        val notes: List<NoteEntity>,
+        val bookId: Int,
+        val bookName: String,
+        val chapter: Int,
+        val verse: Int?,
+        val tab: String
+    )
+
+    private data class ContentPart(
+        val commentaryHtml: String,
+        val showNote: Boolean,
+        val noteText: String,
+        val linkedText: String,
+        val linkedRef: String,
+        val commentaryErr: Boolean,
+        val summary: SummaryEntity?,
+        val counts: Map<Int, Int>,
+        val searchRes: List<VerseSearchResult>,
+        val filter: String,
+        val daily: String,
+        val scrollKey: Int
+    )
+
+    private data class PrefsPart(
+        val dark: Boolean?,
+        val font: Float,
+        val user: String,
+        val email: String,
+        val restored: Boolean
+    )
 
     init {
         viewModelScope.launch { restoreSavedReading() }
