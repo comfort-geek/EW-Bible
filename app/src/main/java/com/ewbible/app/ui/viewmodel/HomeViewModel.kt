@@ -85,67 +85,103 @@ class HomeViewModel(
     private var commentaryJob: Job? = null
     private var restoreDone = false
 
+    // FIX: Caches for instant, no-delay navigation
     private val commentaryCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 30
     }
+    private val summaryCache = mutableMapOf<String, SummaryEntity?>()
+    private val versesCache = mutableMapOf<String, List<VerseEntity>>()
 
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
     val currentBookId: StateFlow<Int> = selectedBookId.asStateFlow()
 
-    val verses: Flow<List<VerseEntity>> = selectedBookId.flatMapLatest { bookId ->
-        selectedChapter.flatMapLatest { chapter ->
-            try { dao.getVerses(bookId, chapter) } catch (e: Exception) { flowOf(emptyList()) }
-        }
+    // FIX: combine + distinct + shareIn(replay=1) = survives tab switch, no reload
+    val verses: Flow<List<VerseEntity>> = combine(selectedBookId, selectedChapter) { bookId, chapter ->
+        bookId to chapter
     }
-    val highlights: Flow<Map<Int, Color>> = selectedBookId.flatMapLatest { bookId ->
-        selectedChapter.flatMapLatest { chapter ->
+        .distinctUntilChanged()
+        .flatMapLatest { (bookId, chapter) ->
+            val key = "$bookId-$chapter"
+            // If we already have it cached, emit it instantly while Room confirms
+            val cached = versesCache[key]
+            try {
+                dao.getVerses(bookId, chapter)
+                    .distinctUntilChanged()
+                    .map { list ->
+                        if (list.isNotEmpty()) versesCache[key] = list
+                        // Never emit empty if we have cached data - kills "No verses" flash
+                        if (list.isEmpty() && cached != null) cached else list
+                    }
+                    .onStart { if (cached != null) emit(cached) }
+            } catch (e: Exception) {
+                flowOf(cached ?: emptyList())
+            }
+        }
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
+
+    val highlights: Flow<Map<Int, Color>> = combine(selectedBookId, selectedChapter) { bookId, chapter ->
+        bookId to chapter
+    }
+        .distinctUntilChanged()
+        .flatMapLatest { (bookId, chapter) ->
             try {
                 dao.getHighlights(bookId, chapter).map { list ->
                     list.associate { it.verse to parseHighlightColor(it.color) }
                 }
             } catch (e: Exception) { flowOf(emptyMap()) }
         }
-    }
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
+
     val notes: Flow<List<NoteEntity>> = try { dao.getAllNotes() } catch (e: Exception) { flowOf(emptyList()) }
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     init {
-        viewModelScope.launch { books.collect { list -> _uiState.update { it.copy(books = list) } } }
-        viewModelScope.launch { verses.collect { list -> _uiState.update { it.copy(verses = list) } } }
-        viewModelScope.launch { highlights.collect { map -> _uiState.update { it.copy(highlights = map) } } }
-        viewModelScope.launch { notes.collect { list -> _uiState.update { it.copy(notes = list) } } }
+        // FIX 1: Restore FIRST, before any book/chapter collector starts.
+        // This stops the Genesis 1 -> Exodus 3 double-load flash.
         viewModelScope.launch {
-            selectedBookId.collect { id ->
-                _uiState.update { it.copy(currentBookId = id, currentBook = BookCatalog.name(id), selectedBook = BookCatalog.name(id)) }
-            }
-        }
-        viewModelScope.launch { selectedChapter.collect { c -> _uiState.update { it.copy(selectedChapter = c) } } }
-        viewModelScope.launch { selectedVerse.collect { v -> _uiState.update { it.copy(selectedVerse = v) } } }
-        viewModelScope.launch { selectedTab.collect { t -> _uiState.update { it.copy(selectedTab = t) } } }
-        viewModelScope.launch { commentary.collect { h -> _uiState.update { it.copy(commentaryHtml = h) } } }
-        viewModelScope.launch { commentaryError.collect { e -> _uiState.update { it.copy(commentaryError = e) } } }
-        viewModelScope.launch {
-            summaryState.collect { s ->
-                _uiState.update {
-                    it.copy(summary = s, summaryText = s?.summary ?: "", summaryWhatHappened = s?.whatHappened ?: "", summaryApplication = s?.application ?: "", summaryItalicText = s?.summary ?: "")
+            restoreSavedReading()
+
+            // Now that we know the real book/chapter, start collectors
+            launch { books.collect { list -> _uiState.update { it.copy(books = list) } } }
+            launch { verses.collect { list -> _uiState.update { it.copy(verses = list) } } }
+            launch { highlights.collect { map -> _uiState.update { it.copy(highlights = map) } } }
+            launch { notes.collect { list -> _uiState.update { it.copy(notes = list) } } }
+            launch {
+                selectedBookId.collect { id ->
+                    _uiState.update { it.copy(currentBookId = id, currentBook = BookCatalog.name(id), selectedBook = BookCatalog.name(id)) }
                 }
             }
-        }
-        viewModelScope.launch { summaryLoading.collect { b -> _uiState.update { it.copy(summaryLoading = b) } } }
-        viewModelScope.launch { chapterCounts.collect { m -> _uiState.update { it.copy(chapterCounts = m) } } }
-        viewModelScope.launch { searchResults.collect { r -> _uiState.update { it.copy(searchResults = r) } } }
-        viewModelScope.launch { searchFilter.collect { f -> _uiState.update { it.copy(searchFilter = f) } } }
-        viewModelScope.launch { dailyVerse.collect { d -> _uiState.update { it.copy(dailyVerse = d) } } }
-        viewModelScope.launch { scrollRestoreKey.collect { k -> _uiState.update { it.copy(scrollRestoreKey = k) } } }
-        viewModelScope.launch { linkedVerseText.collect { t -> _uiState.update { it.copy(linkedVerseText = t) } } }
-        viewModelScope.launch { linkedVerseRef.collect { r -> _uiState.update { it.copy(linkedVerseRef = r) } } }
-        viewModelScope.launch { showNoteDialogState.collect { b -> _uiState.update { it.copy(showNoteDialog = b) } } }
-        viewModelScope.launch { currentNoteText.collect { t -> _uiState.update { it.copy(currentNoteText = t) } } }
-        viewModelScope.launch { isReadingRestored.collect { b -> _uiState.update { it.copy(isReadingRestored = b) } } }
+            launch { selectedChapter.collect { c -> _uiState.update { it.copy(selectedChapter = c) } } }
+            launch { selectedVerse.collect { v -> _uiState.update { it.copy(selectedVerse = v) } } }
+            launch { selectedTab.collect { t -> _uiState.update { it.copy(selectedTab = t) } } }
+            launch { commentary.collect { h -> _uiState.update { it.copy(commentaryHtml = h) } } }
+            launch { commentaryError.collect { e -> _uiState.update { it.copy(commentaryError = e) } } }
+            launch {
+                summaryState.collect { s ->
+                    _uiState.update {
+                        it.copy(summary = s, summaryText = s?.summary ?: "", summaryWhatHappened = s?.whatHappened ?: "", summaryApplication = s?.application ?: "", summaryItalicText = s?.summary ?: "")
+                    }
+                }
+            }
+            launch { summaryLoading.collect { b -> _uiState.update { it.copy(summaryLoading = b) } } }
+            launch { chapterCounts.collect { m -> _uiState.update { it.copy(chapterCounts = m) } } }
+            launch { searchResults.collect { r -> _uiState.update { it.copy(searchResults = r) } } }
+            launch { searchFilter.collect { f -> _uiState.update { it.copy(searchFilter = f) } } }
+            launch { dailyVerse.collect { d -> _uiState.update { it.copy(dailyVerse = d) } } }
+            launch { scrollRestoreKey.collect { k -> _uiState.update { it.copy(scrollRestoreKey = k) } } }
+            launch { linkedVerseText.collect { t -> _uiState.update { it.copy(linkedVerseText = t) } } }
+            launch { linkedVerseRef.collect { r -> _uiState.update { it.copy(linkedVerseRef = r) } } }
+            launch { showNoteDialogState.collect { b -> _uiState.update { it.copy(showNoteDialog = b) } } }
+            launch { currentNoteText.collect { t -> _uiState.update { it.copy(currentNoteText = t) } } }
+            launch { isReadingRestored.collect { b -> _uiState.update { it.copy(isReadingRestored = b) } } }
 
-        // FIXED: expanded to multi-line so brace count is obvious - no extra } here
+            // Load summary for restored chapter immediately
+            loadSummary(selectedBookId.value, selectedChapter.value)
+        }
+
+        // Prefs - independent of book/chapter, can start immediately
         viewModelScope.launch {
             runCatching {
                 prefs.isDarkMode.collect { d ->
@@ -175,7 +211,6 @@ class HomeViewModel(
             }
         }
 
-        viewModelScope.launch { restoreSavedReading() }
         viewModelScope.launch {
             runCatching {
                 val fromDb = dao.getChapterCounts().associate { it.bookId to it.chapterCount }
@@ -185,18 +220,24 @@ class HomeViewModel(
                 }
             }.onFailure { Log.e("HomeViewModel", "getChapterCounts failed", it) }
         }
+
+        // FIX: Only load summary on chapter change. Commentary is ONLY on tab change (below).
+        // Old code loaded commentary here too, blocking Bible tab with GZIP decompress.
         viewModelScope.launch {
             combine(currentBookId, selectedChapter) { bookId, chapter -> bookId to chapter }
+                .distinctUntilChanged()
                 .collectLatest { (bookId, chapter) ->
                     loadSummary(bookId, chapter)
-                    if (selectedTab.value == "Open EW") loadCommentary(bookId, chapter)
                 }
         }
+
+        // FIX: Commentary only when user is actually on Open EW tab
         viewModelScope.launch {
             selectedTab.collectLatest { tab ->
                 if (tab == "Open EW") loadCommentary(currentBookId.value, selectedChapter.value)
             }
         }
+
         viewModelScope.launch {
             combine(searchQuery.debounce(300L).distinctUntilChanged(), searchFilter) { q, f -> q to f }
                 .collectLatest { (query, filter) ->
@@ -307,10 +348,22 @@ class HomeViewModel(
             isReadingRestored.value = true
         }
     }
+
+    // FIX: Cached summary = instant, no spinner on revisit
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
+        val key = "$bookId-$chapter"
+        summaryCache[key]?.let { cached ->
+            summaryState.value = cached
+            _summaryLoading.value = false
+            return
+        }
         viewModelScope.launch {
             _summaryLoading.value = true
-            runCatching { summaryState.value = dao.getSummary(bookId, chapter) }
+            runCatching {
+                val s = dao.getSummary(bookId, chapter)
+                summaryCache[key] = s
+                summaryState.value = s
+            }
             _summaryLoading.value = false
         }
     }
