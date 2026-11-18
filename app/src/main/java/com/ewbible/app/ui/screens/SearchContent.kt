@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -18,7 +17,7 @@ import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.database.VerseSearchResult
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SearchContent(
     searchQuery: String,
@@ -50,16 +49,17 @@ fun SearchContent(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        LazyRow(
+        // FIX #1: All 5 visible at once, no sliding - wraps to 2 lines
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(end = 16.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(filters) { filter ->
+            filters.forEach { filter ->
                 FilterChip(
                     selected = searchFilter == filter,
                     onClick = { onFilterChange(filter) },
-                    label = { Text(filter) }
+                    label = { Text(filter, fontSize = 12.sp) }
                 )
             }
         }
