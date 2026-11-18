@@ -1,4 +1,4 @@
-package com.ewbible.app.ui.viewmodel
+Is this correct.. package com.ewbible.app.ui.viewmodel
 
 import android.util.Log
 import androidx.compose.ui.graphics.Color
@@ -271,27 +271,19 @@ class HomeViewModel(
     }
     fun loadSummary() { loadSummary(currentBookId.value, selectedChapter.value) }
 
-    // FIX #2: Range support - Romans 8:1-11 loads verses 1..11, not just 1
-    // Keep old 3-arg call working too (defaults endVerse = verse)
+    // FIX: now loads a RANGE - Romans 8:1-11 loads verses 1..11, not just 1
     fun loadLinkedVerse(bookName: String, chapter: Int, verse: Int, endVerse: Int = verse) {
         viewModelScope.launch {
             val bookId = runCatching { BookCatalog.id(bookName) }.getOrDefault(1)
-            val bookDisplay = BookCatalog.name(bookId)
-            val safeEnd = maxOf(verse, endVerse)
-            linkedVerseRef.value = if (safeEnd > verse) "$bookDisplay $chapter:$verse-$safeEnd"
-                                   else "$bookDisplay $chapter:$verse"
+            val end = maxOf(verse, endVerse)
+            linkedVerseRef.value = if (end > verse) "${BookCatalog.name(bookId)} $chapter:$verse-$end"
+                                   else "${BookCatalog.name(bookId)} $chapter:$verse"
             linkedVerseText.value = "Loading..."
             runCatching {
                 val list = dao.getVerses(bookId, chapter).first()
-                val range = list.filter { it.verse in verse..safeEnd }.sortedBy { it.verse }
-                linkedVerseText.value = if (range.isEmpty()) {
-                    "Verse not found."
-                } else if (range.size == 1) {
-                    range.first().text
-                } else {
-                    // "1. There is therefore...\n\n2. For the law..."
-                    range.joinToString("\n\n") { "${it.verse}. ${it.text}" }
-                }
+                val range = list.filter { it.verse in verse..end }.sortedBy { it.verse }
+                linkedVerseText.value = if (range.isEmpty()) "Verse not found."
+                    else range.joinToString("\n\n") { "${it.verse}. ${it.text}" }
             }.onFailure { linkedVerseText.value = "Could not load verse." }
         }
     }
