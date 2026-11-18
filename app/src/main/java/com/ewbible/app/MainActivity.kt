@@ -1,15 +1,32 @@
 package com.ewbible.app
 
+import android.content.ClipData
+import android.content.Context
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ewbible.app.data.database.AppDatabase
 import com.ewbible.app.data.preferences.AppPreferences
@@ -22,6 +39,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Catch crashes and save them to a file, so we can see them without a computer
+        CrashReporter.init(this)
 
         // Single instances - not inside Composables
         val database = AppDatabase.getInstance(applicationContext)
@@ -37,12 +57,48 @@ class MainActivity : ComponentActivity() {
                 factory = HomeViewModelFactory(database.bibleDao(), preferences)
             )
 
+            // Show last crash if the app crashed on previous launch
+            var lastCrash by remember { mutableStateOf(CrashReporter.getLastCrash(this@MainActivity)) }
+
             EWBibleTheme(darkTheme = useDarkTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     HomeScreen(viewModel = homeViewModel)
+                }
+
+                if (lastCrash != null) {
+                    AlertDialog(
+                        onDismissRequest = { },
+                        title = { Text("App crashed last time") },
+                        text = {
+                            Column {
+                                Text("Copy this whole text and send it:", fontSize = 13.sp)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .height(300.dp)
+                                        .verticalScroll(rememberScrollState())
+                                ) {
+                                    Text(lastCrash!!, fontSize = 11.sp)
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("crash", lastCrash))
+                                Toast.makeText(this@MainActivity, "Copied!", Toast.LENGTH_SHORT).show()
+                            }) { Text("Copy") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                CrashReporter.clear(this@MainActivity)
+                                lastCrash = null
+                            }) { Text("Clear / Close") }
+                        }
+                    )
                 }
             }
         }
