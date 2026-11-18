@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -17,7 +18,7 @@ import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.database.VerseSearchResult
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchContent(
     searchQuery: String,
@@ -30,7 +31,8 @@ fun SearchContent(
     onFilterChange: (String) -> Unit,
     onOpenVerse: (book: String, chapter: Int, verse: Int) -> Unit
 ) {
-    val filters = listOf("All", "Old Testament", "New Testament", "Prophecy", "Gospel")
+    // FIXED ORDER: All | New Testament | Gospel | Old Testament | Prophecy
+    val filters = listOf("All", "New Testament", "Gospel", "Old Testament", "Prophecy")
 
     Column(
         modifier = Modifier
@@ -49,17 +51,17 @@ fun SearchContent(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // FIX #1: All 5 visible at once, no sliding - wraps to 2 lines
-        FlowRow(
+        // FIXED: 1 single row, scrolls sideways, no wrap, no big gap
+        LazyRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            contentPadding = PaddingValues(end = 8.dp)
         ) {
-            filters.forEach { filter ->
+            items(filters) { filter ->
                 FilterChip(
                     selected = searchFilter == filter,
                     onClick = { onFilterChange(filter) },
-                    label = { Text(filter, fontSize = 12.sp) }
+                    label = { Text(filter, fontSize = 12.sp, maxLines = 1) }
                 )
             }
         }
