@@ -19,7 +19,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -47,6 +46,8 @@ fun BibleContent(
     listState: LazyListState,
     onVerseClick: (Int) -> Unit,
     onVerseLongClick: (Int) -> Unit,
+    onNextChapter: () -> Unit = {},
+    onPreviousChapter: () -> Unit = {},
 ) {
     BibleContent(
         selectedBookId = BookCatalog.id(selectedBook),
@@ -60,7 +61,9 @@ fun BibleContent(
         textColor = textColor,
         listState = listState,
         onVerseClick = onVerseClick,
-        onVerseLongClick = onVerseLongClick
+        onVerseLongClick = onVerseLongClick,
+        onNextChapter = onNextChapter,
+        onPreviousChapter = onPreviousChapter
     )
 }
 
@@ -78,6 +81,8 @@ fun BibleContent(
     listState: LazyListState,
     onVerseClick: (Int) -> Unit,
     onVerseLongClick: (Int) -> Unit,
+    onNextChapter: () -> Unit = {},
+    onPreviousChapter: () -> Unit = {},
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -85,12 +90,6 @@ fun BibleContent(
     val bookName = BookCatalog.name(safeBookId)
     val maxChapter = BookCatalog.chapters(safeBookId)
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
-
-    // NOTE: NO swipe here. Swipe lives ONLY in HomeScreen.
-
-    // FIXED: REMOVED ONLY the duplicate header.
-    // HomeScreen already shows "Matthew 1" at the top.
-    // Summary is KEPT here in Bible tab, and also KEPT in Open EW tab.
 
     LazyColumn(
         state = listState,
