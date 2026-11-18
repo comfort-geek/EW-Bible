@@ -39,7 +39,6 @@ private val ALL_NAMES_PATTERN: String by lazy {
         .joinToString("|") { Regex.escape(it) }
 }
 
-// FIX #2: Now captures "-11" as group 4 -> "Romans 8:1-11" is ONE link
 private val FULL_VERSE_REGEX: Regex by lazy {
     Regex("\\b($ALL_NAMES_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?\\b(?![^<]*</a>)")
 }
@@ -60,7 +59,9 @@ fun OpenEWContent(
     isLoading: Boolean = false,
     bookName: String = "",
     chapter: Int = 1,
-    onVerseClick: (book: String, chapter: Int, verse: Int) -> Unit = { _, _, _ -> },
+    // CHANGED: now passes endVerse too. Romans 8:1-11 -> (Romans, 8, 1, 11)
+    // Single verse Romans 8:1 -> (Romans, 8, 1, 1)
+    onVerseClick: (book: String, chapter: Int, verse: Int, endVerse: Int) -> Unit = { _, _, _, _ -> },
     onNextChapter: () -> Unit = {},
     onPreviousChapter: () -> Unit = {},
     onRetry: () -> Unit = {},
@@ -137,7 +138,8 @@ fun OpenEWContent(
                                     val b = params["book"]?.takeIf { it.isNotBlank() } ?: bookName
                                     val c = params["chapter"]?.toIntOrNull() ?: chapter
                                     val v = params["verse"]?.toIntOrNull() ?: 1
-                                    onVerseClick(b, c, v)
+                                    val end = params["endVerse"]?.toIntOrNull() ?: v
+                                    onVerseClick(b, c, v, end)
                                 }
                                 return true
                             }
@@ -184,20 +186,21 @@ fun OpenEWContent(
 private fun linkifyVerses(html: String, currentBook: String): String {
     if (html.isBlank()) return html
     var result = html
-    // Full: "Romans 8:1-11" -> one <a> with whole text, href points to start verse 1
+    // "Romans 8:1-11" -> ONE link, href has verse=1 & endVerse=11, display is full "Romans 8:1-11"
     result = FULL_VERSE_REGEX.replace(result) { m ->
         val book = BookCatalog.canonicalName(m.groupValues[1])
         val ch = m.groupValues[2]
         val vs = m.groupValues[3]
-        // m.value already = "Romans 8:1-11" including range, so display stays full
-        """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
+        val end = m.groupValues[4].takeIf { it.isNotBlank() } ?: vs
+        """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs&endVerse=$end">${m.value}</a>"""
     }
     if (currentBook.isNotBlank()) {
-        // Bare: "8:1-11" inside Romans 8 -> links to Romans 8:1, displays "8:1-11"
+        // "8:1-11" -> ONE link, href has verse=1 & endVerse=11
         result = BARE_VERSE_REGEX.replace(result) { m ->
             val ch = m.groupValues[1]
             val vs = m.groupValues[2]
-            """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(BookCatalog.canonicalName(currentBook), "UTF-8")}&chapter=$ch&verse=$vs">${m.value}</a>"""
+            val end = m.groupValues[3].takeIf { it.isNotBlank() } ?: vs
+            """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(BookCatalog.canonicalName(currentBook), "UTF-8")}&chapter=$ch&verse=$vs&endVerse=$end">${m.value}</a>"""
         }
     }
     return result
