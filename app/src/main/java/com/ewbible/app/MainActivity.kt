@@ -23,16 +23,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // FIXED: Create single instances here, not inside Composables
+        // Single instances - not inside Composables
         val database = AppDatabase.getInstance(applicationContext)
         val preferences = AppPreferences(applicationContext)
 
         setContent {
-            // FIXED: Observe dark mode from DataStore so toggle actually works
+            // Observe dark mode from DataStore so toggle actually works
             val isDarkMode by preferences.isDarkMode.collectAsState(initial = null)
             val useDarkTheme = isDarkMode ?: false
 
-            // FIXED: Create ViewModel with Factory so it gets DAO + Preferences
+            // ViewModel with Factory so it gets DAO + Preferences
             val homeViewModel: HomeViewModel = viewModel(
                 factory = HomeViewModelFactory(database.bibleDao(), preferences)
             )
