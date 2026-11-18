@@ -18,7 +18,9 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -50,7 +52,7 @@ private val linkedHtmlCache = object : LinkedHashMap<String, String>(30, 0.75f, 
     override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > 30
 }
 
-// NEW: The DB HTML has <b><i> that never close, so the whole chapter stays bold+italic.
+// The DB HTML has <b><i> that never close, so the whole chapter stays bold+italic.
 // Strip ALL <b>/<i>/<strong>/<em> from the body. Headings + verse links get bold back via CSS below.
 private fun cleanCommentaryHtml(html: String): String {
     var result = html
@@ -75,6 +77,13 @@ fun OpenEWContent(
     onPreviousChapter: () -> Unit = {},
     onRetry: () -> Unit = {},
 ) {
+    // FIX 1: WebView factory runs ONCE. Without this, clicks/swipes use stale book/chapter.
+    val currentBookName by rememberUpdatedState(bookName)
+    val currentChapter by rememberUpdatedState(chapter)
+    val currentOnVerseClick by rememberUpdatedState(onVerseClick)
+    val currentOnNext by rememberUpdatedState(onNextChapter)
+    val currentOnPrev by rememberUpdatedState(onPreviousChapter)
+
     val cacheKey = remember(bookName, chapter, commentaryHtml) { "$bookName-$chapter-${commentaryHtml.hashCode()}" }
 
     val linkedHtml = remember(commentaryHtml, cacheKey) {
@@ -146,11 +155,12 @@ fun OpenEWContent(
                                         val parts = it.split("=", limit = 2)
                                         if (parts.size == 2) parts[0] to URLDecoder.decode(parts[1], "UTF-8") else parts[0] to ""
                                     }
-                                    val b = params["book"]?.takeIf { it.isNotBlank() } ?: bookName
-                                    val c = params["chapter"]?.toIntOrNull() ?: chapter
+                                    // FIX: use latest book/chapter, not the ones from factory creation
+                                    val b = params["book"]?.takeIf { it.isNotBlank() } ?: currentBookName
+                                    val c = params["chapter"]?.toIntOrNull() ?: currentChapter
                                     val v = params["verse"]?.toIntOrNull() ?: 1
                                     val end = params["endVerse"]?.toIntOrNull() ?: v
-                                    onVerseClick(b, c, v, end)
+                                    currentOnVerseClick(b, c, v, end)
                                 }
                                 return true
                             }
@@ -166,7 +176,8 @@ fun OpenEWContent(
                                 val dx = event.x - downX
                                 val dy = event.y - downY
                                 if (abs(dx) > 150 && abs(dx) > abs(dy) * 1.5f) {
-                                    if (dx < 0) onNextChapter() else onPreviousChapter()
+                                    // FIX: use latest callbacks
+                                    if (dx < 0) currentOnNext() else currentOnPrev()
                                     return@setOnTouchListener true
                                 }
                             }
@@ -177,8 +188,31 @@ fun OpenEWContent(
             },
             update = { wv ->
                 if (wv.tag != html.hashCode()) {
+                    // FIX 2: Save scroll before reload (font/theme change), restore after.
+                    // Chapter change loads new html with different cacheKey, scroll will be 0 anyway
+                    // because we only restore if it's the same book/chapter content re-render.
+                    // For chapter change, wv.scrollY is from old chapter - we want top, so only restore
+                    // if the html is a re-render of same chapter (font/theme). We detect that by
+                    // checking if tag was set before - first load of new chapter should go to top.
+                    // Simplest correct behavior: always go to top on chapter change (new html),
+                    // restore scroll only when html changed but book/chapter didn't.
+                    // We do that by storing last book-chapter in tag key.
+                    val savedScrollY = wv.scrollY
+                    val isSameChapterRerender = (wv.getTag(R.id.webview_chapter_tag) as? String) == cacheKey
+                    wv.setTag(R.id.webview_chapter_tag, cacheKey)
                     wv.tag = html.hashCode()
                     wv.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
+                    if (isSameChapterRerender) {
+                        wv.post { wv.scrollTo(0, savedScrollY) }
+                    }
+                }
+            },
+            onRelease = { wv ->
+                // FIX 3: Properly destroy WebView to avoid leak when tab is disposed
+                runCatching {
+                    wv.stopLoading()
+                    wv.loadUrl("about:blank")
+                    wv.destroy()
                 }
             }
         )
@@ -197,19 +231,52 @@ fun OpenEWContent(
 private fun linkifyVerses(html: String, currentBook: String): String {
     if (html.isBlank()) return html
     var result = html
+
+    // 1. Full refs: "John 3:16", "1 Samuel 2:3" -> always link, but validate chapter exists in that book
     result = FULL_VERSE_REGEX.replace(result) { m ->
         val book = BookCatalog.canonicalName(m.groupValues[1])
-        val ch = m.groupValues[2]
+        val ch = m.groupValues[2].toIntOrNull() ?: return@replace m.value
         val vs = m.groupValues[3]
         val end = m.groupValues[4].takeIf { it.isNotBlank() } ?: vs
+        // FIX: Only link if chapter is valid for that book (e.g. "John 99:1" -> don't link)
+        val maxCh = runCatching { BookCatalog.chapters(BookCatalog.id(book)) }.getOrDefault(0)
+        if (ch < 1 || ch > maxCh) return@replace m.value
         """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(book, "UTF-8")}&chapter=$ch&verse=$vs&endVerse=$end">${m.value}</a>"""
     }
+
+    // 2. Bare refs: "3:16" inside commentary for current book.
+    // FIX: Only linkify if it is a valid chapter for the SAME book.
+    // This stops "12:30" (a time), "99:99", or "150:1" in a 10-chapter book from becoming a verse link.
     if (currentBook.isNotBlank()) {
-        result = BARE_VERSE_REGEX.replace(result) { m ->
-            val ch = m.groupValues[1]
-            val vs = m.groupValues[2]
-            val end = m.groupValues[3].takeIf { it.isNotBlank() } ?: vs
-            """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(BookCatalog.canonicalName(currentBook), "UTF-8")}&chapter=$ch&verse=$vs&endVerse=$end">${m.value}</a>"""
+        val canonicalCurrent = BookCatalog.canonicalName(currentBook)
+        val currentBookId = runCatching { BookCatalog.id(canonicalCurrent) }.getOrDefault(0)
+        val maxChapterForCurrentBook = if (currentBookId > 0) {
+            runCatching { BookCatalog.chapters(currentBookId) }.getOrDefault(0)
+        } else 0
+
+        if (maxChapterForCurrentBook > 0) {
+            result = BARE_VERSE_REGEX.replace(result) { m ->
+                val ch = m.groupValues[1].toIntOrNull() ?: return@replace m.value
+                val vs = m.groupValues[2]
+                val end = m.groupValues[3].takeIf { it.isNotBlank() } ?: vs
+
+                // VALID SAME-BOOK CHAPTER CHECK:
+                // - ch must be 1..maxChapter for this book
+                // - verse must be >= 1 (basic sanity, we don't have per-chapter verse counts here)
+                // - This also kills times like 12:30 if book has < 12 chapters, and 24:00 etc.
+                if (ch < 1 || ch > maxChapterForCurrentBook) return@replace m.value
+                if ((vs.toIntOrNull() ?: 0) < 1) return@replace m.value
+
+                // Extra guard against times: if it looks like HH:MM time (ch 1..23, vs 0..59, and preceded by "at"/"by")
+                // We already require ch to be valid, but a time like "10:30" in a 50-chapter book would still pass.
+                // So check the 6 chars before the match in the ORIGINAL result string for time context.
+                // Regex replace doesn't give us offset easily, so we use a conservative rule:
+                // If verse part is 00-59 AND chapter is 1..12, it could be a time - but we still link it
+                // because in Bible commentary "10:30" almost always means chapter 10 verse 30, not a time.
+                // Keep it linked - the chapter-valid check above is the main filter.
+
+                """<a class="verse-link" href="ew://verse?book=${URLEncoder.encode(canonicalCurrent, "UTF-8")}&chapter=$ch&verse=$vs&endVerse=$end">${m.value}</a>"""
+            }
         }
     }
     return result
