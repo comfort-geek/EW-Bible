@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -48,6 +49,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -99,7 +101,8 @@ fun HomeScreen(viewModel: HomeViewModel) {
         if (state.isReadingRestored) initialLoadDone = true
     }
 
-    LaunchedEffect(state.verses, state.currentBookId, state.selectedChapter) {
+    // FIXED: Only on book/chapter change, NOT on every verses list emission
+    LaunchedEffect(state.currentBookId, state.selectedChapter) {
         if (state.verses.isEmpty()) return@LaunchedEffect
         val key = state.currentBookId to state.selectedChapter
         if (!hasRestoredScroll && (savedScrollIndex > 0 || savedScrollOffset > 0)) {
@@ -126,7 +129,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     }
     fun openBook(bookName: String, chapter: Int) { openBook(BookCatalog.id(bookName), chapter) }
 
-    // FIXED: no spinner, just Loading...
     if (!state.isReadingRestored && !initialLoadDone) {
         Box(modifier = Modifier.fillMaxSize().background(background), contentAlignment = Alignment.Center) {
             Text("Loading...", color = textColor, fontSize = 18.sp)
@@ -169,9 +171,10 @@ fun HomeScreen(viewModel: HomeViewModel) {
             if (state.selectedTab == "Bible") {
                 Text(text = "$currentBookName ${state.selectedChapter}", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
+            // FIXED: KEEP ALL TABS ALIVE - no destroy on switch, no reload
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                when (state.selectedTab) {
-                    "Bible" -> BibleContent(
+                Box(modifier = Modifier.fillMaxSize().then(if (state.selectedTab == "Bible") Modifier else Modifier.alpha(0f).size(0.dp))) {
+                    BibleContent(
                         selectedBookId = currentBookId, selectedChapter = state.selectedChapter, summary = state.summary,
                         versesList = state.verses, currentHighlightMap = state.highlights, fontSize = state.fontSize,
                         gold = gold, panel = panel, textColor = textColor, listState = listState,
@@ -179,7 +182,9 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() },
                         summaryLoading = state.summaryLoading
                     )
-                    "Open EW" -> OpenEWContent(
+                }
+                Box(modifier = Modifier.fillMaxSize().then(if (state.selectedTab == "Open EW") Modifier else Modifier.alpha(0f).size(0.dp))) {
+                    OpenEWContent(
                         commentaryHtml = state.commentaryHtml, fontSize = state.fontSize,
                         textColor = textColor, hasError = state.commentaryError,
                         isLoading = state.commentaryHtml.isBlank() && !state.commentaryError,
@@ -193,7 +198,9 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() },
                         onRetry = { viewModel.loadCommentary() }
                     )
-                    "Search" -> SearchContent(
+                }
+                Box(modifier = Modifier.fillMaxSize().then(if (state.selectedTab == "Search") Modifier else Modifier.alpha(0f).size(0.dp))) {
+                    SearchContent(
                         searchQuery = searchQuery, searchFilter = state.searchFilter, verseResults = state.searchResults,
                         textColor = textColor, gold = gold, fontSize = state.fontSize,
                         onQueryChange = { searchQuery = it; viewModel.searchVerses(it) },
