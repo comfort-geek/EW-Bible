@@ -55,6 +55,8 @@ interface BibleDao {
     @Query("SELECT * FROM verses WHERE book_id = :bookId AND chapter = :chapter ORDER BY verse")
     fun getVerses(bookId: Int, chapter: Int): Flow<List<VerseEntity>>
 
+    // FIX: Added ESCAPE '\' - caller must escape % _ \ before passing query
+    // e.g. query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     @Query("""
         SELECT v.book_id AS bookId,
                b.name AS bookName,
@@ -63,7 +65,7 @@ interface BibleDao {
                v.text
         FROM verses v
         INNER JOIN books b ON b.id = v.book_id
-        WHERE v.text LIKE '%' || :query || '%' COLLATE NOCASE
+        WHERE v.text LIKE '%' || :query || '%' ESCAPE '\' COLLATE NOCASE
         LIMIT 100
     """)
     suspend fun searchVerses(query: String): List<VerseSearchResult>
@@ -73,6 +75,10 @@ interface BibleDao {
 
     @Query("SELECT html_compressed FROM commentary WHERE book_id = :bookId AND chapter = :chapter")
     suspend fun getCommentaryCompressed(bookId: Int, chapter: Int): ByteArray?
+
+    // FIX: New - for linked verse sheet, don't load whole chapter
+    @Query("SELECT * FROM verses WHERE book_id = :bookId AND chapter = :chapter AND verse = :verse LIMIT 1")
+    suspend fun getVerse(bookId: Int, chapter: Int, verse: Int): VerseEntity?
 
     @Query("SELECT * FROM highlights WHERE book_id = :bookId AND chapter = :chapter")
     fun getHighlights(bookId: Int, chapter: Int): Flow<List<HighlightEntity>>
