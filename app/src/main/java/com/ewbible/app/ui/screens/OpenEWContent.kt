@@ -32,7 +32,6 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import kotlin.math.abs
 
-// Build ONCE for whole app, not on every chapter
 private val ALL_NAMES_PATTERN: String by lazy {
     BookCatalog.allDisplayNames()
         .distinct()
@@ -46,11 +45,8 @@ private val BARE_VERSE_REGEX: Regex by lazy {
     Regex("(?<![\\w:])\\b(\\d+):(\\d+)\\b(?![^<]*</a>)")
 }
 
-// Cache linkified HTML so going back to same chapter is instant
 private val linkedHtmlCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
-        return size > 30
-    }
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > 30
 }
 
 @Composable
@@ -67,7 +63,7 @@ fun OpenEWContent(
     onPreviousChapter: () -> Unit = {},
     onRetry: () -> Unit = {},
 ) {
-    val cacheKey = remember(bookName, chapter) { "$bookName-$chapter" }
+    val cacheKey = remember(bookName, chapter, commentaryHtml) { "$bookName-$chapter-${commentaryHtml.hashCode()}" }
 
     val linkedHtml = remember(commentaryHtml, cacheKey) {
         if (commentaryHtml.isBlank()) ""
@@ -102,17 +98,9 @@ fun OpenEWContent(
 
     if (hasError && linkedHtml.isBlank() && !isLoading) {
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
-            Text(
-                text = "Could not load commentary. Please try again.",
-                color = textColor.copy(alpha = 0.6f),
-                fontSize = fontSize.sp,
-                lineHeight = (fontSize + 8).sp
-            )
+            Text("Could not load commentary. Please try again.", color = textColor.copy(alpha = 0.6f), fontSize = fontSize.sp, lineHeight = (fontSize + 8).sp)
             Spacer(modifier = Modifier.height(16.dp))
-            Button(
-                onClick = onRetry,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC9A227))
-            ) {
+            Button(onClick = onRetry, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC9A227))) {
                 Text("Try Again", color = Color.White, fontWeight = FontWeight.Bold)
             }
         }
@@ -120,7 +108,6 @@ fun OpenEWContent(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Keep WebView ALWAYS in tree, just overlay loading on top
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
@@ -154,16 +141,12 @@ fun OpenEWContent(
                             }
                             return false
                         }
-                        override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {}
                     }
                     var downX = 0f
                     var downY = 0f
                     setOnTouchListener { _, event ->
                         when (event.action) {
-                            MotionEvent.ACTION_DOWN -> {
-                                downX = event.x
-                                downY = event.y
-                            }
+                            MotionEvent.ACTION_DOWN -> { downX = event.x; downY = event.y }
                             MotionEvent.ACTION_UP -> {
                                 val dx = event.x - downX
                                 val dy = event.y - downY
@@ -178,14 +161,12 @@ fun OpenEWContent(
                 }
             },
             update = { wv ->
-                // Only reload if html actually changed
                 if (wv.tag != html.hashCode()) {
                     wv.tag = html.hashCode()
                     wv.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
                 }
             }
         )
-
         if (isLoading && linkedHtml.isBlank()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
