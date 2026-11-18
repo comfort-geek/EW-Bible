@@ -2,9 +2,20 @@ package com.ewbible.app.ui.screens
 
 import android.app.Activity
 import android.widget.Toast
-import androidx.compose.foundation.*
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -14,14 +25,30 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -31,7 +58,6 @@ import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,7 +66,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val activity = context as Activity
     val scope = rememberCoroutineScope()
     val state by viewModel.uiState.collectAsState()
-    val isDark = state.darkMode ?: isSystemInDarkTheme()
+    val isDark = state.darkMode ?: androidx.compose.foundation.isSystemInDarkTheme()
     val prefs = remember { AppPreferences(context) }
     val googleAuth = remember { GoogleAuth(context) }
     val savedScrollIndex by prefs.lastScrollIndex.collectAsState(initial = 0)
@@ -66,53 +92,27 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val currentBookId = state.currentBookId
     val currentBookName = BookCatalog.name(currentBookId)
 
-    LaunchedEffect(state.verses) {
+    LaunchedEffect(state.verses, state.currentBookId, state.selectedChapter) {
         if (state.verses.isEmpty()) return@LaunchedEffect
-        if (hasRestoredScroll) return@LaunchedEffect
-        if (savedScrollIndex > 0 || savedScrollOffset > 0) {
+        if (!hasRestoredScroll && (savedScrollIndex > 0 || savedScrollOffset > 0)) {
             val target = savedScrollIndex.coerceIn(0, (state.verses.size + 2).coerceAtLeast(0))
             runCatching { listState.scrollToItem(target, savedScrollOffset) }
-        }
-        hasRestoredScroll = true
-    }
-
-    LaunchedEffect(currentBookId, state.selectedChapter) {
-        if (hasRestoredScroll) {
+            hasRestoredScroll = true
+        } else if (hasRestoredScroll) {
             runCatching { listState.scrollToItem(0) }
         }
     }
 
     fun openBook(bookId: Int, chapter: Int) {
-        viewModel.openBook(bookId, chapter)
-        expandedBook = null
         hasRestoredScroll = true
-        scope.launch { listState.scrollToItem(0); drawerState.close() }
-    }
-    fun openBook(bookName: String, chapter: Int) { openBook(BookCatalog.id(bookName), chapter) }
-
-    // SWIPE - Bible ONLY. Open EW swipe lives inside OpenEWContent WebView, so they never fight.
-    val swipeModifier = Modifier.pointerInput(currentBookId, state.selectedChapter, state.selectedTab) {
-        awaitPointerEventScope {
-            var downX = 0f; var downY = 0f; var tracking = false
-            while (true) {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                val change = event.changes.firstOrNull() ?: continue
-                when (event.type) {
-                    PointerEventType.Press -> { downX = change.position.x; downY = change.position.y; tracking = true }
-                    PointerEventType.Release -> {
-                        if (tracking) {
-                            val dx = change.position.x - downX; val dy = change.position.y - downY
-                            if (abs(dx) > 120 && abs(dx) > abs(dy) * 1.5f) {
-                                if (dx < 0) viewModel.nextChapter() else viewModel.previousChapter()
-                            }
-                        }
-                        tracking = false
-                    }
-                    else -> {}
-                }
-            }
+        expandedBook = null
+        viewModel.openBook(bookId, chapter)
+        scope.launch {
+            runCatching { listState.scrollToItem(0) }
+            drawerState.close()
         }
     }
+    fun openBook(bookName: String, chapter: Int) { openBook(BookCatalog.id(bookName), chapter) }
 
     if (!state.isReadingRestored) {
         Box(modifier = Modifier.fillMaxSize().background(background), contentAlignment = Alignment.Center) {
@@ -160,14 +160,14 @@ fun HomeScreen(viewModel: HomeViewModel) {
             if (state.selectedTab == "Bible") {
                 Text(text = "$currentBookName ${state.selectedChapter}", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
-            // SWIPE ONLY ON BIBLE
-            Box(modifier = Modifier.weight(1f).fillMaxWidth().then(if (state.selectedTab == "Bible") swipeModifier else Modifier)) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (state.selectedTab) {
                     "Bible" -> BibleContent(
                         selectedBookId = currentBookId, selectedChapter = state.selectedChapter, summary = state.summary,
                         versesList = state.verses, currentHighlightMap = state.highlights, fontSize = state.fontSize,
                         gold = gold, panel = panel, textColor = textColor, listState = listState,
-                        onVerseClick = { viewModel.selectVerse(it) }, onVerseLongClick = { viewModel.selectVerse(it) }
+                        onVerseClick = { viewModel.selectVerse(it) }, onVerseLongClick = { viewModel.selectVerse(it) },
+                        onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() }
                     )
                     "Open EW" -> OpenEWContent(
                         commentaryHtml = state.commentaryHtml, fontSize = state.fontSize,
@@ -236,7 +236,9 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     viewModel.onUserSignedIn(parts.getOrNull(0) ?: "User", parts.getOrNull(1) ?: "")
                     settingsOpen = false
                 }.onFailure { e ->
-                    if (e is GoogleAuth.UserCancelledException) { } else { Toast.makeText(context, e.message ?: "Sign-in failed", Toast.LENGTH_SHORT).show() }
+                    if (e !is GoogleAuth.UserCancelledException) {
+                        Toast.makeText(context, e.message ?: "Sign-in failed", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         },
