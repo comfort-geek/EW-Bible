@@ -1,4 +1,4 @@
-Is this correct.. package com.ewbible.app.ui.viewmodel
+package com.ewbible.app.ui.viewmodel
 
 import android.util.Log
 import androidx.compose.ui.graphics.Color
