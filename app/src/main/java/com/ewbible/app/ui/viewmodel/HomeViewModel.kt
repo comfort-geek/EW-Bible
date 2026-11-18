@@ -66,7 +66,6 @@ class HomeViewModel(
     private val selectedTab = MutableStateFlow("Bible")
     private val searchQuery = MutableStateFlow("")
     private val searchFilter = MutableStateFlow("All")
-    // FIXED: renamed - was showNoteDialog, collided with fun showNoteDialog()
     private val showNoteDialogState = MutableStateFlow(false)
     private val currentNoteText = MutableStateFlow("")
     private val commentary = MutableStateFlow("")
@@ -84,7 +83,6 @@ class HomeViewModel(
     private val linkedVerseText = MutableStateFlow("")
     private val linkedVerseRef = MutableStateFlow("")
     private var commentaryJob: Job? = null
-    // Guard - restore runs once, never again
     private var restoreDone = false
 
     private val commentaryCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
@@ -118,17 +116,23 @@ class HomeViewModel(
         viewModelScope.launch { verses.collect { list -> _uiState.update { it.copy(verses = list) } } }
         viewModelScope.launch { highlights.collect { map -> _uiState.update { it.copy(highlights = map) } } }
         viewModelScope.launch { notes.collect { list -> _uiState.update { it.copy(notes = list) } } }
-        viewModelScope.launch { selectedBookId.collect { id ->
-            _uiState.update { it.copy(currentBookId = id, currentBook = BookCatalog.name(id), selectedBook = BookCatalog.name(id)) }
-        } }
+        viewModelScope.launch {
+            selectedBookId.collect { id ->
+                _uiState.update { it.copy(currentBookId = id, currentBook = BookCatalog.name(id), selectedBook = BookCatalog.name(id)) }
+            }
+        }
         viewModelScope.launch { selectedChapter.collect { c -> _uiState.update { it.copy(selectedChapter = c) } } }
         viewModelScope.launch { selectedVerse.collect { v -> _uiState.update { it.copy(selectedVerse = v) } } }
         viewModelScope.launch { selectedTab.collect { t -> _uiState.update { it.copy(selectedTab = t) } } }
         viewModelScope.launch { commentary.collect { h -> _uiState.update { it.copy(commentaryHtml = h) } } }
         viewModelScope.launch { commentaryError.collect { e -> _uiState.update { it.copy(commentaryError = e) } } }
-        viewModelScope.launch { summaryState.collect { s -> _uiState.update {
-            it.copy(summary = s, summaryText = s?.summary ?: "", summaryWhatHappened = s?.whatHappened ?: "", summaryApplication = s?.application ?: "", summaryItalicText = s?.summary ?: "")
-        } } }
+        viewModelScope.launch {
+            summaryState.collect { s ->
+                _uiState.update {
+                    it.copy(summary = s, summaryText = s?.summary ?: "", summaryWhatHappened = s?.whatHappened ?: "", summaryApplication = s?.application ?: "", summaryItalicText = s?.summary ?: "")
+                }
+            }
+        }
         viewModelScope.launch { summaryLoading.collect { b -> _uiState.update { it.copy(summaryLoading = b) } } }
         viewModelScope.launch { chapterCounts.collect { m -> _uiState.update { it.copy(chapterCounts = m) } } }
         viewModelScope.launch { searchResults.collect { r -> _uiState.update { it.copy(searchResults = r) } } }
@@ -140,10 +144,36 @@ class HomeViewModel(
         viewModelScope.launch { showNoteDialogState.collect { b -> _uiState.update { it.copy(showNoteDialog = b) } } }
         viewModelScope.launch { currentNoteText.collect { t -> _uiState.update { it.copy(currentNoteText = t) } } }
         viewModelScope.launch { isReadingRestored.collect { b -> _uiState.update { it.copy(isReadingRestored = b) } } }
-        viewModelScope.launch { runCatching { prefs.isDarkMode.collect { d -> _uiState.update { it.copy(darkMode = d) } } } }
-        viewModelScope.launch { runCatching { prefs.fontSize.collect { f -> _uiState.update { it.copy(fontSize = f) } } } }
-        viewModelScope.launch { runCatching { prefs.userName.collect { n -> _uiState.update { it.copy(userName = n, isLoggedIn = n != "Guest" && _uiState.value.userEmail.isNotBlank()) } } } } }
-        viewModelScope.launch { runCatching { prefs.userEmail.collect { e -> _uiState.update { it.copy(userEmail = e, isLoggedIn = _uiState.value.userName != "Guest" && e.isNotBlank()) } } } }
+
+        // FIXED: expanded to multi-line so brace count is obvious - no extra } here
+        viewModelScope.launch {
+            runCatching {
+                prefs.isDarkMode.collect { d ->
+                    _uiState.update { it.copy(darkMode = d) }
+                }
+            }
+        }
+        viewModelScope.launch {
+            runCatching {
+                prefs.fontSize.collect { f ->
+                    _uiState.update { it.copy(fontSize = f) }
+                }
+            }
+        }
+        viewModelScope.launch {
+            runCatching {
+                prefs.userName.collect { n ->
+                    _uiState.update { it.copy(userName = n, isLoggedIn = n != "Guest" && _uiState.value.userEmail.isNotBlank()) }
+                }
+            }
+        }
+        viewModelScope.launch {
+            runCatching {
+                prefs.userEmail.collect { e ->
+                    _uiState.update { it.copy(userEmail = e, isLoggedIn = _uiState.value.userName != "Guest" && e.isNotBlank()) }
+                }
+            }
+        }
 
         viewModelScope.launch { restoreSavedReading() }
         viewModelScope.launch {
@@ -260,7 +290,6 @@ class HomeViewModel(
         }
     }
     private suspend fun restoreSavedReading() {
-        // FIXED: never run twice, never set isReadingRestored back to false
         if (restoreDone) return
         try {
             val lastBookId = runCatching { prefs.getLastBookId() }.getOrDefault(1)
@@ -275,7 +304,7 @@ class HomeViewModel(
             selectedChapter.value = 1
         } finally {
             restoreDone = true
-            isReadingRestored.value = true // only ever goes false -> true, never back
+            isReadingRestored.value = true
         }
     }
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
@@ -287,7 +316,6 @@ class HomeViewModel(
     }
     fun loadSummary() { loadSummary(currentBookId.value, selectedChapter.value) }
 
-    // FIX: now loads a RANGE - Romans 8:1-11 loads verses 1..11, not just 1
     fun loadLinkedVerse(bookName: String, chapter: Int, verse: Int, endVerse: Int = verse) {
         viewModelScope.launch {
             val bookId = runCatching { BookCatalog.id(bookName) }.getOrDefault(1)
