@@ -103,7 +103,9 @@ fun OpenEWContent(
 
         if (spanned == null) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
-                Text("No commentary available for this chapter.", color = textColor.copy(alpha = 0.6f), fontSize = fontSize.sp, lineHeight = (fontSize + 8).sp)
+                if (!isLoading) {
+                    Text("No commentary available for this chapter.", color = textColor.copy(alpha = 0.6f), fontSize = fontSize.sp, lineHeight = (fontSize + 8).sp)
+                }
             }
         } else {
             AndroidView(
@@ -171,7 +173,6 @@ fun OpenEWContent(
                         textView.tag = spanned
                         textView.textSize = fontSize
                         textView.setTextColor(textColor.toArgb())
-                        // Copy first - don't mutate the cached spanned
                         val copy = SpannableString(spanned)
                         copy.getSpans(0, copy.length, URLSpan::class.java).forEach { span ->
                             copy.setSpan(
