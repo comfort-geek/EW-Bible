@@ -4,11 +4,16 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ewbible.app.data.database.AppDatabase
 import com.ewbible.app.data.database.GeminiRepository
@@ -32,44 +37,63 @@ class MainActivity : ComponentActivity() {
             ?: CrashReporter.getLastNonFatal(this)
         if (savedCrash != null) {
             CrashReporter.breadcrumb(this, "App restarted after crash")
-            // Backup to Downloads - so you can see it in Files app even if app is broken
             exportCrashToDownloads(this, savedCrash)
         }
 
-        val database = AppDatabase.getInstance(applicationContext)
-        val dao = database.bibleDao()
         val preferences = AppPreferences(applicationContext)
         val geminiRepository = GeminiRepository()
 
-        val factory = HomeViewModelFactory(
-            dao = dao,
-            preferences = preferences,
-            geminiRepository = geminiRepository,
-            bibleDao = dao
-        )
+        // DO NOT crash here if DB is broken - catch it and show error UI instead
+        var database: AppDatabase? = null
+        var dbError: String? = null
+        try {
+            database = AppDatabase.getInstance(applicationContext)
+        } catch (e: Throwable) {
+            dbError = e.toString() + "\n" + (e.cause?.toString() ?: "")
+            CrashReporter.recordNonFatal(this, "MainActivity-DB-Init", e)
+            CrashReporter.breadcrumb(this, "DB INIT FAILED: ${e.message}")
+        }
 
         setContent {
             val isDarkMode by preferences.isDarkMode.collectAsState(initial = null)
             val useDarkTheme = isDarkMode ?: false
 
-            // Popup state - shows automatically if crash exists
             var showCrashDialog by remember { mutableStateOf(savedCrash != null) }
             var crashText by remember { mutableStateOf(savedCrash ?: "") }
-
-            val homeViewModel: HomeViewModel = viewModel(factory = factory)
-            val chatViewModel: ChatViewModel = viewModel(factory = factory)
 
             EWBibleTheme(darkTheme = useDarkTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    HomeScreen(
-                        viewModel = homeViewModel,
-                        chatViewModel = chatViewModel
-                    )
+                    if (dbError != null) {
+                        // DB broken - show this instead of crash-loop
+                        Box(
+                            modifier = Modifier.fillMaxSize().padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Database failed to open.\n\n$dbError\n\nUninstall + reinstall, or send this screen via Share.",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    } else if (database != null) {
+                        val dao = database!!.bibleDao()
+                        val factory = HomeViewModelFactory(
+                            dao = dao,
+                            preferences = preferences,
+                            geminiRepository = geminiRepository,
+                            bibleDao = dao
+                        )
+                        val homeViewModel: HomeViewModel = viewModel(factory = factory)
+                        val chatViewModel: ChatViewModel = viewModel(factory = factory)
 
-                    // AUTO POPUP - on top of everything, even if HomeScreen is broken
+                        HomeScreen(
+                            viewModel = homeViewModel,
+                            chatViewModel = chatViewModel
+                        )
+                    }
+
                     if (showCrashDialog) {
                         CrashReportDialog(
                             crashText = crashText,
