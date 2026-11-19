@@ -40,6 +40,9 @@ fun AiChatScreen(
     var input by remember { mutableStateOf("") }
     var selectedImage by remember { mutableStateOf<Bitmap?>(null) }
     var showHistory by remember { mutableStateOf(false) }
+    // NEW - Translation picker state
+    var selectedTranslation by remember { mutableStateOf("NKJV") }
+    val translations = listOf("NKJV", "KJV", "NIV", "ESV")
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -60,14 +63,12 @@ fun AiChatScreen(
     LaunchedEffect(state.messages.size, state.streamingText, state.isLoading) {
         if (state.messages.isNotEmpty() || state.isLoading) {
             try {
-                // FIXED: Don't scroll past last item when not loading
                 val lastIndex = if (state.isLoading) state.messages.size else state.messages.size - 1
                 if (lastIndex >= 0) listState.animateScrollToItem(lastIndex)
             } catch (e: Exception) { /* ignore scroll race */ }
         }
     }
 
-    // HISTORY DRAWER - FIXED: tap to open
     if (showHistory) {
         ModalBottomSheet(onDismissRequest = { showHistory = false }) {
             Text("Chat History", fontWeight = FontWeight.Bold, modifier = Modifier.padding(16.dp))
@@ -101,6 +102,24 @@ fun AiChatScreen(
             Text("Ask Gemini", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
             Text(currentRef, color = gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             IconButton(onClick = { viewModel.startNewChat(currentRef) }) { Icon(Icons.Default.Add, null, tint = gold) }
+        }
+
+        // NEW - TRANSLATION PICKER
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            translations.forEach { t ->
+                val isSelected = selectedTranslation == t
+                Box(
+                    modifier = Modifier
+                        .background(if (isSelected) gold else panel, shape = RoundedCornerShape(16.dp))
+                        .clickable { selectedTranslation = t }
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text(t, color = if (isSelected) Color.White else textColor, fontSize = 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                }
+            }
         }
 
         // MESSAGES
@@ -137,7 +156,8 @@ fun AiChatScreen(
             IconButton(onClick = {
                 val q = input.trim()
                 if (q.isBlank() || state.isLoading) return@IconButton
-                viewModel.send(q, currentRef, selectedImage)
+                // WIRED - now passes translation
+                viewModel.send(q, currentRef, selectedImage, selectedTranslation)
                 input = ""
                 selectedImage = null
             }) { Icon(Icons.Default.Send, null, tint = gold) }
