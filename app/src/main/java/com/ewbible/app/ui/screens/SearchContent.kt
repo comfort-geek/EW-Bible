@@ -100,20 +100,19 @@ fun SearchContent(
     val searchBoxBg = remember { Color(0xFF1B2A4A) }
     val searchBoxBorder = remember { Color(0xFF2E426E) }
     val placeholderColor = remember { Color.White.copy(alpha = 0.6f) }
-    val textFieldColors = remember(gold) {
-        OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = searchBoxBg,
-            unfocusedContainerColor = searchBoxBg,
-            disabledContainerColor = searchBoxBg,
-            focusedTextColor = Color.White,
-            unfocusedTextColor = Color.White,
-            cursorColor = gold,
-            focusedBorderColor = gold,
-            unfocusedBorderColor = searchBoxBorder,
-            focusedPlaceholderColor = placeholderColor,
-            unfocusedPlaceholderColor = placeholderColor
-        )
-    }
+    // FIXED: No remember{} around colors() - colors() is @Composable, remember{} lambda is not.
+    val textFieldColors = OutlinedTextFieldDefaults.colors(
+        focusedContainerColor = searchBoxBg,
+        unfocusedContainerColor = searchBoxBg,
+        disabledContainerColor = searchBoxBg,
+        focusedTextColor = Color.White,
+        unfocusedTextColor = Color.White,
+        cursorColor = gold,
+        focusedBorderColor = gold,
+        unfocusedBorderColor = searchBoxBorder,
+        focusedPlaceholderColor = placeholderColor,
+        unfocusedPlaceholderColor = placeholderColor
+    )
     val cardColor = remember(textColor) { textColor.copy(alpha = 0.06f) }
     val hintColor = remember(textColor) { textColor.copy(alpha = 0.6f) }
     val bookNames = remember(verseResults) {
@@ -154,8 +153,6 @@ fun SearchContent(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             maxItemsInEachRow = 3
         ) {
-            // FIXED: for() not forEach{} - forEach lambda is NOT @Composable,
-            // so FilterChip() inside it = "Composable invocations can only happen..."
             for (filter in filters) {
                 FilterChip(
                     selected = searchFilter == filter,
