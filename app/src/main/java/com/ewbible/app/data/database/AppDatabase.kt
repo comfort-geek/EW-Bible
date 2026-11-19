@@ -2,13 +2,9 @@ package com.ewbible.app.data.database
 
 import android.content.Context
 import androidx.room.ColumnInfo
-import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
-import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
@@ -43,7 +39,6 @@ data class SummaryEntity(
     @ColumnInfo(name = "application") val application: String = ""
 )
 
-// FIXED: html_compressed is BLOB, not String
 @Entity(
     tableName = "commentary",
     primaryKeys = ["book_id", "chapter"]
@@ -108,65 +103,6 @@ data class BookmarkEntity(
     val verse: Int = 0,
     val ref: String = ""
 )
-
-@Dao
-interface BibleDao {
-    @Query("SELECT * FROM books ORDER BY id ASC")
-    suspend fun getAllBooks(): List<BookEntity>
-
-    @Query("SELECT MAX(chapter) FROM verses WHERE book_id = :bookId")
-    suspend fun getChapterCount(bookId: Int): Int?
-
-    @Query("SELECT * FROM verses WHERE book_id = :bookId AND chapter = :chapter ORDER BY verse ASC")
-    suspend fun getChapterVerses(bookId: Int, chapter: Int): List<VerseEntity>
-
-    @Query("SELECT text FROM verses WHERE book_id = :bookId AND chapter = :chapter AND verse = :verse LIMIT 1")
-    suspend fun getVerse(bookId: Int, chapter: Int, verse: Int): String?
-
-    @Query("SELECT verse || ' ' || text FROM verses WHERE book_id = :bookId AND chapter = :chapter ORDER BY verse ASC")
-    suspend fun getChapterText(bookId: Int, chapter: Int): List<String>
-
-    @Query("SELECT summary || '\n\nWhat happened: ' || what_happened || '\n\nApplication: ' || application FROM summaries WHERE book_id = :bookId AND chapter = :chapter LIMIT 1")
-    suspend fun getSummary(bookId: Int, chapter: Int): String?
-
-    // FIXED: returns ByteArray, not String
-    @Query("SELECT html_compressed FROM commentary WHERE book_id = :bookId AND chapter = :chapter LIMIT 1")
-    suspend fun getCommentaryCompressed(bookId: Int, chapter: Int): ByteArray?
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertChat(chat: ChatEntity): Long
-    @Query("SELECT * FROM chats ORDER BY createdAt DESC")
-    suspend fun getAllChats(): List<ChatEntity>
-    @Query("DELETE FROM chats WHERE id = :chatId")
-    suspend fun deleteChat(chatId: Long)
-    @Query("DELETE FROM messages WHERE chatId = :chatId")
-    suspend fun deleteMessagesForChat(chatId: Long)
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertMessage(msg: MessageEntity): Long
-    @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY timestamp ASC")
-    suspend fun getMessages(chatId: Long): List<MessageEntity>
-    @Query("SELECT COUNT(*) FROM messages WHERE chatId = :chatId AND isUser = 1 AND timestamp > :startOfDay")
-    suspend fun getDailyCount(chatId: Long, startOfDay: Long): Int
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertBookmark(b: BookmarkEntity): Long
-    @Query("SELECT * FROM bookmarks ORDER BY id DESC")
-    suspend fun getBookmarks(): List<BookmarkEntity>
-    @Query("DELETE FROM bookmarks WHERE bookId = :bookId AND chapter = :chapter AND verse = :verse")
-    suspend fun deleteBookmark(bookId: Int, chapter: Int, verse: Int)
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertNote(n: NoteEntity): Long
-    @Query("SELECT * FROM notes ORDER BY timestamp DESC")
-    suspend fun getNotes(): List<NoteEntity>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertHighlight(h: HighlightEntity): Long
-    @Query("SELECT * FROM highlights")
-    suspend fun getHighlights(): List<HighlightEntity>
-    @Query("DELETE FROM highlights WHERE book_id = :bookId AND chapter = :chapter AND verse = :verse")
-    suspend fun deleteHighlight(bookId: Int, chapter: Int, verse: Int)
-}
 
 @Database(
     entities = [
