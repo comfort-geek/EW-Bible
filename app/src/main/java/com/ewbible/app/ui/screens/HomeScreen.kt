@@ -302,7 +302,8 @@ fun HomeScreen(
                             val bookName = BookCatalog.name(note.bookId)
                             Column(modifier = Modifier.fillMaxWidth().clickable { showAllNotes = false; openBook(note.bookId, note.chapter); viewModel.selectVerse(note.verse) }.padding(vertical = 8.dp)) {
                                 Text(text = "$bookName ${note.chapter}:${note.verse}", color = gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                Text(text = note.noteText, color = textColor, fontSize = 14.sp)
+                                // FIXED: NoteEntity field is `text`, not `noteText`
+                                Text(text = note.text, color = textColor, fontSize = 14.sp)
                             }
                         }
                     }
@@ -338,7 +339,6 @@ fun HomeScreen(
         )
     }
 
-    // Ask Gemini - now wired to read your NKJV
     if (state.showAiChat) {
         AiChatScreen(
             viewModel = chatViewModel,
