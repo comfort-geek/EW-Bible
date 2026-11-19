@@ -59,7 +59,7 @@ data class CommentaryEntity(
 
 @Entity(tableName = "notes")
 data class NoteEntity(
-    @PrimaryKey @ColumnInfo(name = "id") val id: Long = 0,
+    @PrimaryKey(autoGenerate = true) @ColumnInfo(name = "id") val id: Long = 0,
     @ColumnInfo(name = "book_id") val bookId: Int = 0,
     @ColumnInfo(name = "chapter") val chapter: Int = 0,
     @ColumnInfo(name = "verse") val verse: Int = 0,
