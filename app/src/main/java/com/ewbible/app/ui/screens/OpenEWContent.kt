@@ -8,6 +8,7 @@ import android.text.style.URLSpan
 import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.MotionEvent
+import android.view.View
 import android.widget.TextView
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,7 +51,8 @@ private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
         t = t.substringAfter("<body", "").substringAfter(">", "").substringBeforeLast("</body>", t)
     }
     // NO DUPLICATES: strip <h1> title + any first paragraph that is just "Genesis 1"
-    t = t.replace(Regex("(?is)<h1[^>]*>.*?</h1>"), "", 1)
+    // FIX: String.replace(Regex, "", 1) does not exist - use Regex.replaceFirst()
+    t = Regex("(?is)<h1[^>]*>.*?</h1>").replaceFirst(t, "")
     t = t.replace(
         Regex("(?is)^\\s*<p[^>]*>\\s*${Regex.escape(bookName)}\\s+$chapter\\s*</p>"),
         ""
@@ -173,7 +175,8 @@ fun OpenEWContent(
                         setTextColor(textColor.toArgb())
                         setPadding(padPx, 0, padPx, bottomPx)
                         isVerticalScrollBarEnabled = true
-                        scrollBarStyle = SCROLLBARS_INSIDE_OVERLAY
+                        // FIX: SCROLLBARS_INSIDE_OVERLAY is on View, not bare
+                        scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
                         movementMethod = object : LinkMovementMethod() {
                             override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
                                 if (event.action == MotionEvent.ACTION_UP) {
