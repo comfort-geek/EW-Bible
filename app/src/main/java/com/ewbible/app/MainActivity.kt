@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ewbible.app.data.database.AppDatabase
+import com.ewbible.app.data.database.ChatDatabase
 import com.ewbible.app.data.database.GeminiRepository
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.ui.screens.HomeScreen
@@ -33,14 +34,15 @@ class MainActivity : ComponentActivity() {
         }
 
         val database = AppDatabase.getInstance(applicationContext)
+        val chatDatabase = ChatDatabase.getInstance(applicationContext)
         val preferences = AppPreferences(applicationContext)
         val geminiRepository = GeminiRepository()
 
-        // FIXED: One factory for BOTH viewmodels, with ChatDao + Gemini
+        // FIXED: One factory for BOTH viewmodels, with ChatDao from ChatDatabase
         val factory = HomeViewModelFactory(
             dao = database.bibleDao(),
             preferences = preferences,
-            chatDao = database.chatDao(),
+            chatDao = chatDatabase.chatDao(),
             geminiRepository = geminiRepository
         )
 
