@@ -6,6 +6,7 @@ import android.text.method.LinkMovementMethod
 import android.text.style.ForegroundColorSpan
 import android.text.style.URLSpan
 import android.util.TypedValue
+import android.view.GestureDetector
 import android.view.MotionEvent
 import android.widget.TextView
 import androidx.compose.foundation.layout.Box
@@ -33,23 +34,28 @@ import androidx.core.text.HtmlCompat
 import com.ewbible.app.data.database.BookCatalog
 import java.net.URLDecoder
 import java.net.URLEncoder
-import kotlin.math.abs
 
-// FIX: Single source of truth = BookCatalog. No hardcoded list anymore.
-// Includes canonical names + aliases: Gen, Ps, 1 Sam, 1 Cor, Rev, Song of Songs, etc.
+// Single source of truth = BookCatalog (66 books + aliases like Gen, Ps, 1 Sam, Rev)
 private val DISPLAY_NAMES: List<String> = BookCatalog.allDisplayNames()
 private val BOOK_PATTERN = DISPLAY_NAMES
-    .sortedByDescending { it.length } // "1 Samuel" before "Samuel", "Song of Songs" before "Song"
+    .sortedByDescending { it.length }
     .joinToString("|") { Regex.escape(it) }
+// Only real book names link. Supports ranges: Genesis 1:1-5, Psalm 19:1-4
 private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?(?!\\d)")
 
-private fun cleanForHtml(html: String): String {
+private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
     if (html.isBlank()) return ""
     var t = html.trim()
     if (t.contains("<body", ignoreCase = true)) {
         t = t.substringAfter("<body", "").substringAfter(">", "").substringBeforeLast("</body>", t)
     }
+    // NO DUPLICATES: strip <h1> title + any first paragraph that is just "Genesis 1"
     t = t.replace(Regex("(?is)<h1[^>]*>.*?</h1>"), "", 1)
+    t = t.replace(
+        Regex("(?is)^\\s*<p[^>]*>\\s*${Regex.escape(bookName)}\\s+$chapter\\s*</p>"),
+        ""
+    )
+    // Headings huge -> body looked tiny. Normalize h2-h6 to bold normal text.
     t = t.replace(Regex("(?is)<h[2-6][^>]*>(.*?)</h[2-6]>"), "<p><b>$1</b></p>")
     t = t.replace(Regex("(?i)</?(b|strong|i|em)>"), "")
     t = t.replace(Regex("(?i)font-weight\\s*:\\s*(bold|[700-900])\\s*;?"), "")
@@ -61,20 +67,13 @@ private fun linkifyForHtml(html: String): String {
     if (html.isBlank()) return html
     return VERSE_REGEX.replace(html) { m ->
         val raw = m.groupValues[1].trim()
-        // "Ps" -> id 19 -> "Psalms", "Gen" -> "Genesis", "1 Sam" -> "1 Samuel"
-        // BookCatalog.id() returns 1 for unknown, so guard with a real lookup:
-        // if raw is not a known display name, skip. All regex matches ARE known, so this is safe.
         val bookId = BookCatalog.id(raw)
-        // Validate: id() defaults to 1, so re-check that canonical name matches or alias exists
-        // For our regex set this is always true, but keep the chapter check as the real guard.
-        val canonical = BookCatalog.canonicalName(raw) // e.g. "Ps" -> "Psalms"
+        val canonical = BookCatalog.canonicalName(raw) // Ps -> Psalms, Gen -> Genesis
         val ch = m.groupValues[2].toIntOrNull() ?: return@replace m.value
         val vs = m.groupValues[3].toIntOrNull() ?: return@replace m.value
         val endRaw = m.groupValues[4]
         val end = if (endRaw.isBlank()) vs else endRaw.toIntOrNull() ?: vs
-        val maxCh = BookCatalog.chapters(bookId)
-        if (ch !in 1..maxCh) return@replace m.value
-        // FIX: link with canonical name, so tapping "Ps 19:1" opens "Psalms 19:1" correctly
+        if (ch !in 1..BookCatalog.chapters(bookId)) return@replace m.value
         val encoded = URLEncoder.encode(canonical, "UTF-8")
         """<a href="ew://verse?book=$encoded&chapter=$ch&verse=$vs&endVerse=$end">${m.value}</a>"""
     }
@@ -101,13 +100,21 @@ fun OpenEWContent(
     val currentOnPrev by rememberUpdatedState(onPreviousChapter)
     val density = LocalDensity.current
 
-    val goldSpanned = remember(commentaryHtml) {
+    // NO LAG: parse once per chapter, cache gold Spannable. No re-parse on font/theme change.
+    val goldSpanned = remember(commentaryHtml, bookName, chapter) {
         if (commentaryHtml.isBlank()) null
         else runCatching {
-            val parsed = HtmlCompat.fromHtml(linkifyForHtml(cleanForHtml(commentaryHtml)), HtmlCompat.FROM_HTML_MODE_LEGACY, null, null)
+            val parsed = HtmlCompat.fromHtml(
+                linkifyForHtml(cleanForHtml(commentaryHtml, bookName, chapter)),
+                HtmlCompat.FROM_HTML_MODE_LEGACY, null, null
+            )
             val copy = SpannableString(parsed)
             copy.getSpans(0, copy.length, URLSpan::class.java).forEach { span ->
-                copy.setSpan(ForegroundColorSpan(0xFFC9A227.toInt()), copy.getSpanStart(span), copy.getSpanEnd(span), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                copy.setSpan(
+                    ForegroundColorSpan(0xFFC9A227.toInt()),
+                    copy.getSpanStart(span), copy.getSpanEnd(span),
+                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
             }
             copy
         }.getOrNull()
@@ -132,17 +139,29 @@ fun OpenEWContent(
             }
         } else {
             AndroidView(
+                // NO OVERLAP: clip + TextView alone (no ScrollView). Height = Compose box.
                 modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds(),
                 factory = { ctx ->
                     val padPx = with(density) { 16.dp.roundToPx() }
                     val bottomPx = with(density) { 96.dp.roundToPx() }
-                    TextView(ctx).apply {
+                    val swipePx = with(density) { 80.dp.toPx() } // was 150px - too far, felt dead
+
+                    lateinit var gestureDetector: GestureDetector
+                    val textView = object : TextView(ctx) {
+                        override fun onTouchEvent(event: MotionEvent): Boolean {
+                            // SWIPE FIX: GestureDetector runs FIRST, LinkMovementMethod runs SECOND.
+                            // Fling = chapter change. Tap on link = verse. Scroll = scroll. No fight.
+                            if (gestureDetector.onTouchEvent(event)) return true
+                            return super.onTouchEvent(event)
+                        }
+                    }.apply {
                         setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
                         setLineSpacing(0f, 1.45f)
                         setTextColor(textColor.toArgb())
                         setPadding(padPx, 0, padPx, bottomPx)
                         isVerticalScrollBarEnabled = true
-                        scrollBarStyle = TextView.SCROLLBARS_INSIDE_OVERLAY
+                        scrollBarStyle = SCROLLBARS_INSIDE_OVERLAY
+                        // Links still work, but TextView handles scrolling natively
                         movementMethod = object : LinkMovementMethod() {
                             override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
                                 if (event.action == MotionEvent.ACTION_UP) {
@@ -172,23 +191,30 @@ fun OpenEWContent(
                                 return super.onTouchEvent(widget, buffer, event)
                             }
                         }
-                        var downX = 0f
-                        var downY = 0f
-                        setOnTouchListener { _, event ->
-                            when (event.action) {
-                                MotionEvent.ACTION_DOWN -> { downX = event.x; downY = event.y }
-                                MotionEvent.ACTION_UP -> {
-                                    val dx = event.x - downX
-                                    val dy = event.y - downY
-                                    if (abs(dx) > 150 && abs(dx) > abs(dy) * 1.5f) {
-                                        if (dx < 0) currentOnNext() else currentOnPrev()
-                                        return@setOnTouchListener true
-                                    }
-                                }
-                            }
-                            false
-                        }
                     }
+
+                    gestureDetector = GestureDetector(ctx, object : GestureDetector.SimpleOnGestureListener() {
+                        override fun onDown(e: MotionEvent): Boolean = true
+                        override fun onFling(
+                            e1: MotionEvent?, e2: MotionEvent,
+                            velocityX: Float, velocityY: Float
+                        ): Boolean {
+                            if (e1 == null) return false
+                            val dx = e2.x - e1.x
+                            val dy = e2.y - e1.y
+                            // Must be mostly horizontal + fast + far enough
+                            if (kotlin.math.abs(dx) > swipePx &&
+                                kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.5f &&
+                                kotlin.math.abs(velocityX) > 600
+                            ) {
+                                if (dx < 0) currentOnNext() else currentOnPrev()
+                                return true
+                            }
+                            return false
+                        }
+                    })
+
+                    textView
                 },
                 update = { textView ->
                     if (textView.tag !== goldSpanned) {
