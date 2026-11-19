@@ -28,16 +28,57 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.database.VerseSearchResult
+
+// MAX: Extracted row = Compose can SKIP unchanged results when you type.
+// Before: Card was inline in items() = typing 1 letter recomposed ALL visible results
+@Composable
+private fun SearchResultRow(
+    result: VerseSearchResult,
+    bookName: String,
+    cardColor: Color,
+    gold: Color,
+    textColor: Color,
+    fontSizeSp: TextUnit,
+    lineHeight: TextUnit,
+    onOpenVerse: (book: String, chapter: Int, verse: Int) -> Unit,
+) {
+    Card(
+        onClick = { onOpenVerse(bookName, result.chapter, result.verse) },
+        colors = CardDefaults.cardColors(containerColor = cardColor),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+            Text(
+                text = "$bookName ${result.chapter}:${result.verse}",
+                color = gold,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = result.text,
+                color = textColor,
+                fontSize = fontSizeSp,
+                lineHeight = lineHeight,
+                softWrap = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -52,9 +93,39 @@ fun SearchContent(
     onFilterChange: (String) -> Unit,
     onOpenVerse: (book: String, chapter: Int, verse: Int) -> Unit
 ) {
-    val filters = listOf("All", "New Testament", "Gospel", "Old Testament", "Prophecy")
+    // MAX: Was listOf() allocated on every keystroke
+    val filters = remember { listOf("All", "New Testament", "Gospel", "Old Testament", "Prophecy") }
     val keyboard = LocalSoftwareKeyboardController.current
     val effectiveFontSize = fontSize.coerceAtLeast(14f)
+    val fontSizeSp = effectiveFontSize.sp
+    val lineHeight = (effectiveFontSize + 8).sp
+
+    // MAX: Colors cached, not recreated on every keystroke
+    // Before: OutlinedTextFieldDefaults.colors(...) + copy(alpha) created ~12 Color objects per recomposition
+    val searchBoxBg = remember { Color(0xFF1B2A4A) }
+    val searchBoxBorder = remember { Color(0xFF2E426E) }
+    val placeholderColor = remember { Color.White.copy(alpha = 0.6f) }
+    val textFieldColors = remember(gold) {
+        OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = searchBoxBg,
+            unfocusedContainerColor = searchBoxBg,
+            disabledContainerColor = searchBoxBg,
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color.White,
+            cursorColor = gold,
+            focusedBorderColor = gold,
+            unfocusedBorderColor = searchBoxBorder,
+            focusedPlaceholderColor = placeholderColor,
+            unfocusedPlaceholderColor = placeholderColor
+        )
+    }
+    val cardColor = remember(textColor) { textColor.copy(alpha = 0.06f) }
+    val hintColor = remember(textColor) { textColor.copy(alpha = 0.6f) }
+    // MAX: Book names cached per result list. Before: BookCatalog.name() called 2x per row per recomposition (title + onClick)
+    // For 50 results = 100 lookups per keystroke
+    val bookNames = remember(verseResults) {
+        verseResults.associate { it.bookId to BookCatalog.name(it.bookId) }
+    }
 
     Column(
         modifier = Modifier
@@ -63,28 +134,16 @@ fun SearchContent(
             .clipToBounds()
             .padding(horizontal = 16.dp)
     ) {
-        // DARK BLUE SEARCH BOX
         OutlinedTextField(
             value = searchQuery,
             onValueChange = onQueryChange,
-            placeholder = { Text("Search the Bible...", color = Color.White.copy(alpha = 0.6f)) },
+            placeholder = { Text("Search the Bible...", color = placeholderColor) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             shape = RoundedCornerShape(16.dp),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = Color(0xFF1B2A4A),
-                unfocusedContainerColor = Color(0xFF1B2A4A),
-                disabledContainerColor = Color(0xFF1B2A4A),
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
-                cursorColor = gold,
-                focusedBorderColor = gold,
-                unfocusedBorderColor = Color(0xFF2E426E),
-                focusedPlaceholderColor = Color.White.copy(alpha = 0.6f),
-                unfocusedPlaceholderColor = Color.White.copy(alpha = 0.6f)
-            ),
+            colors = textFieldColors,
             trailingIcon = {
                 if (searchQuery.isNotEmpty()) {
                     IconButton(onClick = { onQueryChange("") }) {
@@ -96,7 +155,6 @@ fun SearchContent(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // GRID - NOT SLIDING
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -114,51 +172,32 @@ fun SearchContent(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // No hint - only placeholder is enough
         if (searchQuery.isNotBlank()) {
             if (verseResults.isEmpty()) {
-                Text("No results found.", color = textColor.copy(alpha = 0.6f), fontSize = 14.sp)
+                Text("No results found.", color = hintColor, fontSize = 14.sp)
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(bottom = 16.dp)
                 ) {
+                    // MAX: Key = Int, not String. Before: "${book}-${chapter}-${verse}" = new String per row per keystroke
+                    // bookId (1-66) * 10M + chapter * 10k + verse = unique Int, 0 allocation
                     items(
                         verseResults,
-                        key = { "${it.bookId}-${it.chapter}-${it.verse}" },
+                        key = { it.bookId * 10_000_000 + it.chapter * 10_000 + it.verse },
                         contentType = { "verse" }
                     ) { result ->
-                        Card(
-                            onClick = {
-                                onOpenVerse(
-                                    BookCatalog.name(result.bookId),
-                                    result.chapter,
-                                    result.verse
-                                )
-                            },
-                            colors = CardDefaults.cardColors(containerColor = textColor.copy(alpha = 0.06f)),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                                Text(
-                                    text = "${BookCatalog.name(result.bookId)} ${result.chapter}:${result.verse}",
-                                    color = gold,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = result.text,
-                                    color = textColor,
-                                    fontSize = effectiveFontSize.sp,
-                                    lineHeight = (effectiveFontSize + 8).sp,
-                                    softWrap = true,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            }
-                        }
+                        SearchResultRow(
+                            result = result,
+                            bookName = bookNames[result.bookId] ?: "",
+                            cardColor = cardColor,
+                            gold = gold,
+                            textColor = textColor,
+                            fontSizeSp = fontSizeSp,
+                            lineHeight = lineHeight,
+                            onOpenVerse = onOpenVerse
+                        )
                     }
                 }
             }
