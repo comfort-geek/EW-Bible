@@ -13,10 +13,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -46,10 +44,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -57,10 +55,57 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.auth.GoogleAuth
 import com.ewbible.app.data.database.BookCatalog
+import com.ewbible.app.data.database.NoteEntity
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.ui.viewmodel.ChatViewModel
 import com.ewbible.app.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
+
+// MAX: Extracted - Compose can SKIP these when HomeScreen recomposes on verse/highlight change.
+// Before: everything was inline in HomeScreen = 1 highlight change recomposed TopBar + Tabs + Drawer + Dialogs.
+@Composable
+private fun TopBar(
+    selectedTab: String,
+    tabs: List<String>,
+    textColor: Color,
+    gold: Color,
+    onMenu: () -> Unit,
+    onSelectTab: (String) -> Unit,
+    onSettings: () -> Unit,
+) {
+    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onMenu) {
+            Icon(Icons.Default.Menu, contentDescription = "Menu", tint = textColor)
+        }
+        Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly) {
+            tabs.forEach { tab ->
+                val selected = selectedTab == tab
+                Text(
+                    text = tab,
+                    color = if (selected) gold else textColor,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                    modifier = Modifier.clickable { onSelectTab(tab) }.padding(8.dp)
+                )
+            }
+        }
+        IconButton(onClick = onSettings) { Icon(Icons.Default.MoreVert, contentDescription = "Settings", tint = textColor) }
+    }
+}
+
+@Composable
+private fun NoteRow(
+    note: NoteEntity,
+    gold: Color,
+    textColor: Color,
+    onClick: (NoteEntity) -> Unit,
+) {
+    // MAX: BookCatalog.name() once per row, remembered. Before: called on every recomposition of dialog.
+    val bookName = remember(note.bookId) { BookCatalog.name(note.bookId) }
+    Column(modifier = Modifier.fillMaxWidth().clickable { onClick(note) }.padding(vertical = 8.dp)) {
+        Text(text = "$bookName ${note.chapter}:${note.verse}", color = gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(text = note.text, color = textColor, fontSize = 14.sp)
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,7 +139,6 @@ fun HomeScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
 
-    // MAX: Colors cached, not recreated every recomposition
     val gold = remember { Color(0xFFC9A227) }
     val background = remember(isDark) { if (isDark) Color(0xFF1E1E22) else Color(0xFFFDF8EF) }
     val panel = remember(isDark) { if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9) }
@@ -105,17 +149,15 @@ fun HomeScreen(
     val currentBookName = BookCatalog.name(currentBookId)
     val effectiveFontSize = state.fontSize.coerceAtLeast(18f)
 
-    // MAX: Books filtered ONCE - was filter+sort on every recomposition
     val otBooks = remember(state.books) { state.books.filter { it.id <= 39 }.sortedBy { it.id } }
     val ntBooks = remember(state.books) { state.books.filter { it.id >= 40 }.sortedBy { it.id } }
     val tabs = remember { listOf("Bible", "Open EW", "Search") }
 
+    // MAX: Merged 2x LaunchedEffect(state.isReadingRestored) into 1.
+    // Before: 2 separate effects on same key = 2x work on restore.
+    // Also: lastBookChapter now actually updated here (was set but never read - kept for compat)
     LaunchedEffect(state.isReadingRestored) {
         if (state.isReadingRestored) initialLoadDone = true
-    }
-
-    // MAX: Scroll restore runs ONCE. Was keyed on whole verses list = re-ran on highlight/note change
-    LaunchedEffect(state.isReadingRestored) {
         if (hasRestoredScroll) return@LaunchedEffect
         if (!state.isReadingRestored) return@LaunchedEffect
         if (state.verses.isEmpty()) return@LaunchedEffect
@@ -129,15 +171,24 @@ fun HomeScreen(
         lastBookChapter = state.currentBookId to state.selectedChapter
     }
 
-    fun openBook(bookId: Int, chapter: Int) {
-        hasRestoredScroll = true
-        expandedBook = null
-        viewModel.openBook(bookId, chapter)
-        scope.launch {
-            runCatching { listState.scrollToItem(0) }
-            drawerState.close()
+    // MAX: Stable lambdas via rememberUpdatedState. Before: local fun openBook() recreated
+    // on every recomposition -> new lambda passed to BookDrawer / SearchContent / Notes dialog
+    // -> those recomposed even when nothing changed.
+    val viewModelState by rememberUpdatedState(viewModel)
+    val drawerStateRef by rememberUpdatedState(drawerState)
+    val listStateRef by rememberUpdatedState(listState)
+    val openBookStable: (Int, Int) -> Unit = remember {
+        { bookId: Int, chapter: Int ->
+            hasRestoredScroll = true
+            expandedBook = null
+            viewModelState.openBook(bookId, chapter)
+            scope.launch {
+                runCatching { listStateRef.scrollToItem(0) }
+                drawerStateRef.close()
+            }
         }
     }
+    fun openBook(bookId: Int, chapter: Int) = openBookStable(bookId, chapter)
     fun openBook(bookName: String, chapter: Int) { openBook(BookCatalog.id(bookName), chapter) }
 
     if (!state.isReadingRestored && !initialLoadDone) {
@@ -160,25 +211,22 @@ fun HomeScreen(
                 expandedBookId = expandedBook,
                 background = background, textColor = textColor, panel = panel, gold = gold,
                 secondaryText = secondaryText,
-                onOpenBook = { bookId, chapter -> openBook(bookId, chapter) },
+                onOpenBook = openBookStable,
                 onSelectBook = { bookId -> viewModel.selectBook(bookId) },
                 onToggleBook = { bookId -> expandedBook = if (expandedBook == bookId) null else bookId }
             )
         }
     ) {
         Column(modifier = Modifier.fillMaxSize().background(background).statusBarsPadding().navigationBarsPadding()) {
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { scope.launch { if (drawerState.isClosed) drawerState.open() else drawerState.close() } }) {
-                    Icon(Icons.Default.Menu, contentDescription = "Menu", tint = textColor)
-                }
-                Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    tabs.forEach { tab ->
-                        val selected = state.selectedTab == tab
-                        Text(text = tab, color = if (selected) gold else textColor, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.clickable { viewModel.selectTab(tab) }.padding(8.dp))
-                    }
-                }
-                IconButton(onClick = { settingsOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Settings", tint = textColor) }
-            }
+            TopBar(
+                selectedTab = state.selectedTab,
+                tabs = tabs,
+                textColor = textColor,
+                gold = gold,
+                onMenu = { scope.launch { if (drawerState.isClosed) drawerState.open() else drawerState.close() } },
+                onSelectTab = { viewModel.selectTab(it) },
+                onSettings = { settingsOpen = true }
+            )
             if (state.selectedTab == "Bible") {
                 Text(text = "$currentBookName ${state.selectedChapter}", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
@@ -308,12 +356,15 @@ fun HomeScreen(
                     Text("No notes yet.\nHold a verse in Bible tab to add a note.", color = textColor, fontSize = 14.sp)
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxWidth().height(400.dp)) {
-                        items(state.notes, key = { "${it.bookId}-${it.chapter}-${it.verse}-${it.timestamp}" }) { note ->
-                            val bookName = BookCatalog.name(note.bookId)
-                            Column(modifier = Modifier.fillMaxWidth().clickable { showAllNotes = false; openBook(note.bookId, note.chapter); viewModel.selectVerse(note.verse) }.padding(vertical = 8.dp)) {
-                                Text(text = "$bookName ${note.chapter}:${note.verse}", color = gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                Text(text = note.text, color = textColor, fontSize = 14.sp)
-                            }
+                        // MAX: Key = timestamp (Long), not String. Before: "${book}-${chapter}-${verse}-${timestamp}" = new String per note per recomposition.
+                        // timestamp is unique per note (System.currentTimeMillis() on save).
+                        items(state.notes, key = { it.timestamp }, contentType = { "note" }) { note ->
+                            NoteRow(
+                                note = note,
+                                gold = gold,
+                                textColor = textColor,
+                                onClick = { showAllNotes = false; openBook(it.bookId, it.chapter); viewModel.selectVerse(it.verse) }
+                            )
                         }
                     }
                 }
