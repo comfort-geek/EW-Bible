@@ -1,95 +1,177 @@
 package com.ewbible.app.data.database
 
 import android.util.LruCache
-import java.io.ByteArrayInputStream
-import java.util.zip.InflaterInputStream
+import java.util.zip.Inflater
 
 object CommentaryHelper {
 
-    // FIXED: Pre-compile Regex ONCE - was recompiling 13 Regex on every call
-    private val H_OPEN = Regex("<h[1-4][^>]*>")
-    private val H_CLOSE = Regex("</h[1-4]>")
-    private val P_OPEN = Regex("<p[^>]*>")
-    private val P_CLOSE = Regex("</p>")
-    private val LI_OPEN = Regex("<li[^>]*>")
-    private val TAG = Regex("<[^>]+>")
-    private val SPACES = Regex("[ \\t]+")
-    private val NEWLINES = Regex("\\n{3,}")
+    // MAX: No Regex anymore. Regex was doing 13 full passes over the string.
+    // This does 1 pass, char by char, and stops at 4000 chars.
+    private val cacheByHash = LruCache<Int, String>(40)
+    private val cacheByRef = LruCache<Int, String>(40)
 
-    // FIXED: Cache - commentary is re-opened constantly, decompress is expensive.
-    // Key = bookId*1000 + chapter is passed by caller via cleanCached(), or hash for clean()
-    // 20 entries ~ 20 * 4KB = ~80KB, tiny
-    private val cache = LruCache<Int, String>(20)
+    // MAX: Reuse buffers per-thread, no new ByteArray(8192) on every call.
+    // Inflater is faster than InflaterInputStream - no stream wrapper.
+    private val inflaterBuffer = ThreadLocal.withInitial { ByteArray(8192) }
+    private val outBuffer = ThreadLocal.withInitial { ByteArray(131072) }
 
-    // 1. Decompress zlib BLOB -> HTML string, capped so a corrupt/huge BLOB can't OOM
     fun decompress(compressed: ByteArray?): String {
         if (compressed == null || compressed.isEmpty()) return ""
         return try {
-            // FIXED: read max 128KB, not unlimited
-            InflaterInputStream(ByteArrayInputStream(compressed)).use { input ->
-                val buffer = ByteArray(8192)
-                val out = StringBuilder(8192)
-                var total = 0
-                while (total < 131072) {
-                    val n = input.read(buffer)
-                    if (n <= 0) break
-                    out.append(String(buffer, 0, n, Charsets.UTF_8))
-                    total += n
-                }
-                out.toString()
+            val inflater = Inflater()
+            inflater.setInput(compressed)
+            val out = outBuffer.get()!!
+            val buf = inflaterBuffer.get()!!
+            var total = 0
+            while (!inflater.finished() && total < 131072) {
+                val n = inflater.inflate(buf)
+                if (n <= 0) break
+                val copy = minOf(n, 131072 - total)
+                System.arraycopy(buf, 0, out, total, copy)
+                total += copy
+                if (inflater.needsInput()) break
             }
+            inflater.end()
+            // Decode once
+            String(out, 0, total, Charsets.UTF_8)
         } catch (e: Exception) {
             ""
         }
     }
 
-    // 2. HTML -> clean plain text for Gemini (no tags)
+    // MAX: 1 pass, no Regex, no 13 intermediate Strings.
+    // Old: html.replace().replace().replace() x13 = 13 new Strings.
+    // New: 1 StringBuilder, stops as soon as we have 4000 clean chars.
     fun htmlToPlainText(html: String): String {
         if (html.isEmpty()) return ""
-        // FIXED: Use pre-compiled Regex, single pass where possible
-        return html
-            .replace(H_OPEN, "\n\n")
-            .replace(H_CLOSE, "\n")
-            .replace(P_OPEN, "\n")
-            .replace(P_CLOSE, "\n")
-            .replace(LI_OPEN, "\n- ")
-            .replace(TAG, " ")
-            .replace("&nbsp;", " ")
-            .replace("&amp;", "&")
-            .replace("&quot;", "\"")
-            .replace("&#8217;", "'")
-            .replace("&#8220;", "\"")
-            .replace("&#8221;", "\"")
-            .replace(SPACES, " ")
-            .replace(NEWLINES, "\n\n")
-            .trim()
-            .take(4000)
+        val out = StringBuilder(4000)
+        var i = 0
+        val len = html.length
+        var lastWasSpace = true // start trimmed
+
+        fun appendSpace() {
+            if (!lastWasSpace && out.length < 4000) {
+                out.append(' ')
+                lastWasSpace = true
+            }
+        }
+        fun appendNewline(count: Int) {
+            // Collapse to max 2 newlines, no leading newlines
+            if (out.isEmpty()) return
+            var existing = 0
+            var j = out.length - 1
+            while (j >= 0 && out[j] == '\n') { existing++; j-- }
+            val toAdd = (count - existing).coerceAtLeast(0)
+            repeat(toAdd) { if (out.length < 4000) out.append('\n') }
+            lastWasSpace = true
+        }
+
+        while (i < len && out.length < 4000) {
+            val c = html[i]
+            when {
+                c == '<' -> {
+                    // Find end of tag
+                    val end = html.indexOf('>', i)
+                    if (end == -1) break
+                    val tag = html.substring(i + 1, end).trim().lowercase()
+                    when {
+                        tag.startsWith("h1") || tag.startsWith("h2") ||
+                        tag.startsWith("h3") || tag.startsWith("h4") -> {
+                            if (!tag.startsWith("/")) appendNewline(2) else appendNewline(1)
+                        }
+                        tag.startsWith("p") -> appendNewline(1)
+                        tag.startsWith("/p") -> appendNewline(1)
+                        tag.startsWith("li") -> {
+                            appendNewline(1)
+                            if (out.length < 3998) { out.append("- "); lastWasSpace = true }
+                        }
+                        tag.startsWith("br") -> appendNewline(1)
+                        else -> appendSpace() // any other tag = space
+                    }
+                    i = end + 1
+                }
+                c == '&' -> {
+                    val end = html.indexOf(';', i)
+                    if (end != -1 && end - i < 10) {
+                        val ent = html.substring(i, end + 1)
+                        val rep = when (ent) {
+                            "&nbsp;" -> " "
+                            "&amp;" -> "&"
+                            "&quot;" -> "\""
+                            "&lt;" -> "<"
+                            "&gt;" -> ">"
+                            "&#8217;" -> "'"
+                            "&#8220;", "&#8221;" -> "\""
+                            "&#8211;", "&#8212;" -> "-"
+                            else -> null
+                        }
+                        if (rep != null) {
+                            if (rep == " ") appendSpace() else {
+                                if (out.length < 4000) out.append(rep)
+                                lastWasSpace = false
+                            }
+                            i = end + 1
+                            continue
+                        }
+                        // Unknown numeric entity &#123;
+                        if (ent.startsWith("&#")) {
+                            val num = ent.substring(2, ent.length - 1).toIntOrNull()
+                            if (num != null && num in 32..10000) {
+                                if (out.length < 4000) out.append(num.toChar())
+                                lastWasSpace = false
+                                i = end + 1
+                                continue
+                            }
+                        }
+                    }
+                    // Not an entity, keep &
+                    if (out.length < 4000) out.append(c)
+                    lastWasSpace = false
+                    i++
+                }
+                c == ' ' || c == '\t' || c == '\r' -> {
+                    appendSpace()
+                    i++
+                }
+                c == '\n' -> {
+                    appendNewline(1)
+                    i++
+                }
+                else -> {
+                    if (out.length < 4000) out.append(c)
+                    lastWasSpace = false
+                    i++
+                }
+            }
+        }
+        // Trim trailing spaces/newlines without new String copy if possible
+        var endLen = out.length
+        while (endLen > 0 && (out[endLen - 1] == ' ' || out[endLen - 1] == '\n')) endLen--
+        return out.substring(0, endLen)
     }
 
-    // 3. One call: DB bytes -> clean text for Gemini
-    // FIXED: Added clean() - this is what ChatViewModel actually calls
     fun clean(compressed: ByteArray?): String = getCleanCommentary(compressed)
 
     fun getCleanCommentary(compressed: ByteArray?): String {
         if (compressed == null || compressed.isEmpty()) return ""
-        // FIXED: Cache by content hash - same chapter opened twice = 0 decompress
         val key = compressed.contentHashCode()
-        cache.get(key)?.let { return it }
+        cacheByHash.get(key)?.let { return it }
         val clean = htmlToPlainText(decompress(compressed))
-        cache.put(key, clean)
+        cacheByHash.put(key, clean)
         return clean
     }
 
-    // 4. BEST for performance: call this from ViewModel with bookId/chapter
-    // Avoids hashing 50KB ByteArray every time, uses cheap Int key
     fun cleanCached(bookId: Int, chapter: Int, compressed: ByteArray?): String {
         if (compressed == null || compressed.isEmpty()) return ""
         val key = bookId * 1000 + chapter
-        cache.get(key)?.let { return it }
+        cacheByRef.get(key)?.let { return it }
         val clean = htmlToPlainText(decompress(compressed))
-        cache.put(key, clean)
+        cacheByRef.put(key, clean)
         return clean
     }
 
-    fun clearCache() = cache.evictAll()
+    fun clearCache() {
+        cacheByHash.evictAll()
+        cacheByRef.evictAll()
+    }
 }
