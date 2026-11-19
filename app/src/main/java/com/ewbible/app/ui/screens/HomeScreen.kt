@@ -93,19 +93,29 @@ fun HomeScreen(
     var initialLoadDone by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
-    val gold = Color(0xFFC9A227)
-    val background = if (isDark) Color(0xFF1E1E22) else Color(0xFFFDF8EF)
-    val panel = if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9)
-    val textColor = if (isDark) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
+
+    // MAX: Colors cached, not recreated every recomposition
+    val gold = remember { Color(0xFFC9A227) }
+    val background = remember(isDark) { if (isDark) Color(0xFF1E1E22) else Color(0xFFFDF8EF) }
+    val panel = remember(isDark) { if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9) }
+    val textColor = remember(isDark) { if (isDark) Color(0xFFF5F0E6) else Color(0xFF1E1E22) }
+    val secondaryText = remember(textColor) { textColor.copy(alpha = 0.6f) }
+
     val currentBookId = state.currentBookId
     val currentBookName = BookCatalog.name(currentBookId)
     val effectiveFontSize = state.fontSize.coerceAtLeast(18f)
+
+    // MAX: Books filtered ONCE - was filter+sort on every recomposition
+    val otBooks = remember(state.books) { state.books.filter { it.id <= 39 }.sortedBy { it.id } }
+    val ntBooks = remember(state.books) { state.books.filter { it.id >= 40 }.sortedBy { it.id } }
+    val tabs = remember { listOf("Bible", "Open EW", "Search") }
 
     LaunchedEffect(state.isReadingRestored) {
         if (state.isReadingRestored) initialLoadDone = true
     }
 
-    LaunchedEffect(state.isReadingRestored, state.verses, savedScrollIndex, savedScrollOffset) {
+    // MAX: Scroll restore runs ONCE. Was keyed on whole verses list = re-ran on highlight/note change
+    LaunchedEffect(state.isReadingRestored) {
         if (hasRestoredScroll) return@LaunchedEffect
         if (!state.isReadingRestored) return@LaunchedEffect
         if (state.verses.isEmpty()) return@LaunchedEffect
@@ -142,14 +152,14 @@ fun HomeScreen(
         gesturesEnabled = state.selectedTab == "Bible",
         drawerContent = {
             BookDrawer(
-                otBookEntities = state.books.filter { it.id <= 39 }.sortedBy { it.id },
-                ntBookEntities = state.books.filter { it.id >= 40 }.sortedBy { it.id },
+                otBookEntities = otBooks,
+                ntBookEntities = ntBooks,
                 chapterCounts = state.chapterCounts,
                 selectedBookId = currentBookId,
                 selectedChapter = state.selectedChapter,
                 expandedBookId = expandedBook,
                 background = background, textColor = textColor, panel = panel, gold = gold,
-                secondaryText = textColor.copy(alpha = 0.6f),
+                secondaryText = secondaryText,
                 onOpenBook = { bookId, chapter -> openBook(bookId, chapter) },
                 onSelectBook = { bookId -> viewModel.selectBook(bookId) },
                 onToggleBook = { bookId -> expandedBook = if (expandedBook == bookId) null else bookId }
@@ -162,7 +172,7 @@ fun HomeScreen(
                     Icon(Icons.Default.Menu, contentDescription = "Menu", tint = textColor)
                 }
                 Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    listOf("Bible", "Open EW", "Search").forEach { tab ->
+                    tabs.forEach { tab ->
                         val selected = state.selectedTab == tab
                         Text(text = tab, color = if (selected) gold else textColor, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.clickable { viewModel.selectTab(tab) }.padding(8.dp))
                     }
@@ -302,7 +312,6 @@ fun HomeScreen(
                             val bookName = BookCatalog.name(note.bookId)
                             Column(modifier = Modifier.fillMaxWidth().clickable { showAllNotes = false; openBook(note.bookId, note.chapter); viewModel.selectVerse(note.verse) }.padding(vertical = 8.dp)) {
                                 Text(text = "$bookName ${note.chapter}:${note.verse}", color = gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                // FIXED: NoteEntity field is `text`, not `noteText`
                                 Text(text = note.text, color = textColor, fontSize = 14.sp)
                             }
                         }
