@@ -22,6 +22,12 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.composed
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -41,29 +47,34 @@ import kotlin.math.abs
 private fun Modifier.swipeChapter(
     onNextChapter: () -> Unit,
     onPreviousChapter: () -> Unit
-): Modifier = pointerInput(onNextChapter, onPreviousChapter) {
-    var totalDx = 0f
-    var totalDy = 0f
-    detectHorizontalDragGestures(
-        onHorizontalDrag = { change, delta ->
-            totalDx += delta
-            totalDy += abs(change.position.y - change.previousPosition.y)
-            // Don't consume vertical scroll - let LazyColumn handle it
-            if (abs(totalDx) < abs(totalDy) * 1.5f) {
+): Modifier = composed {
+    // FIXED: Lambdas via rememberUpdatedState - pointerInput never restarts mid-drag
+    val nextState by rememberUpdatedState(onNextChapter)
+    val prevState by rememberUpdatedState(onPreviousChapter)
+    pointerInput(Unit) {
+        var totalDx = 0f
+        var totalDy = 0f
+        detectHorizontalDragGestures(
+            onHorizontalDrag = { change, delta ->
+                totalDx += delta
+                totalDy += abs(change.position.y - change.previousPosition.y)
+                // Don't consume vertical scroll - let LazyColumn handle it
+                if (abs(totalDx) < abs(totalDy) * 1.5f) {
+                    totalDx = 0f
+                    totalDy = 0f
+                }
+            },
+            onDragEnd = {
+                // 80dp in px, not 150px - 150px felt dead on small phones
+                if (abs(totalDx) > 80 * density) {
+                    if (totalDx < 0) nextState() else prevState()
+                }
                 totalDx = 0f
                 totalDy = 0f
-            }
-        },
-        onDragEnd = {
-            // 80dp in px, not 150px - 150px felt dead on small phones
-            if (abs(totalDx) > 80 * density) {
-                if (totalDx < 0) onNextChapter() else onPreviousChapter()
-            }
-            totalDx = 0f
-            totalDy = 0f
-        },
-        onDragCancel = { totalDx = 0f; totalDy = 0f }
-    )
+            },
+            onDragCancel = { totalDx = 0f; totalDy = 0f }
+        )
+    }
 }
 
 @Composable
@@ -136,21 +147,23 @@ fun BibleContent(
     val versesToShow = versesList
 
     // PATCH: Only show summary if it belongs to THIS chapter.
-    // ViewModel holds old summary while new one loads - showing it under new verses = height jump.
-    // If it doesn't match, show nothing (loading spacer) until correct summary arrives.
     val summaryToShow = summary?.takeIf { it.bookId == safeBookId && it.chapter == safeChapter }
 
     // PATCH: Only scroll when verses actually belong to this chapter.
-    // Before: currentKey changed -> scroll to top on OLD list -> new list arrives -> jump again.
-    // Now: wait for matching verses, then scroll once.
     val versesMatchKey = versesToShow.isEmpty() ||
         (versesToShow.first().bookId == safeBookId && versesToShow.first().chapter == safeChapter)
 
+    // FIXED: Only scroll to top on chapter CHANGE, not on first load (resume reading)
+    var lastKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+
     LaunchedEffect(currentKey, versesMatchKey) {
         if (versesMatchKey) {
-            if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
-                listState.scrollToItem(0)
+            if (lastKey != null && lastKey != currentKey) {
+                if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+                    listState.scrollToItem(0)
+                }
             }
+            lastKey = currentKey
         }
     }
 
