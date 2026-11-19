@@ -34,7 +34,8 @@ object CrashReporter {
         appContext?.let { recordNonFatal(it, "Coroutine", throwable) }
     }
 
-    @Volatile private var appContext: Context? = null
+    @PublishedApi
+    @Volatile internal var appContext: Context? = null
     @Volatile private var isInstalled = false
 
     fun breadcrumb(context: Context, message: String) {
