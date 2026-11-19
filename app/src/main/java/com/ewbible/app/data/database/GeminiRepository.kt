@@ -1,4 +1,4 @@
-package com.ewbible.app.data
+package com.ewbible.app.database
 
 import com.ewbible.app.BuildConfig
 import android.graphics.Bitmap
