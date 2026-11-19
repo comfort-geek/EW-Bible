@@ -2,6 +2,7 @@ package com.ewbible.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,8 +35,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,16 +69,24 @@ fun SettingsPanel(
     onSignOut: () -> Unit,
     onOpenAiChat: () -> Unit = {},
 ) {
+    // FIXED: Moved above early-return + Saveable, so it survives open/close + rotation
+    var resourcesExpanded by rememberSaveable { mutableStateOf(false) }
+    // FIXED: Local slider state - only commit once on release, not 50x per drag
+    var sliderValue by remember(fontSize) { mutableFloatStateOf(fontSize.coerceIn(12f, 24f)) }
+
     if (!visible) return
 
-    var resourcesExpanded by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.4f))
-            .clickable { onClose() },
+            // FIXED: No ripple on scrim, no indication
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) { onClose() },
         contentAlignment = Alignment.TopEnd
     ) {
         Column(
@@ -83,7 +94,11 @@ fun SettingsPanel(
                 .fillMaxHeight()
                 .fillMaxWidth(0.85f)
                 .background(background)
-                .clickable(enabled = false) {}
+                // FIXED: Actually consume clicks, don't let them fall through to scrim
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {}
                 .verticalScroll(scrollState)
                 .padding(20.dp)
         ) {
@@ -144,7 +159,6 @@ fun SettingsPanel(
             }
 
             if (resourcesExpanded) {
-                // Ask Gemini - reads your NKJV in the app
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -177,8 +191,9 @@ fun SettingsPanel(
             Spacer(modifier = Modifier.height(16.dp))
             Text("Font Size", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = textColor)
             Slider(
-                value = fontSize,
-                onValueChange = onFontSizeChange,
+                value = sliderValue,
+                onValueChange = { sliderValue = it }, // local only - instant UI, no DataStore spam
+                onValueChangeFinished = { onFontSizeChange(sliderValue) }, // 1 write on release
                 valueRange = 12f..24f
             )
             Spacer(modifier = Modifier.height(16.dp))
