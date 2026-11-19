@@ -12,6 +12,7 @@ import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -26,7 +27,7 @@ data class ChatState(
 )
 
 class ChatViewModel(
-    private val bibleDao: BibleDao, // ONLY DAO NOW - ChatDao deleted
+    private val bibleDao: BibleDao,
     private val geminiRepository: GeminiRepository
 ) : ViewModel() {
 
@@ -37,7 +38,8 @@ class ChatViewModel(
 
     fun loadChats() {
         viewModelScope.launch {
-            val chats = bibleDao.getAllChats()
+            // FIXED: getAllChats() is Flow, use Sync version for List
+            val chats = bibleDao.getAllChatsSync()
             _state.update { it.copy(chats = chats) }
         }
     }
@@ -55,7 +57,8 @@ class ChatViewModel(
 
     fun openChat(chatId: Long) {
         viewModelScope.launch {
-            val messages = bibleDao.getMessages(chatId)
+            // FIXED: getMessages() -> getMessagesForChatSync()
+            val messages = bibleDao.getMessagesForChatSync(chatId)
             _state.update { it.copy(currentChatId = chatId, messages = messages, streamingText = "") }
         }
     }
@@ -84,7 +87,8 @@ class ChatViewModel(
             val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
             bibleDao.insertMessage(userMsg)
 
-            val history = bibleDao.getMessages(chatId)
+            // FIXED: getMessages() -> getMessagesForChatSync()
+            val history = bibleDao.getMessagesForChatSync(chatId)
             _state.update {
                 it.copy(messages = history, isLoading = true, streamingText = "", error = null)
             }
@@ -114,7 +118,8 @@ class ChatViewModel(
             bibleDao.insertMessage(aiMsg)
 
             dailyCountInternal++
-            val updatedMessages = bibleDao.getMessages(chatId)
+            // FIXED: getMessages() -> getMessagesForChatSync()
+            val updatedMessages = bibleDao.getMessagesForChatSync(chatId)
             _state.update {
                 it.copy(
                     messages = updatedMessages,
@@ -136,9 +141,9 @@ class ChatViewModel(
                 val chapter = match.groupValues[2].toIntOrNull() ?: 1
                 val verse = match.groupValues[3].toIntOrNull() ?: 1
                 val bookId = BookCatalog.id(bookName)
-                // FIXED: getVerse returns VerseEntity, take .text
                 val text = bibleDao.getVerse(bookId, chapter, verse)?.text ?: ""
-                val summary = bibleDao.getSummary(bookId, chapter) ?: ""
+                // FIXED: getSummary() returns SummaryEntity?, use .summary field
+                val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
                 return "USER ASKED ABOUT $bookName $chapter:$verse\nNKJV TEXT: $text\nSUMMARY: $summary\n"
             }
 
@@ -146,9 +151,10 @@ class ChatViewModel(
             val chapter = parts.lastOrNull()?.toIntOrNull() ?: 1
             val bookName = parts.dropLast(1).joinToString(" ")
             val bookId = BookCatalog.id(bookName)
-            val chapterText = bibleDao.getChapterText(bookId, chapter).joinToString("\n")
-            val summary = bibleDao.getSummary(bookId, chapter) ?: ""
-            // FIXED: getCommentaryCompressed + Helper, not getCommentary()
+            // FIXED: getChapterText() doesn't exist - use getVerses() Flow .first()
+            val chapterText = bibleDao.getVerses(bookId, chapter).first()
+                .joinToString("\n") { "${it.verse}. ${it.text}" }
+            val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
             val compressed = bibleDao.getCommentaryCompressed(bookId, chapter)
             val commentary = CommentaryHelper.clean(compressed).take(3000)
             return "USER IS READING $bookName $chapter (NKJV):\n$chapterText\n\nSUMMARY: $summary\nCOMMENTARY: $commentary\n"
