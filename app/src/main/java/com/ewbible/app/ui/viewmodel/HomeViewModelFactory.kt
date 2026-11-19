@@ -11,7 +11,8 @@ class HomeViewModelFactory(
     private val dao: BibleDao,
     private val preferences: AppPreferences,
     private val chatDao: ChatDao? = null,
-    private val geminiRepository: GeminiRepository? = null
+    private val geminiRepository: GeminiRepository? = null,
+    private val bibleDao: BibleDao? = null // <-- ADDED
 ) : ViewModelProvider.Factory {
 
     @Suppress("UNCHECKED_CAST")
@@ -22,7 +23,8 @@ class HomeViewModelFactory(
         if (modelClass.isAssignableFrom(ChatViewModel::class.java)) {
             requireNotNull(chatDao) { "ChatDao not provided to factory" }
             requireNotNull(geminiRepository) { "GeminiRepository not provided to factory" }
-            return ChatViewModel(chatDao, geminiRepository) as T
+            requireNotNull(bibleDao) { "BibleDao not provided to factory" }
+            return ChatViewModel(chatDao, geminiRepository, bibleDao) as T // <-- FIXED: 3 params
         }
         throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
     }
