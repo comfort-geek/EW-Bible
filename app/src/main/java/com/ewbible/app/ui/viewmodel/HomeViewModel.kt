@@ -50,7 +50,6 @@ data class HomeUiState(
     val userEmail: String = "",
     val scrollRestoreKey: Int = 0,
     val showNoteDialog: Boolean = false,
-    // STEP 2: NEW - controls Ask Gemini panel
     val showAiChat: Boolean = false,
     val currentNoteText: String = "",
     val isReadingRestored: Boolean = false
@@ -69,7 +68,6 @@ class HomeViewModel(
     private val searchQuery = MutableStateFlow("")
     private val searchFilter = MutableStateFlow("All")
     private val showNoteDialogState = MutableStateFlow(false)
-    // STEP 2: NEW
     private val showAiChatState = MutableStateFlow(false)
     private val currentNoteText = MutableStateFlow("")
     private val commentary = MutableStateFlow("")
@@ -173,7 +171,6 @@ class HomeViewModel(
             launch { linkedVerseText.collect { t -> _uiState.update { it.copy(linkedVerseText = t) } } }
             launch { linkedVerseRef.collect { r -> _uiState.update { it.copy(linkedVerseRef = r) } } }
             launch { showNoteDialogState.collect { b -> _uiState.update { it.copy(showNoteDialog = b) } } }
-            // STEP 2: NEW
             launch { showAiChatState.collect { b -> _uiState.update { it.copy(showAiChat = b) } } }
             launch { currentNoteText.collect { t -> _uiState.update { it.copy(currentNoteText = t) } } }
             launch { isReadingRestored.collect { b -> _uiState.update { it.copy(isReadingRestored = b) } } }
@@ -470,11 +467,8 @@ class HomeViewModel(
     }
     fun showNoteDialog() { if (selectedVerse.value == null) return; showNoteDialogState.value = true }
     fun dismissNoteDialog() { showNoteDialogState.value = false }
-
-    // STEP 2: Ask Gemini open / close
     fun openAiChat() { showAiChatState.value = true }
     fun closeAiChat() { showAiChatState.value = false }
-
     fun saveNote(noteText: String) {
         val verseNum = selectedVerse.value ?: return
         viewModelScope.launch {
