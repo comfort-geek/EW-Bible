@@ -176,9 +176,9 @@ class HomeViewModel(
                     .distinctUntilChanged()
                     .collectLatest { (bookId, chapter) ->
                         loadSummary(bookId, chapter)
-                        if (selectedTab.value == "Open EW") {
-                            loadCommentary(bookId, chapter)
-                        }
+                        // INSTANT: always preload commentary, even on Bible tab.
+                        // So when you tap Open EW, it's already in cache.
+                        loadCommentary(bookId, chapter)
                     }
             }
             launch {
@@ -188,6 +188,7 @@ class HomeViewModel(
             }
 
             loadSummary(selectedBookId.value, selectedChapter.value)
+            loadCommentary(selectedBookId.value, selectedChapter.value)
         }
 
         viewModelScope.launch {
@@ -297,6 +298,7 @@ class HomeViewModel(
         saveReadingProgress()
     }
     fun openBook(bookName: String, chapter: Int) = openBook(BookCatalog.id(bookName), chapter)
+
     fun selectTab(tab: String) {
         selectedTab.value = tab
     }
