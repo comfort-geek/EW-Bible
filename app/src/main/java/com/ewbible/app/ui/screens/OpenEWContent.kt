@@ -5,6 +5,7 @@ import android.text.SpannableString
 import android.text.method.LinkMovementMethod
 import android.text.style.ForegroundColorSpan
 import android.text.style.URLSpan
+import android.util.LruCache
 import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.MotionEvent
@@ -44,24 +45,42 @@ private val BOOK_PATTERN = DISPLAY_NAMES
     .joinToString("|") { Regex.escape(it) }
 private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?(?!\\d)")
 
-// FIXED: Pre-compile - was compiling 7 Regex on every chapter
 private val H1_REGEX = Regex("(?is)<h1[^>]*>.*?</h1>")
 private val H2_6_REGEX = Regex("(?is)<h[2-6][^>]*>(.*?)</h[2-6]>")
 private val TAG_REGEX = Regex("(?i)</?(b|strong|i|em)>")
 private val BOLD_REGEX = Regex("(?i)font-weight\\s*:\\s*(bold|[700-900])\\s*;?")
 private val ITALIC_REGEX = Regex("(?i)font-style\\s*:\\s*italic\\s*;?")
 
+// MAX: Cache parsed Spannable - before: re-parsed 100KB HTML on EVERY recomposition / tab switch
+// Key = book-chapter + hash of html. 10 entries = ~2MB max, avoids re-parse when you go Bible -> Open EW -> Bible -> Open EW
+private val parsedCache = LruCache<String, SpannableString>(10)
+
 private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
     if (html.isBlank()) return ""
     var t = html.trim()
+    // MAX: indexOf, no Regex compile per chapter for book title
     if (t.contains("<body", ignoreCase = true)) {
-        t = t.substringAfter("<body", "").substringAfter(">", "").substringBeforeLast("</body>", t)
+        val bodyStart = t.indexOf('>', t.indexOf("<body", ignoreCase = true))
+        if (bodyStart != -1) t = t.substring(bodyStart + 1)
+        val bodyEnd = t.lastIndexOf("</body>")
+        if (bodyEnd != -1) t = t.substring(0, bodyEnd)
     }
     t = H1_REGEX.replaceFirst(t, "")
-    t = t.replace(
-        Regex("(?is)^\\s*<p[^>]*>\\s*${Regex.escape(bookName)}\\s+$chapter\\s*</p>"),
-        ""
-    )
+    // MAX: No Regex("...${Regex.escape(bookName)}...") compiled per chapter.
+    // Manual: find <p>bookName chapter</p> at start
+    val titleTag = "<p"
+    val pStart = t.indexOf(titleTag, ignoreCase = true)
+    if (pStart != -1 && pStart < 200) {
+        val pEnd = t.indexOf("</p>", pStart, ignoreCase = true)
+        if (pEnd != -1) {
+            val inside = t.substring(pStart, pEnd)
+            // inside = <p>Genesis 1</p> or <p class=..>Genesis 1</p>
+            val textOnly = inside.substringAfter('>').trim()
+            if (textOnly.equals("$bookName $chapter", ignoreCase = true)) {
+                t = t.substring(pEnd + 4)
+            }
+        }
+    }
     t = H2_6_REGEX.replace(t, "<p><b>$1</b></p>")
     t = TAG_REGEX.replace(t, "")
     t = BOLD_REGEX.replace(t, "")
@@ -71,18 +90,38 @@ private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
 
 private fun linkifyForHtml(html: String): String {
     if (html.isBlank()) return html
-    return VERSE_REGEX.replace(html) { m ->
-        val raw = m.groupValues[1].trim()
-        val bookId = BookCatalog.id(raw)
-        val canonical = BookCatalog.canonicalName(raw)
-        val ch = m.groupValues[2].toIntOrNull() ?: return@replace m.value
-        val vs = m.groupValues[3].toIntOrNull() ?: return@replace m.value
-        val endRaw = m.groupValues[4]
-        val end = if (endRaw.isBlank()) vs else endRaw.toIntOrNull() ?: vs
-        if (ch !in 1..BookCatalog.chapters(bookId)) return@replace m.value
-        val encoded = URLEncoder.encode(canonical, "UTF-8")
-        """<a href="ew://verse?book=$encoded&chapter=$ch&verse=$vs&endVerse=$end">${m.value}</a>"""
+    // MAX: Don't run VERSE_REGEX over <tags>. Before: it could linkify inside <a href="..."> or <span style="...">
+    // Now: split by tags, only linkify text parts
+    if (!html.contains('<')) return VERSE_REGEX.replace(html) { linkifyMatch(it) }
+    val out = StringBuilder(html.length + 1024)
+    var i = 0
+    val len = html.length
+    while (i < len) {
+        val lt = html.indexOf('<', i)
+        if (lt == -1) {
+            out.append(VERSE_REGEX.replace(html.substring(i), ::linkifyMatch))
+            break
+        }
+        if (lt > i) out.append(VERSE_REGEX.replace(html.substring(i, lt), ::linkifyMatch))
+        val gt = html.indexOf('>', lt)
+        if (gt == -1) { out.append(html.substring(lt)); break }
+        out.append(html, lt, gt + 1)
+        i = gt + 1
     }
+    return out.toString()
+}
+
+private fun linkifyMatch(m: MatchResult): String {
+    val raw = m.groupValues[1].trim()
+    val bookId = BookCatalog.id(raw)
+    val canonical = BookCatalog.canonicalName(raw)
+    val ch = m.groupValues[2].toIntOrNull() ?: return m.value
+    val vs = m.groupValues[3].toIntOrNull() ?: return m.value
+    val endRaw = m.groupValues[4]
+    val end = if (endRaw.isBlank()) vs else endRaw.toIntOrNull() ?: vs
+    if (ch !in 1..BookCatalog.chapters(bookId)) return m.value
+    val encoded = URLEncoder.encode(canonical, "UTF-8")
+    return """<a href="ew://verse?book=$encoded&chapter=$ch&verse=$vs&endVerse=$end">${m.value}</a>"""
 }
 
 @Composable
@@ -105,26 +144,33 @@ fun OpenEWContent(
     val currentOnNext by rememberUpdatedState(onNextChapter)
     val currentOnPrev by rememberUpdatedState(onPreviousChapter)
     val density = LocalDensity.current
-
     val effectiveFontSize = fontSize.coerceAtLeast(18f)
 
-    // FIXED: Parse off Main thread - was janking UI on every chapter
-    val goldSpanned by produceState<SpannableString?>(initialValue = null, commentaryHtml, bookName, chapter) {
-        value = if (commentaryHtml.isBlank()) null else withContext(Dispatchers.Default) {
+    // MAX: Key = Int hash, NOT whole 100KB string. Before: produceState compared 100KB string on every recomposition
+    val htmlHash = commentaryHtml.hashCode()
+    val cacheKey = "$bookName-$chapter-$htmlHash"
+
+    val goldSpanned by produceState<SpannableString?>(initialValue = parsedCache.get(cacheKey), cacheKey) {
+        if (commentaryHtml.isBlank()) { value = null; return@produceState }
+        parsedCache.get(cacheKey)?.let { value = it; return@produceState }
+        value = withContext(Dispatchers.Default) {
             runCatching {
                 val parsed = HtmlCompat.fromHtml(
                     linkifyForHtml(cleanForHtml(commentaryHtml, bookName, chapter)),
                     HtmlCompat.FROM_HTML_MODE_LEGACY, null, null
                 )
-                val copy = SpannableString(parsed)
-                copy.getSpans(0, copy.length, URLSpan::class.java).forEach { span ->
-                    copy.setSpan(
+                // MAX: No SpannableString(parsed) copy. parsed is already Spannable, set spans in place
+                val spannable = parsed as? Spannable ?: SpannableString(parsed)
+                spannable.getSpans(0, spannable.length, URLSpan::class.java).forEach { span ->
+                    spannable.setSpan(
                         ForegroundColorSpan(0xFFC9A227.toInt()),
-                        copy.getSpanStart(span), copy.getSpanEnd(span),
+                        spannable.getSpanStart(span), spannable.getSpanEnd(span),
                         Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
                     )
                 }
-                copy
+                val result = if (spannable is SpannableString) spannable else SpannableString(spannable)
+                parsedCache.put(cacheKey, result)
+                result
             }.getOrNull()
         }
     }
@@ -163,8 +209,6 @@ fun OpenEWContent(
                     val padPx = with(density) { 16.dp.roundToPx() }
                     val bottomPx = with(density) { 96.dp.roundToPx() }
                     val swipePx = with(density) { 80.dp.toPx() }
-
-                    // FIXED: Only consume touch if fling actually fired, else let TextView scroll
                     var flingFired = false
                     lateinit var gestureDetector: GestureDetector
                     val textView = object : TextView(ctx) {
@@ -211,9 +255,8 @@ fun OpenEWContent(
                             }
                         }
                     }
-
                     gestureDetector = GestureDetector(ctx, object : GestureDetector.SimpleOnGestureListener() {
-                        override fun onDown(e: MotionEvent): Boolean = false // FIXED: was true = blocked scroll
+                        override fun onDown(e: MotionEvent): Boolean = false
                         override fun onFling(
                             e1: MotionEvent?, e2: MotionEvent,
                             velocityX: Float, velocityY: Float
@@ -232,11 +275,9 @@ fun OpenEWContent(
                             return false
                         }
                     })
-
                     textView
                 },
                 update = { textView ->
-                    // FIXED: Always apply font/theme, only re-set text + scroll on new chapter
                     textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
                     textView.setTextColor(textColor.toArgb())
                     if (textView.tag !== goldSpanned) {
