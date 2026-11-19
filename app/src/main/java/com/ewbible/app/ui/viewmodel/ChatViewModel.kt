@@ -3,7 +3,7 @@ package com.ewbible.app.ui.viewmodel
 import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ewbible.app.data.*
+import com.ewbible.app.data.database*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
