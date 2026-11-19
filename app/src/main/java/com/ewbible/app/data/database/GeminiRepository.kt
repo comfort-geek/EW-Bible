@@ -16,11 +16,14 @@ import java.net.URL
 class GeminiRepository {
 
     // STREAMING: answer comes word-by-word
+    // WIRED - added bibleContext + translation
     fun askStreaming(
         question: String,
         currentRef: String,
         history: List<MessageEntity>,
-        image: Bitmap?
+        image: Bitmap?,
+        bibleContext: String = "",
+        translation: String = "NKJV"
     ): Flow<String> = flow {
         val key = BuildConfig.GEMINI_API_KEY
         if (key.isBlank()) {
@@ -31,16 +34,28 @@ class GeminiRepository {
         // MEMORY: last 10 messages only - no verses, no notes
         val contents = JSONArray()
 
-        // System instruction as first turn
+        // System instruction as first turn - WIRED
         contents.put(JSONObject().apply {
             put("role", "user")
             put("parts", JSONArray().put(JSONObject().put("text",
-                "You are a helpful Bible study assistant for EW Bible app. Answer clearly, simply, from the Bible. User is reading $currentRef. Do not invent verses. If unsure, say so."
+                """
+                You are a Bible study assistant inside EW Bible app.
+                User is currently reading: $currentRef
+                User's preferred translation: $translation
+
+                RULES:
+                1. Use the NKJV text below from the user's app as your anchor. Don't invent verse numbers.
+                2. Answer in $translation. If $translation is not NKJV, give the $translation wording, but start with the NKJV from the app so user can compare.
+                3. Answer clearly and simply.
+
+                BIBLE CONTEXT (NKJV, from user's app):
+                $bibleContext
+                """.trimIndent()
             )))
         })
         contents.put(JSONObject().apply {
             put("role", "model")
-            put("parts", JSONArray().put(JSONObject().put("text", "Understood. I will help with Bible questions about $currentRef.")))
+            put("parts", JSONArray().put(JSONObject().put("text", "Understood. I will help with Bible questions about $currentRef in $translation, using the app's NKJV text as anchor.")))
         })
 
         // Last 10 messages for context
