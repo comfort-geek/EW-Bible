@@ -85,7 +85,6 @@ fun HomeScreen(
     var searchQuery by remember { mutableStateOf("") }
     var expandedBook by remember { mutableStateOf<Int?>(null) }
     var showHighlightPicker by remember { mutableStateOf(false) }
-    var showBibleCom by remember { mutableStateOf(false) }
     var showLinkedVerseSheet by remember { mutableStateOf(false) }
     var linkedVerseBook by remember { mutableStateOf("") }
     var linkedVerseChapter by remember { mutableStateOf(1) }
@@ -284,7 +283,6 @@ fun HomeScreen(
             }
         },
         onSignOut = { googleAuth.signOut(); viewModel.onUserSignedOut(); settingsOpen = false },
-        onOpenResource = { settingsOpen = false; showBibleCom = true }
     )
 
     if (dailyVerseDialog) {
@@ -340,11 +338,7 @@ fun HomeScreen(
         )
     }
 
-    if (showBibleCom) {
-        WebViewScreen(url = "https://www.bible.com", title = "Bible.com", background = background, textColor = textColor, gold = gold, onClose = { showBibleCom = false })
-    }
-
-    // FIXED: Pass real ChatViewModel
+    // Ask Gemini - now wired to read your NKJV
     if (state.showAiChat) {
         AiChatScreen(
             viewModel = chatViewModel,
