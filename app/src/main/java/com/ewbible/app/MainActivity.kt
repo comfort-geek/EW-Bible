@@ -50,7 +50,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val isDarkMode by preferences.isDarkMode.collectAsState(initial = null)
-            val useDarkTheme = isDarkTheme ?: false
+            val useDarkTheme = isDarkMode ?: false
 
             // Popup state - shows automatically if crash exists
             var showCrashDialog by remember { mutableStateOf(savedCrash != null) }
