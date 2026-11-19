@@ -22,7 +22,7 @@ data class CloudHighlight(
 )
 
 data class CloudProgress(
-    val mode: String = "World English Bible",
+    val mode: String = "New King James Version",
     val book: String = "Genesis",
     val chapter: Int = 1,
     val verse: Int = 1,
