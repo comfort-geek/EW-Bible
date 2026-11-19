@@ -15,8 +15,6 @@ import java.net.URL
 
 class GeminiRepository {
 
-    // STREAMING: answer comes word-by-word
-    // WIRED - added bibleContext + translation
     fun askStreaming(
         question: String,
         currentRef: String,
@@ -31,22 +29,21 @@ class GeminiRepository {
             return@flow
         }
 
-        // MEMORY: last 10 messages only - no verses, no notes
         val contents = JSONArray()
 
-        // System instruction as first turn - WIRED
+        // System instruction as first turn - WIRED with bibleContext + translation
         contents.put(JSONObject().apply {
             put("role", "user")
             put("parts", JSONArray().put(JSONObject().put("text",
                 """
-                You are a Bible study assistant inside EW Bible app.
+                You are a helpful Bible study assistant for EW Bible app.
                 User is currently reading: $currentRef
                 User's preferred translation: $translation
 
                 RULES:
-                1. Use the NKJV text below from the user's app as your anchor. Don't invent verse numbers.
+                1. Use the NKJV text below from the user's app as your anchor. Do not invent verse numbers.
                 2. Answer in $translation. If $translation is not NKJV, give the $translation wording, but start with the NKJV from the app so user can compare.
-                3. Answer clearly and simply.
+                3. Answer clearly and simply. If unsure, say so.
 
                 BIBLE CONTEXT (NKJV, from user's app):
                 $bibleContext
@@ -55,10 +52,9 @@ class GeminiRepository {
         })
         contents.put(JSONObject().apply {
             put("role", "model")
-            put("parts", JSONArray().put(JSONObject().put("text", "Understood. I will help with Bible questions about $currentRef in $translation, using the app's NKJV text as anchor.")))
+            put("parts", JSONArray().put(JSONObject().put("text", "Understood. I will help with Bible questions about $currentRef in $translation.")))
         })
 
-        // Last 10 messages for context
         history.takeLast(10).forEach { msg ->
             contents.put(JSONObject().apply {
                 put("role", if (msg.isUser) "user" else "model")
@@ -66,7 +62,6 @@ class GeminiRepository {
             })
         }
 
-        // Current question + optional image
         val parts = JSONArray().put(JSONObject().put("text", question))
         if (image != null) {
             val stream = ByteArrayOutputStream()
@@ -92,7 +87,6 @@ class GeminiRepository {
             })
         }.toString()
 
-        // Use streamGenerateContent for streaming
         val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=$key")
         val conn = withContext(Dispatchers.IO) {
             (url.openConnection() as HttpURLConnection).apply {
@@ -105,7 +99,6 @@ class GeminiRepository {
             }
         }
 
-        // Read SSE stream
         withContext(Dispatchers.IO) {
             conn.inputStream.bufferedReader().useLines { lines ->
                 for (line in lines) {
