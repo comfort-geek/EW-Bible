@@ -44,7 +44,8 @@ data class HomeUiState(
     val selectedVerse: Int? = null,
     val selectedTab: String = "Bible",
     val darkMode: Boolean? = null,
-    val fontSize: Float = 16f,
+    // FIX: Same as Open EW / BibleContent - default 18f, not 16f. No small font before prefs load.
+    val fontSize: Float = 18f,
     val isLoggedIn: Boolean = false,
     val userName: String = "Guest",
     val userEmail: String = "",
@@ -109,6 +110,8 @@ class HomeViewModel(
                         if (list.isNotEmpty()) versesCache[key] = list
                         if (list.isEmpty() && cached != null) cached else list
                     }
+                    // FIX: No double emit. Cached + DAO same list = 1 emit, not 2. Was causing LazyColumn re-measure / jump.
+                    .distinctUntilChanged()
                     .onStart { if (cached != null) emit(cached) }
             } catch (e: Exception) {
                 flowOf(cached ?: emptyList())
@@ -195,7 +198,9 @@ class HomeViewModel(
             runCatching { prefs.isDarkMode.collect { d -> _uiState.update { it.copy(darkMode = d) } } }
         }
         viewModelScope.launch {
-            runCatching { prefs.fontSize.collect { f -> _uiState.update { it.copy(fontSize = f) } } }
+            // FIX: Never let font drop below 18f, same rule as Open EW / BibleContent.
+            // If prefs has old 16f saved, coerce it up here so whole app stays consistent.
+            runCatching { prefs.fontSize.collect { f -> _uiState.update { it.copy(fontSize = f.coerceAtLeast(18f)) } } }
         }
         viewModelScope.launch {
             runCatching {
@@ -307,7 +312,8 @@ class HomeViewModel(
     fun setSearchQuery(query: String) { searchQuery.value = query }
     fun setSearchFilter(filter: String) { searchFilter.value = filter }
     fun setDarkMode(enabled: Boolean) { viewModelScope.launch { runCatching { prefs.setDarkMode(enabled) } } }
-    fun setFontSize(size: Float) { viewModelScope.launch { runCatching { prefs.setFontSize(size) } } }
+    // FIX: Clamp on save too, so 16f never gets saved again.
+    fun setFontSize(size: Float) { viewModelScope.launch { runCatching { prefs.setFontSize(size.coerceAtLeast(18f)) } } }
     fun onUserSignedIn(name: String, email: String) { viewModelScope.launch { runCatching { prefs.saveUser(name, email) } } }
     fun onUserSignedOut() { viewModelScope.launch { runCatching { prefs.clearUser() } } }
     fun saveReadingProgress(verse: VerseEntity? = null, scrollIndex: Int = 0, scrollOffset: Int = 0) {
@@ -348,7 +354,11 @@ class HomeViewModel(
             runCatching {
                 val s = dao.getSummary(bookId, chapter)
                 summaryCache[key] = s
-                summaryState.value = s
+                // FIX: Only publish summary if we are still on that chapter.
+                // Old code could publish Genesis 1 summary after you already moved to Genesis 2 -> height jump.
+                if (bookId == currentBookId.value && chapter == selectedChapter.value) {
+                    summaryState.value = s
+                }
             }
             summaryLoadingKeys.remove(key)
             _summaryLoading.value = false
