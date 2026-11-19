@@ -13,11 +13,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Collections
 
 data class HomeUiState(
     val books: List<BookEntity> = emptyList(),
     val verses: List<VerseEntity> = emptyList(),
-    val highlights: Map<Int, Color> = emptyList().let { emptyMap() },
+    // FIX: was emptyList().let { emptyMap() } -> Cannot infer type for T (build error line 20)
+    val highlights: Map<Int, Color> = emptyMap(),
     val notes: List<NoteEntity> = emptyList(),
     val summary: SummaryEntity? = null,
     val summaryLoading: Boolean = false,
@@ -83,12 +85,12 @@ class HomeViewModel(
 
     private val commentaryCache = LruCache<String, String>(30)
     private val summaryCache = LruCache<String, SummaryEntity>(60)
-    // MAX: synchronized - these were plain mutableSet accessed from multiple viewModelScope.launch {}
+    // FIX: added import java.util.Collections - was Unresolved reference 'Collections'
     private val summaryMissing = Collections.synchronizedSet(mutableSetOf<String>())
     private val summaryLoadingKeys = Collections.synchronizedSet(mutableSetOf<String>())
     private val versesCache = LruCache<String, List<VerseEntity>>(30)
 
-    // MAX: Prophecy set allocated on EVERY search keystroke. Now 1 const.
+    // Prophecy set allocated ONCE, not on every search keystroke
     private val prophecyBooks = setOf(23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,66)
 
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
@@ -130,11 +132,8 @@ class HomeViewModel(
     val searchResultsFlow: StateFlow<List<VerseSearchResult>> = searchResults.asStateFlow()
     val searchFilterFlow: StateFlow<String> = searchFilter.asStateFlow()
 
-    // MAX: Replaced combine(listOf(27 flows)) + UNCHECKED_CAST.
-    // Before: typing 1 search letter / saving 1 note / changing font / toggling dark mode
-    // rebuilt the ENTIRE HomeUiState (books + verses + highlights + commentary + ...) = 1 recomposition of whole HomeScreen.
-    // Now: _uiState is updated field-by-field with update { copy(...) }. Only the changed field triggers a new state,
-    // and Compose can skip unchanged sections. Same public API, same HomeUiState.
+    // Replaced combine(listOf(27 flows)) + UNCHECKED_CAST.
+    // Now _uiState updates field-by-field with update { copy(...) }.
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
@@ -171,7 +170,6 @@ class HomeViewModel(
         viewModelScope.launch { isReadingRestored.collect { _uiState.update { s -> s.copy(isReadingRestored = it) } } }
         viewModelScope.launch { prefs.isDarkMode.collect { _uiState.update { s -> s.copy(darkMode = it) } } }
         viewModelScope.launch { prefs.fontSize.collect { _uiState.update { s -> s.copy(fontSize = it.coerceAtLeast(18f)) } } }
-        // MAX: userName + userEmail were 2 separate collects -> 2 uiState rebuilds per login. Now 1 combined.
         viewModelScope.launch {
             combine(prefs.userName, prefs.userEmail) { n, e -> n to e }.collect { (n, e) ->
                 _uiState.update { s -> s.copy(userName = n, userEmail = e, isLoggedIn = n != "Guest" && e.isNotBlank()) }
@@ -185,7 +183,8 @@ class HomeViewModel(
             }
         }
         viewModelScope.launch {
-            selectedTab.distinctUntilChanged().collectLatest { tab ->
+            // FIX: was selectedTab.distinctUntilChanged() - deprecated on StateFlow, StateFlow already distincts
+            selectedTab.collectLatest { tab ->
                 if (tab == "Open EW") loadCommentary(selectedBookId.value, selectedChapter.value)
             }
         }
@@ -351,7 +350,8 @@ class HomeViewModel(
             try {
                 val html = withContext(Dispatchers.IO) {
                     val compressed = runCatching { dao.getCommentaryCompressed(bookId, chapter) }.getOrNull()
-                    if (compressed.isNullOrEmpty()) null else CommentaryHelper.decompress(compressed)
+                    // FIX: was compressed.isNullOrEmpty() - doesn't exist for ByteArray?
+                    if (compressed == null || compressed.isEmpty()) null else CommentaryHelper.decompress(compressed)
                 }
                 val finalHtml = if (html.isNullOrBlank()) {
                     "<html><body><p><i>Commentary for ${BookCatalog.name(bookId)} $chapter is not available yet.</i></p></body></html>"
