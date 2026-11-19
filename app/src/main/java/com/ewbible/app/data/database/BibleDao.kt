@@ -80,6 +80,23 @@ interface BibleDao {
     @Query("SELECT * FROM verses WHERE book_id = :bookId AND chapter = :chapter AND verse = :verse LIMIT 1")
     suspend fun getVerse(bookId: Int, chapter: Int, verse: Int): VerseEntity?
 
+    // PATCH: New - for linked verse RANGE (e.g. John 3:16-18).
+    // Before, ViewModel loaded the whole chapter with getVerses().first() then filtered.
+    // Now it loads only the 1-5 verses it needs.
+    @Query("""
+        SELECT * FROM verses
+        WHERE book_id = :bookId
+          AND chapter = :chapter
+          AND verse BETWEEN :startVerse AND :endVerse
+        ORDER BY verse
+    """)
+    suspend fun getVerseRange(
+        bookId: Int,
+        chapter: Int,
+        startVerse: Int,
+        endVerse: Int
+    ): List<VerseEntity>
+
     @Query("SELECT * FROM highlights WHERE book_id = :bookId AND chapter = :chapter")
     fun getHighlights(bookId: Int, chapter: Int): Flow<List<HighlightEntity>>
 
