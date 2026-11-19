@@ -12,7 +12,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ewbible.app.data.database.AppDatabase
-import com.ewbible.app.data.database.ChatDatabase
 import com.ewbible.app.data.database.GeminiRepository
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.ui.screens.HomeScreen
@@ -34,19 +33,16 @@ class MainActivity : ComponentActivity() {
         }
 
         val database = AppDatabase.getInstance(applicationContext)
-        val chatDatabase = ChatDatabase.getInstance(applicationContext)
+        val dao = database.bibleDao() // ONLY DAO - chats + bible in same DB
         val preferences = AppPreferences(applicationContext)
         val geminiRepository = GeminiRepository()
 
-        // WIRED: One factory for BOTH viewmodels
-        // bibleDao is from AppDatabase (ewbible.db) - for NKJV context
-        // chatDao is from ChatDatabase - for chat history
+        // FIXED: No ChatDatabase, no chatDao param
         val factory = HomeViewModelFactory(
-            dao = database.bibleDao(),
+            dao = dao,
             preferences = preferences,
-            chatDao = chatDatabase.chatDao(),
             geminiRepository = geminiRepository,
-            bibleDao = database.bibleDao() // <-- WIRED: This was missing
+            bibleDao = dao
         )
 
         setContent {
