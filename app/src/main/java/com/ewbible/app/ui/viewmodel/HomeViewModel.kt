@@ -232,7 +232,10 @@ class HomeViewModel(
                 .collectLatest { (query, filter) ->
                     if (query.isBlank()) { searchResults.value = emptyList(); return@collectLatest }
                     runCatching {
-                        val raw = dao.searchVerses(query)
+                        // PATCH: Escape LIKE wildcards - Dao uses ESCAPE '\'.
+                        // Before, typing % or _ broke search / returned wrong results.
+                        val escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                        val raw = dao.searchVerses(escaped)
                         searchResults.value = when (filter) {
                             "Old Testament", "OT" -> raw.filter { it.bookId <= 39 }
                             "New Testament", "NT" -> raw.filter { it.bookId >= 40 }
@@ -342,9 +345,13 @@ class HomeViewModel(
 
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
-        summaryCache[key]?.let { cached ->
-            summaryState.value = cached
-            _summaryLoading.value = false
+        // PATCH: Use containsKey - cached null (no summary for this chapter) is still a cache hit.
+        // Before, ?.let never hit for null, so it re-queried DB on every tab switch.
+        if (summaryCache.containsKey(key)) {
+            val cached = summaryCache[key]
+            if (bookId == currentBookId.value && chapter == selectedChapter.value) {
+                summaryState.value = cached
+            }
             return
         }
         if (key in summaryLoadingKeys) return
@@ -361,7 +368,8 @@ class HomeViewModel(
                 }
             }
             summaryLoadingKeys.remove(key)
-            _summaryLoading.value = false
+            // PATCH: Only clear loading when no other summary is still loading.
+            if (summaryLoadingKeys.isEmpty()) _summaryLoading.value = false
         }
     }
     fun loadSummary() { loadSummary(currentBookId.value, selectedChapter.value) }
@@ -374,8 +382,8 @@ class HomeViewModel(
                                    else "${BookCatalog.name(bookId)} $chapter:$verse"
             linkedVerseText.value = "Loading..."
             runCatching {
-                val list = dao.getVerses(bookId, chapter).first()
-                val range = list.filter { it.verse in verse..end }.sortedBy { it.verse }
+                // PATCH: Use getVerseRange - loads only 1-5 verses, not whole chapter.
+                val range = dao.getVerseRange(bookId, chapter, verse, end)
                 linkedVerseText.value = if (range.isEmpty()) "Verse not found."
                     else range.joinToString("\n\n") { "${it.verse}. ${it.text}" }
             }.onFailure { linkedVerseText.value = "Could not load verse." }
