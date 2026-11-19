@@ -49,7 +49,7 @@ class GeminiRepository {
                 put("role", if (msg.isUser) "user" else "model")
                 put("parts", JSONArray().put(JSONObject().put("text", msg.text)))
             })
-        })
+        } // FIXED: was }) , forEach closes with } only
 
         // Current question + optional image
         val parts = JSONArray().put(JSONObject().put("text", question))
