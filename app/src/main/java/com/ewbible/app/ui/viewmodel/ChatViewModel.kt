@@ -3,87 +3,128 @@ package com.ewbible.app.ui.viewmodel
 import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ewbible.app.data.database.*
-import kotlinx.coroutines.flow.*
+import com.ewbible.app.data.database.ChatDao
+import com.ewbible.app.data.database.ChatEntity
+import com.ewbible.app.data.database.GeminiRepository
+import com.ewbible.app.data.database.MessageEntity
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-data class ChatUiState(
+data class ChatState(
     val chats: List<ChatEntity> = emptyList(),
     val messages: List<MessageEntity> = emptyList(),
     val currentChatId: Long? = null,
     val isLoading: Boolean = false,
     val streamingText: String = "",
-    val dailyCount: Int = 0
+    val dailyCount: Int = 0,
+    val error: String? = null
 )
 
 class ChatViewModel(
-    private val dao: ChatDao,
-    private val repo: GeminiRepository
+    private val chatDao: ChatDao,
+    private val geminiRepository: GeminiRepository
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(ChatUiState())
-    val state = _state.asStateFlow()
+    private val _state = MutableStateFlow(ChatState())
+    val state: StateFlow<ChatState> = _state.asStateFlow()
 
-    fun loadChats() = viewModelScope.launch {
-        _state.value = _state.value.copy(chats = dao.getChats())
-    }
+    // In-memory daily counter - resets on app restart
+    private var dailyCountInternal = 0
 
-    fun startNewChat(ref: String) = viewModelScope.launch {
-        val id = dao.insertChat(ChatEntity(title = ref, ref = ref))
-        _state.value = _state.value.copy(currentChatId = id, messages = emptyList())
-        loadChats()
-    }
-
-    fun openChat(chatId: Long) = viewModelScope.launch {
-        _state.value = _state.value.copy(
-            currentChatId = chatId,
-            messages = dao.getMessages(chatId)
-        )
-    }
-
-    fun send(question: String, ref: String, image: Bitmap?) = viewModelScope.launch {
-        val chatId = _state.value.currentChatId ?: return@launch
-        if (question.isBlank()) return@launch
-        if (_state.value.dailyCount >= 50) {
-            // Local per-device limit, no login needed
-            dao.insertMessage(MessageEntity(chatId = chatId, text = "Daily limit reached (50). Try tomorrow.", isUser = false))
-            _state.value = _state.value.copy(messages = dao.getMessages(chatId))
-            return@launch
+    fun loadChats() {
+        viewModelScope.launch {
+            val chats = chatDao.getChats()
+            _state.update { it.copy(chats = chats) }
         }
+    }
 
-        dao.insertMessage(MessageEntity(chatId = chatId, text = question, isUser = true))
-        val messagesWithUser = dao.getMessages(chatId)
-        _state.value = _state.value.copy(messages = messagesWithUser, isLoading = true, streamingText = "")
-
-        var fullAnswer = ""
-        try {
-            // FIXED: dropLast(1) so Gemini doesn't see the question twice
-            // messagesWithUser already contains the question, history should be BEFORE it
-            repo.askStreaming(question, ref, messagesWithUser.dropLast(1), image).collect { chunk ->
-                fullAnswer += chunk
-                _state.value = _state.value.copy(streamingText = fullAnswer)
+    fun startNewChat(currentRef: String) {
+        viewModelScope.launch {
+            val chat = ChatEntity(title = "New Chat", ref = currentRef)
+            val id = chatDao.insertChat(chat)
+            _state.update {
+                it.copy(currentChatId = id, messages = emptyList(), streamingText = "", isLoading = false)
             }
-        } catch (e: Exception) {
-            fullAnswer = if (fullAnswer.isBlank()) "Sorry, I couldn't reach the AI. Check your connection and try again." else fullAnswer
+            loadChats()
         }
-
-        if (fullAnswer.isNotBlank()) {
-            dao.insertMessage(MessageEntity(chatId = chatId, text = fullAnswer, isUser = false))
-        }
-        _state.value = _state.value.copy(
-            messages = dao.getMessages(chatId),
-            isLoading = false,
-            streamingText = "",
-            dailyCount = _state.value.dailyCount + 1
-        )
     }
 
-    fun deleteChat(chatId: Long) = viewModelScope.launch {
-        dao.deleteMessages(chatId)
-        dao.deleteChat(chatId)
-        if (_state.value.currentChatId == chatId) {
-            _state.value = _state.value.copy(currentChatId = null, messages = emptyList())
+    fun openChat(chatId: Long) {
+        viewModelScope.launch {
+            val messages = chatDao.getMessages(chatId)
+            _state.update { it.copy(currentChatId = chatId, messages = messages, streamingText = "") }
         }
-        loadChats()
+    }
+
+    fun deleteChat(chatId: Long) {
+        viewModelScope.launch {
+            chatDao.deleteMessages(chatId)
+            chatDao.deleteChat(chatId)
+            if (_state.value.currentChatId == chatId) {
+                _state.update { it.copy(currentChatId = null, messages = emptyList()) }
+            }
+            loadChats()
+        }
+    }
+
+    fun send(question: String, currentRef: String, image: Bitmap?) {
+        val chatId = _state.value.currentChatId ?: return
+        if (_state.value.isLoading) return
+
+        // Daily limit 50
+        if (dailyCountInternal >= 50) {
+            _state.update { it.copy(error = "Daily limit reached (50/50)") }
+            return
+        }
+
+        viewModelScope.launch {
+            // 1. Save user message
+            val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
+            chatDao.insertMessage(userMsg)
+            chatDao.updateChatTime(chatId, System.currentTimeMillis())
+
+            val history = chatDao.getMessages(chatId)
+            _state.update {
+                it.copy(messages = history, isLoading = true, streamingText = "", error = null)
+            }
+
+            // 2. Stream from Gemini
+            val fullAnswer = StringBuilder()
+            try {
+                geminiRepository.askStreaming(question, currentRef, history, image)
+                    .collect { chunk ->
+                        fullAnswer.append(chunk)
+                        _state.update { it.copy(streamingText = fullAnswer.toString()) }
+                    }
+            } catch (e: Exception) {
+                _state.update { it.copy(isLoading = false, error = "Failed: ${e.message}") }
+                return@launch
+            }
+
+            // 3. Save AI answer
+            val answerText = fullAnswer.toString().ifBlank { "Sorry, I couldn't answer that." }
+            val aiMsg = MessageEntity(chatId = chatId, text = answerText, isUser = false)
+            chatDao.insertMessage(aiMsg)
+            chatDao.updateChatTime(chatId, System.currentTimeMillis())
+
+            dailyCountInternal++
+            val updatedMessages = chatDao.getMessages(chatId)
+            _state.update {
+                it.copy(
+                    messages = updatedMessages,
+                    isLoading = false,
+                    streamingText = "",
+                    dailyCount = dailyCountInternal
+                )
+            }
+            loadChats()
+        }
+    }
+
+    fun clearError() {
+        _state.update { it.copy(error = null) }
     }
 }
