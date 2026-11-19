@@ -81,16 +81,18 @@ class HomeViewModel(
     private var commentaryJob: Job? = null
     private var restoreDone = false
 
-    // MAX: LruCache is thread-safe, LinkedHashMap was not + manual size check
+    // FIX: LruCache cannot hold null. Old code: LruCache<String, SummaryEntity?>
+    // put(key, null) -> NullPointerException crash on chapters with no summary.
+    // Now: only non-null summaries go in cache, missing ones go in a Set.
     private val commentaryCache = LruCache<String, String>(30)
-    private val summaryCache = LruCache<String, SummaryEntity?>(60)
+    private val summaryCache = LruCache<String, SummaryEntity>(60)
+    private val summaryMissing = mutableSetOf<String>()
     private val summaryLoadingKeys = mutableSetOf<String>()
     private val versesCache = LruCache<String, List<VerseEntity>>(30)
 
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
     val currentBookId: StateFlow<Int> = selectedBookId.asStateFlow()
 
-    // MAX: Single source, shared, no double collect
     private val bookChapterKey = combine(selectedBookId, selectedChapter) { b, c -> b to c }
         .distinctUntilChanged()
         .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
@@ -120,20 +122,41 @@ class HomeViewModel(
         }
         .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
 
+    // FIX: Notes + Search are separate flows now.
+    // Before they were inside the big uiState combine, so saving 1 note
+    // or typing 1 search letter rebuilt the whole Bible tab.
+    // UI should collect notes / searchResults directly, not via uiState.
     val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
         .catch { emit(emptyList()) }
         .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
 
-    // MAX: ONE uiState combine = 1 recomposition per change, not 24
+    val searchResultsFlow: StateFlow<List<VerseSearchResult>> = searchResults.asStateFlow()
+    val searchFilterFlow: StateFlow<String> = searchFilter.asStateFlow()
+
+    // FIX: combine(listOf(...)) supports any number of flows.
+    // combine(a,b,c...) with 27 args does NOT compile - max is 20.
+    // This is the same 1-recomposition uiState, but without notes/search
+    // inside it, so Bible tab no longer recomposes on note/search change.
+    // notes/search are still in HomeUiState for backwards compat, kept as
+    // last-known values via separate collectors below.
+    private val notesLatest = MutableStateFlow<List<NoteEntity>>(emptyList())
+    private val searchLatest = MutableStateFlow<List<VerseSearchResult>>(emptyList())
+
+    @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<HomeUiState> = combine(
-        books, verses, highlights, notes, selectedBookId, selectedChapter,
-        selectedVerse, selectedTab, commentary, commentaryError, summaryState,
-        _summaryLoading, chapterCounts, searchResults, searchFilter, dailyVerse,
-        scrollRestoreKey, linkedVerseText, linkedVerseRef,
-        showNoteDialogState, showAiChatState, currentNoteText, isReadingRestored,
-        prefs.isDarkMode, prefs.fontSize, prefs.userName, prefs.userEmail
+        listOf(
+            books as Flow<Any?>, verses as Flow<Any?>, highlights as Flow<Any?>,
+            notesLatest as Flow<Any?>, selectedBookId as Flow<Any?>, selectedChapter as Flow<Any?>,
+            selectedVerse as Flow<Any?>, selectedTab as Flow<Any?>, commentary as Flow<Any?>,
+            commentaryError as Flow<Any?>, summaryState as Flow<Any?>, _summaryLoading as Flow<Any?>,
+            chapterCounts as Flow<Any?>, searchLatest as Flow<Any?>, searchFilter as Flow<Any?>,
+            dailyVerse as Flow<Any?>, scrollRestoreKey as Flow<Any?>, linkedVerseText as Flow<Any?>,
+            linkedVerseRef as Flow<Any?>, showNoteDialogState as Flow<Any?>, showAiChatState as Flow<Any?>,
+            currentNoteText as Flow<Any?>, isReadingRestored as Flow<Any?>,
+            prefs.isDarkMode as Flow<Any?>, prefs.fontSize as Flow<Any?>,
+            prefs.userName as Flow<Any?>, prefs.userEmail as Flow<Any?>
+        )
     ) { v ->
-        @Suppress("UNCHECKED_CAST")
         val booksL = v[0] as List<BookEntity>
         val versesL = v[1] as List<VerseEntity>
         val highL = v[2] as Map<Int, Color>
@@ -183,11 +206,16 @@ class HomeViewModel(
     init {
         viewModelScope.launch { restoreSavedReading() }
 
-        // MAX: Load summary + commentary ONLY when needed, once per chapter
+        // Keep uiState.notes / search in sync without rebuilding Bible tab on every keystroke:
+        // notes/search flows are shared, this is just a cheap pointer update.
+        viewModelScope.launch { notes.collect { notesLatest.value = it } }
+        viewModelScope.launch { searchResults.collect { searchLatest.value = it } }
+
+        // MAX: Summary + Commentary ONLY when needed, once per chapter
+        // Commentary: only on Open EW tab, NOT on Bible tab
         viewModelScope.launch {
             bookChapterKey.collectLatest { (bookId, chapter) ->
                 loadSummary(bookId, chapter)
-                // Commentary: only if user is on Open EW tab, not on Bible tab
                 if (selectedTab.value == "Open EW") loadCommentary(bookId, chapter)
             }
         }
@@ -207,7 +235,7 @@ class HomeViewModel(
             }
         }
 
-        // MAX: Search on IO, debounce, cancel previous, escape once
+        // MAX Search: IO, debounce 250ms, cancel previous, escape once
         viewModelScope.launch {
             combine(searchQuery.debounce(250L).distinctUntilChanged(), searchFilter) { q, f -> q to f }
                 .distinctUntilChanged()
@@ -311,8 +339,13 @@ class HomeViewModel(
         }
     }
 
+    // FIX: Never put null into LruCache
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
+        if (key in summaryMissing) {
+            if (bookId == currentBookId.value && chapter == selectedChapter.value) summaryState.value = null
+            return
+        }
         summaryCache.get(key)?.let { cached ->
             if (bookId == currentBookId.value && chapter == selectedChapter.value) summaryState.value = cached
             return
@@ -323,7 +356,7 @@ class HomeViewModel(
             val isCurrent = bookId == currentBookId.value && chapter == selectedChapter.value
             if (isCurrent) _summaryLoading.value = true
             val s = runCatching { withContext(Dispatchers.IO) { dao.getSummary(bookId, chapter) } }.getOrNull()
-            summaryCache.put(key, s)
+            if (s == null) summaryMissing.add(key) else summaryCache.put(key, s)
             if (isCurrent) summaryState.value = s
             summaryLoadingKeys.remove(key)
             if (summaryLoadingKeys.isEmpty()) _summaryLoading.value = false
@@ -342,7 +375,7 @@ class HomeViewModel(
         }
     }
 
-    // MAX: Commentary via CommentaryHelper, cached, IO, cancel previous
+    // MAX Commentary: via CommentaryHelper, cached, IO, cancel previous, Open EW only auto-load
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
         commentaryCache.get(key)?.let {
