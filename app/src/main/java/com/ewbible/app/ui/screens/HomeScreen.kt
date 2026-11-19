@@ -183,57 +183,45 @@ fun HomeScreen(viewModel: HomeViewModel) {
             if (state.selectedTab == "Bible") {
                 Text(text = "$currentBookName ${state.selectedChapter}", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
-            // FIXED: KEEP ALL TABS ALIVE - no destroy on switch, no reload + block touches on hidden tabs
+            // FIXED: Render ONLY the selected tab - no hidden size(0.dp) LayoutNodes
+            // Your ViewModel already caches verses / commentary / summary, so no reload on switch.
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                // Bible - visible when selected
-                Box(modifier = Modifier.fillMaxSize()
-                    .then(if (state.selectedTab == "Bible") Modifier else Modifier.alpha(0f))
-                    .then(if (state.selectedTab == "Bible") Modifier else Modifier.size(0.dp))
-                    .then(if (state.selectedTab == "Bible") Modifier else Modifier.clickable(enabled = false) {})
-                ) {
-                    BibleContent(
-                        selectedBookId = currentBookId, selectedChapter = state.selectedChapter, summary = state.summary,
-                        versesList = state.verses, currentHighlightMap = state.highlights, fontSize = state.fontSize,
-                        gold = gold, panel = panel, textColor = textColor, listState = listState,
-                        onVerseClick = { viewModel.selectVerse(it) }, onVerseLongClick = { viewModel.selectVerse(it) },
-                        onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() },
-                        summaryLoading = state.summaryLoading
-                    )
-                }
-                // Open EW - visible when selected
-                Box(modifier = Modifier.fillMaxSize()
-                    .then(if (state.selectedTab == "Open EW") Modifier else Modifier.alpha(0f))
-                    .then(if (state.selectedTab == "Open EW") Modifier else Modifier.size(0.dp))
-                    .then(if (state.selectedTab == "Open EW") Modifier else Modifier.clickable(enabled = false) {})
-                ) {
-                    OpenEWContent(
-                        commentaryHtml = state.commentaryHtml, fontSize = state.fontSize,
-                        textColor = textColor, hasError = state.commentaryError,
-                        isLoading = state.commentaryHtml.isBlank() && !state.commentaryError,
-                        bookName = currentBookName, chapter = state.selectedChapter,
-                        onVerseClick = { book, chapter, verse, endVerse ->
-                            linkedVerseBook = book; linkedVerseChapter = chapter
-                            linkedVerseNum = verse; linkedVerseEnd = endVerse
-                            viewModel.loadLinkedVerse(book, chapter, verse, endVerse)
-                            showLinkedVerseSheet = true
-                        },
-                        onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() },
-                        onRetry = { viewModel.loadCommentary() }
-                    )
-                }
-                // Search - visible when selected
-                Box(modifier = Modifier.fillMaxSize()
-                    .then(if (state.selectedTab == "Search") Modifier else Modifier.alpha(0f))
-                    .then(if (state.selectedTab == "Search") Modifier else Modifier.size(0.dp))
-                    .then(if (state.selectedTab == "Search") Modifier else Modifier.clickable(enabled = false) {})
-                ) {
-                    SearchContent(
-                        searchQuery = searchQuery, searchFilter = state.searchFilter, verseResults = state.searchResults,
-                        textColor = textColor, gold = gold, fontSize = state.fontSize,
-                        onQueryChange = { searchQuery = it; viewModel.searchVerses(it) },
-                        onFilterChange = { viewModel.setSearchFilter(it) },
-                        onOpenVerse = { book, chapter, verse -> openBook(book, chapter); viewModel.selectTab("Bible"); viewModel.selectVerse(verse) }
-                    )
+                when (state.selectedTab) {
+                    "Bible" -> {
+                        BibleContent(
+                            selectedBookId = currentBookId, selectedChapter = state.selectedChapter, summary = state.summary,
+                            versesList = state.verses, currentHighlightMap = state.highlights, fontSize = state.fontSize,
+                            gold = gold, panel = panel, textColor = textColor, listState = listState,
+                            onVerseClick = { viewModel.selectVerse(it) }, onVerseLongClick = { viewModel.selectVerse(it) },
+                            onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() },
+                            summaryLoading = state.summaryLoading
+                        )
+                    }
+                    "Open EW" -> {
+                        OpenEWContent(
+                            commentaryHtml = state.commentaryHtml, fontSize = state.fontSize,
+                            textColor = textColor, hasError = state.commentaryError,
+                            isLoading = state.commentaryHtml.isBlank() && !state.commentaryError,
+                            bookName = currentBookName, chapter = state.selectedChapter,
+                            onVerseClick = { book, chapter, verse, endVerse ->
+                                linkedVerseBook = book; linkedVerseChapter = chapter
+                                linkedVerseNum = verse; linkedVerseEnd = endVerse
+                                viewModel.loadLinkedVerse(book, chapter, verse, endVerse)
+                                showLinkedVerseSheet = true
+                            },
+                            onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() },
+                            onRetry = { viewModel.loadCommentary() }
+                        )
+                    }
+                    "Search" -> {
+                        SearchContent(
+                            searchQuery = searchQuery, searchFilter = state.searchFilter, verseResults = state.searchResults,
+                            textColor = textColor, gold = gold, fontSize = state.fontSize,
+                            onQueryChange = { searchQuery = it; viewModel.searchVerses(it) },
+                            onFilterChange = { viewModel.setSearchFilter(it) },
+                            onOpenVerse = { book, chapter, verse -> openBook(book, chapter); viewModel.selectTab("Bible"); viewModel.selectVerse(verse) }
+                        )
+                    }
                 }
             }
             if (state.selectedVerse != null && state.selectedTab == "Bible") {
