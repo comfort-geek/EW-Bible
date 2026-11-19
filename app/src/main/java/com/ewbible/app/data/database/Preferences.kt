@@ -34,7 +34,7 @@ class AppPreferences(private val context: Context) {
         val DAILY_VERSE_NUMBER = intPreferencesKey("daily_verse_number")
     }
 
-    val lastMode: Flow<String> = context.dataStore.data.map { it[LAST_MODE] ?: "World English Bible" }
+    val lastMode: Flow<String> = context.dataStore.data.map { it[LAST_MODE] ?: "New King James Version" }
     val lastBook: Flow<String> = context.dataStore.data.map { it[LAST_BOOK] ?: "Genesis" }
     val lastChapter: Flow<Int> = context.dataStore.data.map { it[LAST_CHAPTER] ?: 1 }
     val lastVerse: Flow<Int> = context.dataStore.data.map { it[LAST_VERSE] ?: 1 }
