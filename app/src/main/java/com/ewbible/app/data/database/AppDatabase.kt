@@ -110,7 +110,7 @@ data class BookmarkEntity(
         CommentaryEntity::class, NoteEntity::class, HighlightEntity::class,
         ChatEntity::class, MessageEntity::class, BookmarkEntity::class
     ],
-    version = 1,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
