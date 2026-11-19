@@ -17,7 +17,7 @@ import kotlinx.coroutines.withContext
 data class HomeUiState(
     val books: List<BookEntity> = emptyList(),
     val verses: List<VerseEntity> = emptyList(),
-    val highlights: Map<Int, Color> = emptyMap(),
+    val highlights: Map<Int, Color> = emptyList().let { emptyMap() },
     val notes: List<NoteEntity> = emptyList(),
     val summary: SummaryEntity? = null,
     val summaryLoading: Boolean = false,
@@ -81,14 +81,15 @@ class HomeViewModel(
     private var commentaryJob: Job? = null
     private var restoreDone = false
 
-    // FIX: LruCache cannot hold null. Old code: LruCache<String, SummaryEntity?>
-    // put(key, null) -> NullPointerException crash on chapters with no summary.
-    // Now: only non-null summaries go in cache, missing ones go in a Set.
     private val commentaryCache = LruCache<String, String>(30)
     private val summaryCache = LruCache<String, SummaryEntity>(60)
-    private val summaryMissing = mutableSetOf<String>()
-    private val summaryLoadingKeys = mutableSetOf<String>()
+    // MAX: synchronized - these were plain mutableSet accessed from multiple viewModelScope.launch {}
+    private val summaryMissing = Collections.synchronizedSet(mutableSetOf<String>())
+    private val summaryLoadingKeys = Collections.synchronizedSet(mutableSetOf<String>())
     private val versesCache = LruCache<String, List<VerseEntity>>(30)
+
+    // MAX: Prophecy set allocated on EVERY search keystroke. Now 1 const.
+    private val prophecyBooks = setOf(23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,66)
 
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
     val currentBookId: StateFlow<Int> = selectedBookId.asStateFlow()
@@ -100,11 +101,11 @@ class HomeViewModel(
     val verses: Flow<List<VerseEntity>> = bookChapterKey
         .flatMapLatest { (bookId, chapter) ->
             val key = "$bookId-$chapter"
-            val cached = versesCache.get(key)
+            val cached = synchronized(versesCache) { versesCache.get(key) }
             dao.getVerses(bookId, chapter)
                 .distinctUntilChanged()
                 .map { list ->
-                    if (list.isNotEmpty()) versesCache.put(key, list)
+                    if (list.isNotEmpty()) synchronized(versesCache) { versesCache.put(key, list) }
                     if (list.isEmpty() && cached != null) cached else list
                 }
                 .onStart { if (cached != null) emit(cached) }
@@ -122,10 +123,6 @@ class HomeViewModel(
         }
         .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
 
-    // FIX: Notes + Search are separate flows now.
-    // Before they were inside the big uiState combine, so saving 1 note
-    // or typing 1 search letter rebuilt the whole Bible tab.
-    // UI should collect notes / searchResults directly, not via uiState.
     val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
         .catch { emit(emptyList()) }
         .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
@@ -133,86 +130,54 @@ class HomeViewModel(
     val searchResultsFlow: StateFlow<List<VerseSearchResult>> = searchResults.asStateFlow()
     val searchFilterFlow: StateFlow<String> = searchFilter.asStateFlow()
 
-    // FIX: combine(listOf(...)) supports any number of flows.
-    // combine(a,b,c...) with 27 args does NOT compile - max is 20.
-    // This is the same 1-recomposition uiState, but without notes/search
-    // inside it, so Bible tab no longer recomposes on note/search change.
-    // notes/search are still in HomeUiState for backwards compat, kept as
-    // last-known values via separate collectors below.
-    private val notesLatest = MutableStateFlow<List<NoteEntity>>(emptyList())
-    private val searchLatest = MutableStateFlow<List<VerseSearchResult>>(emptyList())
-
-    @Suppress("UNCHECKED_CAST")
-    val uiState: StateFlow<HomeUiState> = combine(
-        listOf(
-            books as Flow<Any?>, verses as Flow<Any?>, highlights as Flow<Any?>,
-            notesLatest as Flow<Any?>, selectedBookId as Flow<Any?>, selectedChapter as Flow<Any?>,
-            selectedVerse as Flow<Any?>, selectedTab as Flow<Any?>, commentary as Flow<Any?>,
-            commentaryError as Flow<Any?>, summaryState as Flow<Any?>, _summaryLoading as Flow<Any?>,
-            chapterCounts as Flow<Any?>, searchLatest as Flow<Any?>, searchFilter as Flow<Any?>,
-            dailyVerse as Flow<Any?>, scrollRestoreKey as Flow<Any?>, linkedVerseText as Flow<Any?>,
-            linkedVerseRef as Flow<Any?>, showNoteDialogState as Flow<Any?>, showAiChatState as Flow<Any?>,
-            currentNoteText as Flow<Any?>, isReadingRestored as Flow<Any?>,
-            prefs.isDarkMode as Flow<Any?>, prefs.fontSize as Flow<Any?>,
-            prefs.userName as Flow<Any?>, prefs.userEmail as Flow<Any?>
-        )
-    ) { v ->
-        val booksL = v[0] as List<BookEntity>
-        val versesL = v[1] as List<VerseEntity>
-        val highL = v[2] as Map<Int, Color>
-        val notesL = v[3] as List<NoteEntity>
-        val bookId = v[4] as Int
-        val chapter = v[5] as Int
-        val verse = v[6] as Int?
-        val tab = v[7] as String
-        val comm = v[8] as String
-        val commErr = v[9] as Boolean
-        val summ = v[10] as SummaryEntity?
-        val summLoad = v[11] as Boolean
-        val counts = v[12] as Map<Int, Int>
-        val searchR = v[13] as List<VerseSearchResult>
-        val filter = v[14] as String
-        val daily = v[15] as String
-        val scrollK = v[16] as Int
-        val linkT = v[17] as String
-        val linkR = v[18] as String
-        val showNote = v[19] as Boolean
-        val showAi = v[20] as Boolean
-        val noteT = v[21] as String
-        val restored = v[22] as Boolean
-        val dark = v[23] as Boolean?
-        val font = (v[24] as Float).coerceAtLeast(18f)
-        val name = v[25] as String
-        val email = v[26] as String
-        HomeUiState(
-            books = booksL, verses = versesL, highlights = highL, notes = notesL,
-            summary = summ, summaryLoading = summLoad,
-            summaryText = summ?.summary ?: "", summaryWhatHappened = summ?.whatHappened ?: "",
-            summaryApplication = summ?.application ?: "", summaryItalicText = summ?.summary ?: "",
-            commentaryHtml = comm, commentaryError = commErr,
-            linkedVerseText = linkT, linkedVerseRef = linkR,
-            chapterCounts = counts, searchResults = searchR, searchFilter = filter,
-            dailyVerse = daily, currentBookId = bookId,
-            currentBook = BookCatalog.name(bookId), selectedBook = BookCatalog.name(bookId),
-            selectedChapter = chapter, selectedVerse = verse, selectedTab = tab,
-            darkMode = dark, fontSize = font,
-            isLoggedIn = name != "Guest" && email.isNotBlank(),
-            userName = name, userEmail = email,
-            scrollRestoreKey = scrollK, showNoteDialog = showNote, showAiChat = showAi,
-            currentNoteText = noteT, isReadingRestored = restored
-        )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())
+    // MAX: Replaced combine(listOf(27 flows)) + UNCHECKED_CAST.
+    // Before: typing 1 search letter / saving 1 note / changing font / toggling dark mode
+    // rebuilt the ENTIRE HomeUiState (books + verses + highlights + commentary + ...) = 1 recomposition of whole HomeScreen.
+    // Now: _uiState is updated field-by-field with update { copy(...) }. Only the changed field triggers a new state,
+    // and Compose can skip unchanged sections. Same public API, same HomeUiState.
+    private val _uiState = MutableStateFlow(HomeUiState())
+    val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     init {
         viewModelScope.launch { restoreSavedReading() }
 
-        // Keep uiState.notes / search in sync without rebuilding Bible tab on every keystroke:
-        // notes/search flows are shared, this is just a cheap pointer update.
-        viewModelScope.launch { notes.collect { notesLatest.value = it } }
-        viewModelScope.launch { searchResults.collect { searchLatest.value = it } }
+        // Each flow updates ONLY its own field - no 27-way combine
+        viewModelScope.launch { books.collect { _uiState.update { s -> s.copy(books = it) } } }
+        viewModelScope.launch { verses.collect { _uiState.update { s -> s.copy(verses = it) } } }
+        viewModelScope.launch { highlights.collect { _uiState.update { s -> s.copy(highlights = it) } } }
+        viewModelScope.launch { notes.collect { _uiState.update { s -> s.copy(notes = it) } } }
+        viewModelScope.launch { selectedBookId.collect { id ->
+            _uiState.update { s -> s.copy(currentBookId = id, currentBook = BookCatalog.name(id), selectedBook = BookCatalog.name(id)) }
+        } }
+        viewModelScope.launch { selectedChapter.collect { _uiState.update { s -> s.copy(selectedChapter = it) } } }
+        viewModelScope.launch { selectedVerse.collect { _uiState.update { s -> s.copy(selectedVerse = it) } } }
+        viewModelScope.launch { selectedTab.collect { _uiState.update { s -> s.copy(selectedTab = it) } } }
+        viewModelScope.launch { commentary.collect { _uiState.update { s -> s.copy(commentaryHtml = it) } } }
+        viewModelScope.launch { commentaryError.collect { _uiState.update { s -> s.copy(commentaryError = it) } } }
+        viewModelScope.launch { summaryState.collect { summ ->
+            _uiState.update { s -> s.copy(summary = summ, summaryText = summ?.summary ?: "", summaryWhatHappened = summ?.whatHappened ?: "", summaryApplication = summ?.application ?: "", summaryItalicText = summ?.summary ?: "") }
+        } }
+        viewModelScope.launch { _summaryLoading.collect { _uiState.update { s -> s.copy(summaryLoading = it) } } }
+        viewModelScope.launch { chapterCounts.collect { _uiState.update { s -> s.copy(chapterCounts = it) } } }
+        viewModelScope.launch { searchResults.collect { _uiState.update { s -> s.copy(searchResults = it) } } }
+        viewModelScope.launch { searchFilter.collect { _uiState.update { s -> s.copy(searchFilter = it) } } }
+        viewModelScope.launch { dailyVerse.collect { _uiState.update { s -> s.copy(dailyVerse = it) } } }
+        viewModelScope.launch { scrollRestoreKey.collect { _uiState.update { s -> s.copy(scrollRestoreKey = it) } } }
+        viewModelScope.launch { linkedVerseText.collect { _uiState.update { s -> s.copy(linkedVerseText = it) } } }
+        viewModelScope.launch { linkedVerseRef.collect { _uiState.update { s -> s.copy(linkedVerseRef = it) } } }
+        viewModelScope.launch { showNoteDialogState.collect { _uiState.update { s -> s.copy(showNoteDialog = it) } } }
+        viewModelScope.launch { showAiChatState.collect { _uiState.update { s -> s.copy(showAiChat = it) } } }
+        viewModelScope.launch { currentNoteText.collect { _uiState.update { s -> s.copy(currentNoteText = it) } } }
+        viewModelScope.launch { isReadingRestored.collect { _uiState.update { s -> s.copy(isReadingRestored = it) } } }
+        viewModelScope.launch { prefs.isDarkMode.collect { _uiState.update { s -> s.copy(darkMode = it) } } }
+        viewModelScope.launch { prefs.fontSize.collect { _uiState.update { s -> s.copy(fontSize = it.coerceAtLeast(18f)) } } }
+        // MAX: userName + userEmail were 2 separate collects -> 2 uiState rebuilds per login. Now 1 combined.
+        viewModelScope.launch {
+            combine(prefs.userName, prefs.userEmail) { n, e -> n to e }.collect { (n, e) ->
+                _uiState.update { s -> s.copy(userName = n, userEmail = e, isLoggedIn = n != "Guest" && e.isNotBlank()) }
+            }
+        }
 
-        // MAX: Summary + Commentary ONLY when needed, once per chapter
-        // Commentary: only on Open EW tab, NOT on Bible tab
         viewModelScope.launch {
             bookChapterKey.collectLatest { (bookId, chapter) ->
                 loadSummary(bookId, chapter)
@@ -235,7 +200,6 @@ class HomeViewModel(
             }
         }
 
-        // MAX Search: IO, debounce 250ms, cancel previous, escape once
         viewModelScope.launch {
             combine(searchQuery.debounce(250L).distinctUntilChanged(), searchFilter) { q, f -> q to f }
                 .distinctUntilChanged()
@@ -247,7 +211,7 @@ class HomeViewModel(
                         "Old Testament", "OT" -> raw.filter { it.bookId <= 39 }
                         "New Testament", "NT" -> raw.filter { it.bookId >= 40 }
                         "Gospel" -> raw.filter { it.bookId in 40..43 }
-                        "Prophecy" -> raw.filter { it.bookId in setOf(23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,66) }
+                        "Prophecy" -> raw.filter { it.bookId in prophecyBooks }
                         else -> raw
                     }
                 }
@@ -339,14 +303,13 @@ class HomeViewModel(
         }
     }
 
-    // FIX: Never put null into LruCache
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
         if (key in summaryMissing) {
             if (bookId == currentBookId.value && chapter == selectedChapter.value) summaryState.value = null
             return
         }
-        summaryCache.get(key)?.let { cached ->
+        synchronized(summaryCache) { summaryCache.get(key) }?.let { cached ->
             if (bookId == currentBookId.value && chapter == selectedChapter.value) summaryState.value = cached
             return
         }
@@ -356,7 +319,7 @@ class HomeViewModel(
             val isCurrent = bookId == currentBookId.value && chapter == selectedChapter.value
             if (isCurrent) _summaryLoading.value = true
             val s = runCatching { withContext(Dispatchers.IO) { dao.getSummary(bookId, chapter) } }.getOrNull()
-            if (s == null) summaryMissing.add(key) else summaryCache.put(key, s)
+            if (s == null) summaryMissing.add(key) else synchronized(summaryCache) { summaryCache.put(key, s) }
             if (isCurrent) summaryState.value = s
             summaryLoadingKeys.remove(key)
             if (summaryLoadingKeys.isEmpty()) _summaryLoading.value = false
@@ -375,10 +338,9 @@ class HomeViewModel(
         }
     }
 
-    // MAX Commentary: via CommentaryHelper, cached, IO, cancel previous, Open EW only auto-load
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
-        commentaryCache.get(key)?.let {
+        synchronized(commentaryCache) { commentaryCache.get(key) }?.let {
             commentaryJob?.cancel()
             commentaryError.value = false
             commentary.value = it
@@ -394,7 +356,7 @@ class HomeViewModel(
                 val finalHtml = if (html.isNullOrBlank()) {
                     "<html><body><p><i>Commentary for ${BookCatalog.name(bookId)} $chapter is not available yet.</i></p></body></html>"
                 } else html
-                if (!html.isNullOrBlank()) commentaryCache.put(key, html)
+                if (!html.isNullOrBlank()) synchronized(commentaryCache) { commentaryCache.put(key, html) }
                 commentary.value = finalHtml
                 commentaryError.value = false
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
