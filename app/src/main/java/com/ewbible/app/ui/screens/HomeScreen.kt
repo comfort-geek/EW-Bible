@@ -340,15 +340,15 @@ fun HomeScreen(viewModel: HomeViewModel) {
         WebViewScreen(url = "https://www.bible.com", title = "Bible.com", background = background, textColor = textColor, gold = gold, onClose = { showBibleCom = false })
     }
 
+    // FIXED: Real chat screen, not placeholder
     if (state.showAiChat) {
-        AlertDialog(
-            onDismissRequest = { viewModel.closeAiChat() },
-            containerColor = background,
-            title = { Text("Ask Gemini", color = textColor, fontWeight = FontWeight.Bold) },
-            text = { Text("Chat screen coming next.\n\nYou are reading: $currentBookName ${state.selectedChapter}", color = textColor) },
-            confirmButton = {
-                TextButton(onClick = { viewModel.closeAiChat() }) { Text("Close", color = gold) }
-            }
+        AiChatScreen(
+            currentRef = "$currentBookName ${state.selectedChapter}",
+            background = background,
+            textColor = textColor,
+            gold = gold,
+            panel = panel,
+            onClose = { viewModel.closeAiChat() }
         )
     }
 }
