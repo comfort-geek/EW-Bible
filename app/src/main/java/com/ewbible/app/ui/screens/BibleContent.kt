@@ -22,14 +22,11 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -125,31 +122,37 @@ fun BibleContent(
     summaryLoading: Boolean = false,
 ) {
     val haptic = LocalHapticFeedback.current
-    val density = LocalDensity.current
 
     // FIX: Same font rule as Open EW - never below 18sp
     val effectiveFontSize = fontSize.coerceAtLeast(18f)
     val lineHeight = (effectiveFontSize + 6).sp
 
     val safeBookId = selectedBookId.coerceIn(1, 66)
-    val bookName = BookCatalog.name(safeBookId)
     val maxChapter = BookCatalog.chapters(safeBookId)
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
     val currentKey = safeBookId to safeChapter
 
-    // FIX: No jumping - when chapter changes, jump to top BEFORE new list is measured.
-    // Old code kept old list + old scroll offset, then swapped list -> jump.
-    LaunchedEffect(currentKey) {
-        // Only scroll if we are not already at top, avoids flicker on first load
-        if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
-            listState.scrollToItem(0)
+    // FIX: Use DB list directly - no old -> new swap, no height jump.
+    val versesToShow = versesList
+
+    // PATCH: Only show summary if it belongs to THIS chapter.
+    // ViewModel holds old summary while new one loads - showing it under new verses = height jump.
+    // If it doesn't match, show nothing (loading spacer) until correct summary arrives.
+    val summaryToShow = summary?.takeIf { it.bookId == safeBookId && it.chapter == safeChapter }
+
+    // PATCH: Only scroll when verses actually belong to this chapter.
+    // Before: currentKey changed -> scroll to top on OLD list -> new list arrives -> jump again.
+    // Now: wait for matching verses, then scroll once.
+    val versesMatchKey = versesToShow.isEmpty() ||
+        (versesToShow.first().bookId == safeBookId && versesToShow.first().chapter == safeChapter)
+
+    LaunchedEffect(currentKey, versesMatchKey) {
+        if (versesMatchKey) {
+            if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+                listState.scrollToItem(0)
+            }
         }
     }
-
-    // FIX: No caching. Use DB list directly - no old -> new swap, no height jump.
-    // Parent ViewModel already holds previous chapter until new one loads, so no empty flash.
-    val versesToShow = versesList
-    val summaryToShow = summary
 
     Box(
         modifier = Modifier
