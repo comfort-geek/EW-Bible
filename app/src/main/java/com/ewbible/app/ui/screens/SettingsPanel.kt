@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Notes
@@ -64,6 +65,9 @@ fun SettingsPanel(
     onGoogleSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onOpenResource: () -> Unit,
+    // STEP 1: New - Chat with AI. Default = {} so old call sites still compile.
+    // Next step we will pass a real handler from HomeScreen / HomeViewModel.
+    onOpenAiChat: () -> Unit = {},
 ) {
     if (!visible) return
 
@@ -151,6 +155,33 @@ fun SettingsPanel(
                         .padding(16.dp)
                 ) {
                     Text("Bible.com", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // STEP 1: Chat with AI - below Bible.com, same card style
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(panel, RoundedCornerShape(12.dp))
+                        .clickable {
+                            onClose()
+                            onOpenAiChat()
+                        }
+                        .padding(16.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.ChatBubbleOutline,
+                            contentDescription = null,
+                            tint = gold,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text("Chat with AI", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
+                            Text("Ask anything", fontSize = 13.sp, color = textColor.copy(alpha = 0.6f))
+                        }
+                    }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             }
