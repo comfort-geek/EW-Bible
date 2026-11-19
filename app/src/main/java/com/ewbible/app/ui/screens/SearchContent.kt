@@ -41,8 +41,6 @@ import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.database.VerseSearchResult
 
-// MAX: Extracted row = Compose can SKIP unchanged results when you type.
-// Before: Card was inline in items() = typing 1 letter recomposed ALL visible results
 @Composable
 private fun SearchResultRow(
     result: VerseSearchResult,
@@ -93,15 +91,12 @@ fun SearchContent(
     onFilterChange: (String) -> Unit,
     onOpenVerse: (book: String, chapter: Int, verse: Int) -> Unit
 ) {
-    // MAX: Was listOf() allocated on every keystroke
     val filters = remember { listOf("All", "New Testament", "Gospel", "Old Testament", "Prophecy") }
     val keyboard = LocalSoftwareKeyboardController.current
     val effectiveFontSize = fontSize.coerceAtLeast(14f)
     val fontSizeSp = effectiveFontSize.sp
     val lineHeight = (effectiveFontSize + 8).sp
 
-    // MAX: Colors cached, not recreated on every keystroke
-    // Before: OutlinedTextFieldDefaults.colors(...) + copy(alpha) created ~12 Color objects per recomposition
     val searchBoxBg = remember { Color(0xFF1B2A4A) }
     val searchBoxBorder = remember { Color(0xFF2E426E) }
     val placeholderColor = remember { Color.White.copy(alpha = 0.6f) }
@@ -121,8 +116,6 @@ fun SearchContent(
     }
     val cardColor = remember(textColor) { textColor.copy(alpha = 0.06f) }
     val hintColor = remember(textColor) { textColor.copy(alpha = 0.6f) }
-    // MAX: Book names cached per result list. Before: BookCatalog.name() called 2x per row per recomposition (title + onClick)
-    // For 50 results = 100 lookups per keystroke
     val bookNames = remember(verseResults) {
         verseResults.associate { it.bookId to BookCatalog.name(it.bookId) }
     }
@@ -181,8 +174,6 @@ fun SearchContent(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(bottom = 16.dp)
                 ) {
-                    // MAX: Key = Int, not String. Before: "${book}-${chapter}-${verse}" = new String per row per keystroke
-                    // bookId (1-66) * 10M + chapter * 10k + verse = unique Int, 0 allocation
                     items(
                         verseResults,
                         key = { it.bookId * 10_000_000 + it.chapter * 10_000 + it.verse },
