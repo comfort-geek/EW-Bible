@@ -15,7 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -35,6 +35,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.database.BookCatalog
@@ -42,14 +43,11 @@ import com.ewbible.app.data.database.SummaryEntity
 import com.ewbible.app.data.database.VerseEntity
 import kotlin.math.abs
 
-// Swipe left = next, swipe right = prev. Same logic as Open EW: 80dp, mostly horizontal.
 @Composable
 private fun Modifier.swipeChapter(
     onNextChapter: () -> Unit,
     onPreviousChapter: () -> Unit
 ): Modifier {
-    // FIXED: Lambdas via rememberUpdatedState - pointerInput never restarts mid-drag
-    // FIXED: composed removed - was Unresolved reference in new Compose, now @Composable + return
     val nextState by rememberUpdatedState(onNextChapter)
     val prevState by rememberUpdatedState(onPreviousChapter)
     return pointerInput(Unit) {
@@ -59,14 +57,12 @@ private fun Modifier.swipeChapter(
             onHorizontalDrag = { change, delta ->
                 totalDx += delta
                 totalDy += abs(change.position.y - change.previousPosition.y)
-                // Don't consume vertical scroll - let LazyColumn handle it
                 if (abs(totalDx) < abs(totalDy) * 1.5f) {
                     totalDx = 0f
                     totalDy = 0f
                 }
             },
             onDragEnd = {
-                // 80dp in px, not 150px - 150px felt dead on small phones
                 if (abs(totalDx) > 80 * density) {
                     if (totalDx < 0) nextState() else prevState()
                 }
@@ -74,6 +70,55 @@ private fun Modifier.swipeChapter(
                 totalDy = 0f
             },
             onDragCancel = { totalDx = 0f; totalDy = 0f }
+        )
+    }
+}
+
+// MAX: Extracted VerseRow = Compose can SKIP it when its inputs didn't change.
+// Before: Row was inline in items() lambda = every highlight/font change recomposed ALL visible verses (Ps 119 = 20+ rows)
+@Composable
+private fun VerseRow(
+    verse: VerseEntity,
+    highlight: Color,
+    fontSizeSp: TextUnit,
+    lineHeight: TextUnit,
+    gold: Color,
+    textColor: Color,
+    onVerseClick: (Int) -> Unit,
+    onVerseLongClick: (Int) -> Unit,
+) {
+    val haptic = LocalHapticFeedback.current
+    // MAX: background only allocated when highlighted, not Color.Transparent for 176 verses
+    val rowModifier = if (highlight != Color.Transparent) {
+        Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(8.dp)).background(highlight, RoundedCornerShape(8.dp))
+    } else {
+        Modifier.fillMaxWidth().padding(vertical = 4.dp)
+    }
+    Row(
+        modifier = rowModifier
+            .combinedClickable(
+                onClick = { onVerseClick(verse.verse) },
+                onLongClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onVerseLongClick(verse.verse)
+                },
+            )
+            .padding(vertical = 8.dp, horizontal = 8.dp),
+    ) {
+        Text(
+            text = verse.verse.toString(),
+            color = gold,
+            fontWeight = FontWeight.Bold,
+            fontSize = fontSizeSp,
+            maxLines = 1,
+            modifier = Modifier.width(32.dp),
+        )
+        Text(
+            verse.text,
+            color = textColor,
+            fontSize = fontSizeSp,
+            lineHeight = lineHeight,
+            modifier = Modifier.weight(1f)
         )
     }
 }
@@ -96,8 +141,11 @@ fun BibleContent(
     onPreviousChapter: () -> Unit = {},
     summaryLoading: Boolean = false,
 ) {
+    // MAX: This overload was doing BookCatalog.id(selectedBook) on every recomposition (map lookup + string compare)
+    // HomeScreen now calls the Id overload directly, this stays only for old callers
+    val bookId = remember(selectedBook) { BookCatalog.id(selectedBook) }
     BibleContent(
-        selectedBookId = BookCatalog.id(selectedBook),
+        selectedBookId = bookId,
         selectedChapter = selectedChapter,
         summary = summary,
         versesList = versesList,
@@ -133,10 +181,8 @@ fun BibleContent(
     onPreviousChapter: () -> Unit = {},
     summaryLoading: Boolean = false,
 ) {
-    val haptic = LocalHapticFeedback.current
-
-    // FIX: Same font rule as Open EW - never below 18sp
     val effectiveFontSize = fontSize.coerceAtLeast(18f)
+    val fontSizeSp = effectiveFontSize.sp
     val lineHeight = (effectiveFontSize + 6).sp
 
     val safeBookId = selectedBookId.coerceIn(1, 66)
@@ -144,17 +190,11 @@ fun BibleContent(
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
     val currentKey = safeBookId to safeChapter
 
-    // FIX: Use DB list directly - no old -> new swap, no height jump.
     val versesToShow = versesList
-
-    // PATCH: Only show summary if it belongs to THIS chapter.
     val summaryToShow = summary?.takeIf { it.bookId == safeBookId && it.chapter == safeChapter }
-
-    // PATCH: Only scroll when verses actually belong to this chapter.
     val versesMatchKey = versesToShow.isEmpty() ||
         (versesToShow.first().bookId == safeBookId && versesToShow.first().chapter == safeChapter)
 
-    // FIXED: Only scroll to top on chapter CHANGE, not on first load (resume reading)
     var lastKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     LaunchedEffect(currentKey, versesMatchKey) {
@@ -181,7 +221,6 @@ fun BibleContent(
             modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
             contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
         ) {
-            // Summary - key includes book+chapter so it is not reused across chapters
             if (summaryToShow != null) {
                 item(key = "summary-${currentKey.first}-${currentKey.second}", contentType = "summary") {
                     Card(
@@ -191,19 +230,18 @@ fun BibleContent(
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(summaryToShow.summary, color = textColor, fontSize = effectiveFontSize.sp, lineHeight = lineHeight)
+                            Text(summaryToShow.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(summaryToShow.whatHappened, color = textColor, fontSize = effectiveFontSize.sp, lineHeight = lineHeight)
+                            Text(summaryToShow.whatHappened, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(summaryToShow.application, color = textColor, fontSize = effectiveFontSize.sp, lineHeight = lineHeight)
+                            Text(summaryToShow.application, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
                         }
                     }
                 }
             } else if (summaryLoading) {
                 item(key = "summary-loading-${currentKey.first}-${currentKey.second}", contentType = "summary") {
-                    // Keep same height as summary card so list does not jump when summary arrives
                     Spacer(modifier = Modifier.height(8.dp))
                 }
             }
@@ -213,52 +251,32 @@ fun BibleContent(
                     Text(
                         text = "Loading...",
                         color = textColor.copy(alpha = 0.6f),
-                        fontSize = effectiveFontSize.sp,
+                        fontSize = fontSizeSp,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
                         textAlign = TextAlign.Center
                     )
                 }
             }
 
-            // FIX: Stable key + contentType stops Compose reusing wrong verse row on scroll/chapter change
-            itemsIndexed(
-                versesToShow,
-                key = { _, verse -> "${verse.bookId}-${verse.chapter}-${verse.verse}" },
-                contentType = { _, _ -> "verse" }
-            ) { _, verse ->
-                val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(verseBackground, RoundedCornerShape(8.dp))
-                        .combinedClickable(
-                            onClick = { onVerseClick(verse.verse) },
-                            onLongClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onVerseLongClick(verse.verse)
-                            },
-                        )
-                        .padding(vertical = 8.dp, horizontal = 8.dp),
-                ) {
-                    Text(
-                        text = verse.verse.toString(),
-                        color = gold,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = effectiveFontSize.sp,
-                        // FIX: Fixed width + no wrap for number, so verse text column never shifts
-                        maxLines = 1,
-                        modifier = Modifier.width(32.dp),
-                    )
-                    Text(
-                        verse.text,
-                        color = textColor,
-                        fontSize = effectiveFontSize.sp,
-                        lineHeight = lineHeight,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+            // MAX: items() + key = verse.verse (Int), not String.
+            // Before: itemsIndexed + key = "${book}-${chapter}-${verse}" = new String for every verse on every recomposition
+            // List is always 1 chapter, so verse number alone is unique.
+            // MAX: items() instead of itemsIndexed = no index param, less allocation
+            items(
+                items = versesToShow,
+                key = { it.verse },
+                contentType = { "verse" }
+            ) { verse ->
+                VerseRow(
+                    verse = verse,
+                    highlight = currentHighlightMap[verse.verse] ?: Color.Transparent,
+                    fontSizeSp = fontSizeSp,
+                    lineHeight = lineHeight,
+                    gold = gold,
+                    textColor = textColor,
+                    onVerseClick = onVerseClick,
+                    onVerseLongClick = onVerseLongClick
+                )
             }
         }
     }
