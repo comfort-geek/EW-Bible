@@ -58,12 +58,16 @@ import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.auth.GoogleAuth
 import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.preferences.AppPreferences
+import com.ewbible.app.ui.viewmodel.ChatViewModel
 import com.ewbible.app.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(viewModel: HomeViewModel) {
+fun HomeScreen(
+    viewModel: HomeViewModel,
+    chatViewModel: ChatViewModel
+) {
     val context = LocalContext.current
     val activity = context as Activity
     val scope = rememberCoroutineScope()
@@ -340,9 +344,10 @@ fun HomeScreen(viewModel: HomeViewModel) {
         WebViewScreen(url = "https://www.bible.com", title = "Bible.com", background = background, textColor = textColor, gold = gold, onClose = { showBibleCom = false })
     }
 
-    // FIXED: Real chat screen, not placeholder
+    // FIXED: Pass real ChatViewModel
     if (state.showAiChat) {
         AiChatScreen(
+            viewModel = chatViewModel,
             currentRef = "$currentBookName ${state.selectedChapter}",
             background = background,
             textColor = textColor,
