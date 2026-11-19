@@ -1,6 +1,6 @@
 package com.ewbible.app.ui.viewmodel
 
-import android.util.Log
+import android.util.LruCache
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.ViewModel
@@ -13,10 +13,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.util.zip.GZIPInputStream
-import java.util.zip.Inflater
 
 data class HomeUiState(
     val books: List<BookEntity> = emptyList(),
@@ -76,9 +72,7 @@ class HomeViewModel(
     private val _summaryLoading = MutableStateFlow(false)
     val summaryLoading: StateFlow<Boolean> = _summaryLoading.asStateFlow()
     private val isReadingRestored = MutableStateFlow(false)
-    private val chapterCounts = MutableStateFlow<Map<Int, Int>>(
-        BookCatalog.all.associate { it.id to it.chapters }
-    )
+    private val chapterCounts = MutableStateFlow(BookCatalog.all.associate { it.id to it.chapters })
     private val searchResults = MutableStateFlow<List<VerseSearchResult>>(emptyList())
     private val dailyVerse = MutableStateFlow("")
     private val scrollRestoreKey = MutableStateFlow(0)
@@ -87,157 +81,146 @@ class HomeViewModel(
     private var commentaryJob: Job? = null
     private var restoreDone = false
 
-    private val commentaryCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
-        override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 30
-    }
-    private val summaryCache = mutableMapOf<String, SummaryEntity?>()
+    // MAX: LruCache is thread-safe, LinkedHashMap was not + manual size check
+    private val commentaryCache = LruCache<String, String>(30)
+    private val summaryCache = LruCache<String, SummaryEntity?>(60)
     private val summaryLoadingKeys = mutableSetOf<String>()
-    private val versesCache = mutableMapOf<String, List<VerseEntity>>()
+    private val versesCache = LruCache<String, List<VerseEntity>>(30)
 
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
     val currentBookId: StateFlow<Int> = selectedBookId.asStateFlow()
 
-    val verses: Flow<List<VerseEntity>> = combine(selectedBookId, selectedChapter) { bookId, chapter ->
-        bookId to chapter
-    }
+    // MAX: Single source, shared, no double collect
+    private val bookChapterKey = combine(selectedBookId, selectedChapter) { b, c -> b to c }
         .distinctUntilChanged()
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
+
+    val verses: Flow<List<VerseEntity>> = bookChapterKey
         .flatMapLatest { (bookId, chapter) ->
             val key = "$bookId-$chapter"
-            val cached = versesCache[key]
-            try {
-                dao.getVerses(bookId, chapter)
-                    .distinctUntilChanged()
-                    .map { list ->
-                        if (list.isNotEmpty()) versesCache[key] = list
-                        if (list.isEmpty() && cached != null) cached else list
-                    }
-                    .distinctUntilChanged()
-                    .onStart { if (cached != null) emit(cached) }
-            } catch (e: Exception) {
-                flowOf(cached ?: emptyList())
-            }
-        }
-        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
-
-    val highlights: Flow<Map<Int, Color>> = combine(selectedBookId, selectedChapter) { bookId, chapter ->
-        bookId to chapter
-    }
-        .distinctUntilChanged()
-        .flatMapLatest { (bookId, chapter) ->
-            try {
-                dao.getHighlights(bookId, chapter).map { list ->
-                    list.associate { it.verse to parseHighlightColor(it.color) }
+            val cached = versesCache.get(key)
+            dao.getVerses(bookId, chapter)
+                .distinctUntilChanged()
+                .map { list ->
+                    if (list.isNotEmpty()) versesCache.put(key, list)
+                    if (list.isEmpty() && cached != null) cached else list
                 }
-            } catch (e: Exception) { flowOf(emptyMap()) }
+                .onStart { if (cached != null) emit(cached) }
+                .catch { emit(cached ?: emptyList()) }
+                .flowOn(Dispatchers.IO)
         }
         .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
 
-    val notes: Flow<List<NoteEntity>> = try { dao.getAllNotes() } catch (e: Exception) { flowOf(emptyList()) }
+    val highlights: Flow<Map<Int, Color>> = bookChapterKey
+        .flatMapLatest { (bookId, chapter) ->
+            dao.getHighlights(bookId, chapter)
+                .map { list -> list.associate { it.verse to Color(it.color) } }
+                .catch { emit(emptyMap()) }
+                .flowOn(Dispatchers.IO)
+        }
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
 
-    private val _uiState = MutableStateFlow(HomeUiState())
-    val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+    val notes: Flow<List<NoteEntity>> = dao.getAllNotes()
+        .catch { emit(emptyList()) }
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
+
+    // MAX: ONE uiState combine = 1 recomposition per change, not 24
+    val uiState: StateFlow<HomeUiState> = combine(
+        books, verses, highlights, notes, selectedBookId, selectedChapter,
+        selectedVerse, selectedTab, commentary, commentaryError, summaryState,
+        _summaryLoading, chapterCounts, searchResults, searchFilter, dailyVerse,
+        scrollRestoreKey, linkedVerseText, linkedVerseRef,
+        showNoteDialogState, showAiChatState, currentNoteText, isReadingRestored,
+        prefs.isDarkMode, prefs.fontSize, prefs.userName, prefs.userEmail
+    ) { v ->
+        @Suppress("UNCHECKED_CAST")
+        val booksL = v[0] as List<BookEntity>
+        val versesL = v[1] as List<VerseEntity>
+        val highL = v[2] as Map<Int, Color>
+        val notesL = v[3] as List<NoteEntity>
+        val bookId = v[4] as Int
+        val chapter = v[5] as Int
+        val verse = v[6] as Int?
+        val tab = v[7] as String
+        val comm = v[8] as String
+        val commErr = v[9] as Boolean
+        val summ = v[10] as SummaryEntity?
+        val summLoad = v[11] as Boolean
+        val counts = v[12] as Map<Int, Int>
+        val searchR = v[13] as List<VerseSearchResult>
+        val filter = v[14] as String
+        val daily = v[15] as String
+        val scrollK = v[16] as Int
+        val linkT = v[17] as String
+        val linkR = v[18] as String
+        val showNote = v[19] as Boolean
+        val showAi = v[20] as Boolean
+        val noteT = v[21] as String
+        val restored = v[22] as Boolean
+        val dark = v[23] as Boolean?
+        val font = (v[24] as Float).coerceAtLeast(18f)
+        val name = v[25] as String
+        val email = v[26] as String
+        HomeUiState(
+            books = booksL, verses = versesL, highlights = highL, notes = notesL,
+            summary = summ, summaryLoading = summLoad,
+            summaryText = summ?.summary ?: "", summaryWhatHappened = summ?.whatHappened ?: "",
+            summaryApplication = summ?.application ?: "", summaryItalicText = summ?.summary ?: "",
+            commentaryHtml = comm, commentaryError = commErr,
+            linkedVerseText = linkT, linkedVerseRef = linkR,
+            chapterCounts = counts, searchResults = searchR, searchFilter = filter,
+            dailyVerse = daily, currentBookId = bookId,
+            currentBook = BookCatalog.name(bookId), selectedBook = BookCatalog.name(bookId),
+            selectedChapter = chapter, selectedVerse = verse, selectedTab = tab,
+            darkMode = dark, fontSize = font,
+            isLoggedIn = name != "Guest" && email.isNotBlank(),
+            userName = name, userEmail = email,
+            scrollRestoreKey = scrollK, showNoteDialog = showNote, showAiChat = showAi,
+            currentNoteText = noteT, isReadingRestored = restored
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())
 
     init {
-        viewModelScope.launch {
-            restoreSavedReading()
+        viewModelScope.launch { restoreSavedReading() }
 
-            launch { books.collect { list -> _uiState.update { it.copy(books = list) } } }
-            launch { verses.collect { list -> _uiState.update { it.copy(verses = list) } } }
-            launch { highlights.collect { map -> _uiState.update { it.copy(highlights = map) } } }
-            launch { notes.collect { list -> _uiState.update { it.copy(notes = list) } } }
-            launch {
-                selectedBookId.collect { id ->
-                    _uiState.update { it.copy(currentBookId = id, currentBook = BookCatalog.name(id), selectedBook = BookCatalog.name(id)) }
-                }
-            }
-            launch { selectedChapter.collect { c -> _uiState.update { it.copy(selectedChapter = c) } } }
-            launch { selectedVerse.collect { v -> _uiState.update { it.copy(selectedVerse = v) } } }
-            launch { selectedTab.collect { t -> _uiState.update { it.copy(selectedTab = t) } } }
-            launch { commentary.collect { h -> _uiState.update { it.copy(commentaryHtml = h) } } }
-            launch { commentaryError.collect { e -> _uiState.update { it.copy(commentaryError = e) } } }
-            launch {
-                summaryState.collect { s ->
-                    _uiState.update {
-                        it.copy(summary = s, summaryText = s?.summary ?: "", summaryWhatHappened = s?.whatHappened ?: "", summaryApplication = s?.application ?: "", summaryItalicText = s?.summary ?: "")
-                    }
-                }
-            }
-            launch { summaryLoading.collect { b -> _uiState.update { it.copy(summaryLoading = b) } } }
-            launch { chapterCounts.collect { m -> _uiState.update { it.copy(chapterCounts = m) } } }
-            launch { searchResults.collect { r -> _uiState.update { it.copy(searchResults = r) } } }
-            launch { searchFilter.collect { f -> _uiState.update { it.copy(searchFilter = f) } } }
-            launch { dailyVerse.collect { d -> _uiState.update { it.copy(dailyVerse = d) } } }
-            launch { scrollRestoreKey.collect { k -> _uiState.update { it.copy(scrollRestoreKey = k) } } }
-            launch { linkedVerseText.collect { t -> _uiState.update { it.copy(linkedVerseText = t) } } }
-            launch { linkedVerseRef.collect { r -> _uiState.update { it.copy(linkedVerseRef = r) } } }
-            launch { showNoteDialogState.collect { b -> _uiState.update { it.copy(showNoteDialog = b) } } }
-            launch { showAiChatState.collect { b -> _uiState.update { it.copy(showAiChat = b) } } }
-            launch { currentNoteText.collect { t -> _uiState.update { it.copy(currentNoteText = t) } } }
-            launch { isReadingRestored.collect { b -> _uiState.update { it.copy(isReadingRestored = b) } } }
-
-            launch {
-                combine(currentBookId, selectedChapter) { bookId, chapter -> bookId to chapter }
-                    .distinctUntilChanged()
-                    .collectLatest { (bookId, chapter) ->
-                        loadSummary(bookId, chapter)
-                        loadCommentary(bookId, chapter)
-                    }
-            }
-            launch {
-                selectedTab.collectLatest { tab ->
-                    if (tab == "Open EW") loadCommentary(currentBookId.value, selectedChapter.value)
-                }
-            }
-
-            loadSummary(selectedBookId.value, selectedChapter.value)
-            loadCommentary(selectedBookId.value, selectedChapter.value)
-        }
-
+        // MAX: Load summary + commentary ONLY when needed, once per chapter
         viewModelScope.launch {
-            runCatching { prefs.isDarkMode.collect { d -> _uiState.update { it.copy(darkMode = d) } } }
-        }
-        viewModelScope.launch {
-            runCatching { prefs.fontSize.collect { f -> _uiState.update { it.copy(fontSize = f.coerceAtLeast(18f)) } } }
-        }
-        viewModelScope.launch {
-            runCatching {
-                prefs.userName.collect { n ->
-                    _uiState.update { it.copy(userName = n, isLoggedIn = n != "Guest" && _uiState.value.userEmail.isNotBlank()) }
-                }
+            bookChapterKey.collectLatest { (bookId, chapter) ->
+                loadSummary(bookId, chapter)
+                // Commentary: only if user is on Open EW tab, not on Bible tab
+                if (selectedTab.value == "Open EW") loadCommentary(bookId, chapter)
             }
         }
         viewModelScope.launch {
-            runCatching {
-                prefs.userEmail.collect { e ->
-                    _uiState.update { it.copy(userEmail = e, isLoggedIn = _uiState.value.userName != "Guest" && e.isNotBlank()) }
-                }
+            selectedTab.distinctUntilChanged().collectLatest { tab ->
+                if (tab == "Open EW") loadCommentary(selectedBookId.value, selectedChapter.value)
             }
         }
 
         viewModelScope.launch {
             runCatching {
-                val fromDb = dao.getChapterCounts().associate { it.bookId to it.chapterCount }
+                val fromDb = withContext(Dispatchers.IO) { dao.getChapterCounts().associate { it.bookId to it.chapterCount } }
                 if (fromDb.isNotEmpty()) {
                     val catalog = BookCatalog.all.associate { it.id to it.chapters }
-                    chapterCounts.value = catalog.mapValues { (id, catalogCount) -> maxOf(catalogCount, fromDb[id] ?: 0) }
+                    chapterCounts.value = catalog.mapValues { (id, c) -> maxOf(c, fromDb[id] ?: 0) }
                 }
-            }.onFailure { Log.e("HomeViewModel", "getChapterCounts failed", it) }
+            }
         }
 
+        // MAX: Search on IO, debounce, cancel previous, escape once
         viewModelScope.launch {
-            combine(searchQuery.debounce(300L).distinctUntilChanged(), searchFilter) { q, f -> q to f }
+            combine(searchQuery.debounce(250L).distinctUntilChanged(), searchFilter) { q, f -> q to f }
+                .distinctUntilChanged()
                 .collectLatest { (query, filter) ->
                     if (query.isBlank()) { searchResults.value = emptyList(); return@collectLatest }
-                    runCatching {
-                        val escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                        val raw = dao.searchVerses(escaped)
-                        searchResults.value = when (filter) {
-                            "Old Testament", "OT" -> raw.filter { it.bookId <= 39 }
-                            "New Testament", "NT" -> raw.filter { it.bookId >= 40 }
-                            "Gospel" -> raw.filter { it.bookId in 40..43 }
-                            "Prophecy" -> raw.filter { it.bookId in setOf(23, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 66) }
-                            else -> raw
-                        }
+                    val escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                    val raw = runCatching { withContext(Dispatchers.IO) { dao.searchVerses(escaped) } }.getOrDefault(emptyList())
+                    searchResults.value = when (filter) {
+                        "Old Testament", "OT" -> raw.filter { it.bookId <= 39 }
+                        "New Testament", "NT" -> raw.filter { it.bookId >= 40 }
+                        "Gospel" -> raw.filter { it.bookId in 40..43 }
+                        "Prophecy" -> raw.filter { it.bookId in setOf(23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,66) }
+                        else -> raw
                     }
                 }
         }
@@ -248,7 +231,7 @@ class HomeViewModel(
         selectedBookId.value = bookId.coerceIn(1, 66)
         selectedChapter.value = 1
         selectedVerse.value = null
-        scrollRestoreKey.update { it + 1 }
+        scrollRestoreKey.value += 1
         saveReadingProgress()
     }
     fun selectBook(bookName: String) = selectBook(BookCatalog.id(bookName))
@@ -256,38 +239,36 @@ class HomeViewModel(
         val max = BookCatalog.chapters(currentBookId.value)
         selectedChapter.value = chapter.coerceIn(1, max)
         selectedVerse.value = null
-        scrollRestoreKey.update { it + 1 }
+        scrollRestoreKey.value += 1
         saveReadingProgress()
     }
     fun previousChapter() {
         if (selectedChapter.value > 1) { selectChapter(selectedChapter.value - 1); return }
-        val prevBookId = currentBookId.value - 1
-        if (prevBookId < 1) return
-        selectedBookId.value = prevBookId
-        selectedChapter.value = BookCatalog.chapters(prevBookId)
+        val prev = currentBookId.value - 1
+        if (prev < 1) return
+        selectedBookId.value = prev
+        selectedChapter.value = BookCatalog.chapters(prev)
         selectedVerse.value = null
-        scrollRestoreKey.update { it + 1 }
+        scrollRestoreKey.value += 1
         saveReadingProgress()
     }
     fun nextChapter() {
         val max = BookCatalog.chapters(currentBookId.value)
         if (selectedChapter.value < max) { selectChapter(selectedChapter.value + 1); return }
-        val nextBookId = currentBookId.value + 1
-        if (nextBookId > 66) return
-        selectedBookId.value = nextBookId
+        val next = currentBookId.value + 1
+        if (next > 66) return
+        selectedBookId.value = next
         selectedChapter.value = 1
         selectedVerse.value = null
-        scrollRestoreKey.update { it + 1 }
+        scrollRestoreKey.value += 1
         saveReadingProgress()
     }
     fun selectVerse(verse: Int?) {
         selectedVerse.value = verse
         if (verse != null) {
             viewModelScope.launch {
-                runCatching {
-                    val note = dao.getNoteAtVerse(currentBookId.value, selectedChapter.value, verse)
-                    currentNoteText.value = note?.text ?: ""
-                }
+                val note = runCatching { withContext(Dispatchers.IO) { dao.getNoteAtVerse(currentBookId.value, selectedChapter.value, verse) } }.getOrNull()
+                currentNoteText.value = note?.text ?: ""
             }
         }
     }
@@ -297,15 +278,11 @@ class HomeViewModel(
         selectedBookId.value = safeId
         selectedChapter.value = chapter.coerceIn(1, BookCatalog.chapters(safeId))
         selectedVerse.value = null
-        scrollRestoreKey.update { it + 1 }
+        scrollRestoreKey.value += 1
         saveReadingProgress()
     }
     fun openBook(bookName: String, chapter: Int) = openBook(BookCatalog.id(bookName), chapter)
-
-    fun selectTab(tab: String) {
-        selectedTab.value = tab
-    }
-
+    fun selectTab(tab: String) { selectedTab.value = tab }
     fun searchVerses(query: String) { searchQuery.value = query }
     fun setSearchQuery(query: String) { searchQuery.value = query }
     fun setSearchFilter(filter: String) { searchFilter.value = filter }
@@ -328,36 +305,26 @@ class HomeViewModel(
                 selectedChapter.value = lastChapter.coerceIn(1, BookCatalog.chapters(lastBookId))
             }
         } catch (e: Exception) {
-            Log.e("HomeViewModel", "restoreSavedReading failed, using Genesis 1", e)
-            selectedBookId.value = 1
-            selectedChapter.value = 1
+            selectedBookId.value = 1; selectedChapter.value = 1
         } finally {
-            restoreDone = true
-            isReadingRestored.value = true
+            restoreDone = true; isReadingRestored.value = true
         }
     }
 
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
-        if (summaryCache.containsKey(key)) {
-            val cached = summaryCache[key]
-            if (bookId == currentBookId.value && chapter == selectedChapter.value) {
-                summaryState.value = cached
-            }
+        summaryCache.get(key)?.let { cached ->
+            if (bookId == currentBookId.value && chapter == selectedChapter.value) summaryState.value = cached
             return
         }
         if (key in summaryLoadingKeys) return
         summaryLoadingKeys.add(key)
         viewModelScope.launch {
-            _summaryLoading.value = true
-            runCatching {
-                // FIXED: DAO has getSummary(), not getSummaryEntity()
-                val s = dao.getSummary(bookId, chapter)
-                summaryCache[key] = s
-                if (bookId == currentBookId.value && chapter == selectedChapter.value) {
-                    summaryState.value = s
-                }
-            }
+            val isCurrent = bookId == currentBookId.value && chapter == selectedChapter.value
+            if (isCurrent) _summaryLoading.value = true
+            val s = runCatching { withContext(Dispatchers.IO) { dao.getSummary(bookId, chapter) } }.getOrNull()
+            summaryCache.put(key, s)
+            if (isCurrent) summaryState.value = s
             summaryLoadingKeys.remove(key)
             if (summaryLoadingKeys.isEmpty()) _summaryLoading.value = false
         }
@@ -368,20 +335,17 @@ class HomeViewModel(
         viewModelScope.launch {
             val bookId = runCatching { BookCatalog.id(bookName) }.getOrDefault(1)
             val end = maxOf(verse, endVerse)
-            linkedVerseRef.value = if (end > verse) "${BookCatalog.name(bookId)} $chapter:$verse-$end"
-                                   else "${BookCatalog.name(bookId)} $chapter:$verse"
+            linkedVerseRef.value = if (end > verse) "${BookCatalog.name(bookId)} $chapter:$verse-$end" else "${BookCatalog.name(bookId)} $chapter:$verse"
             linkedVerseText.value = "Loading..."
-            runCatching {
-                val range = dao.getVerseRange(bookId, chapter, verse, end)
-                linkedVerseText.value = if (range.isEmpty()) "Verse not found."
-                    else range.joinToString("\n\n") { "${it.verse}. ${it.text}" }
-            }.onFailure { linkedVerseText.value = "Could not load verse." }
+            val range = runCatching { withContext(Dispatchers.IO) { dao.getVerseRange(bookId, chapter, verse, end) } }.getOrDefault(emptyList())
+            linkedVerseText.value = if (range.isEmpty()) "Verse not found." else range.joinToString("\n\n") { "${it.verse}. ${it.text}" }
         }
     }
 
+    // MAX: Commentary via CommentaryHelper, cached, IO, cancel previous
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
-        commentaryCache[key]?.let {
+        commentaryCache.get(key)?.let {
             commentaryJob?.cancel()
             commentaryError.value = false
             commentary.value = it
@@ -392,78 +356,28 @@ class HomeViewModel(
             try {
                 val html = withContext(Dispatchers.IO) {
                     val compressed = runCatching { dao.getCommentaryCompressed(bookId, chapter) }.getOrNull()
-                    if (compressed == null || compressed.isEmpty()) null else decompressCommentary(compressed)
+                    if (compressed.isNullOrEmpty()) null else CommentaryHelper.decompress(compressed)
                 }
-                if (html.isNullOrBlank()) {
-                    val fallback = "<html><body><p><i>Commentary for ${BookCatalog.name(bookId)} $chapter is not available yet.</i></p></body></html>"
-                    commentary.value = fallback
-                    commentaryError.value = false
-                } else {
-                    commentaryCache[key] = html
-                    commentary.value = html
-                    commentaryError.value = false
-                }
+                val finalHtml = if (html.isNullOrBlank()) {
+                    "<html><body><p><i>Commentary for ${BookCatalog.name(bookId)} $chapter is not available yet.</i></p></body></html>"
+                } else html
+                if (!html.isNullOrBlank()) commentaryCache.put(key, html)
+                commentary.value = finalHtml
+                commentaryError.value = false
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) {
-                Log.e("HomeViewModel", "loadCommentary failed book=$bookId ch=$chapter", e)
-                val fallback = "<html><body><p><i>Commentary for ${BookCatalog.name(bookId)} $chapter is not available yet.</i></p></body></html>"
-                commentary.value = fallback
+                commentary.value = "<html><body><p><i>Commentary for ${BookCatalog.name(bookId)} $chapter is not available yet.</i></p></body></html>"
                 commentaryError.value = false
             }
         }
     }
     fun loadCommentary() { loadCommentary(currentBookId.value, selectedChapter.value) }
 
-    private fun decompressCommentary(bytes: ByteArray): String {
-        if (bytes.isEmpty()) return ""
-        if (bytes.size > 2 && bytes[0] == '<'.code.toByte()) return String(bytes, Charsets.UTF_8)
-        val isGzip = bytes.size >= 2 && bytes[0] == 0x1F.toByte() && bytes[1] == 0x8B.toByte()
-        val isZlib = bytes.size >= 2 && bytes[0] == 0x78.toByte()
-        return try {
-            when {
-                isGzip -> GZIPInputStream(ByteArrayInputStream(bytes)).use { it.readBytes().toString(Charsets.UTF_8) }
-                isZlib -> {
-                    val inflater = Inflater()
-                    try {
-                        inflater.setInput(bytes)
-                        val out = ByteArrayOutputStream(bytes.size * 3)
-                        val buf = ByteArray(16384)
-                        while (!inflater.finished()) {
-                            val n = inflater.inflate(buf)
-                            if (n == 0) break
-                            out.write(buf, 0, n)
-                        }
-                        out.toString(Charsets.UTF_8.name())
-                    } finally { inflater.end() }
-                }
-                else -> {
-                    val inflater = Inflater(true)
-                    try {
-                        inflater.setInput(bytes)
-                        val out = ByteArrayOutputStream(bytes.size * 3)
-                        val buf = ByteArray(16384)
-                        while (!inflater.finished()) {
-                            val n = inflater.inflate(buf)
-                            if (n == 0) break
-                            out.write(buf, 0, n)
-                        }
-                        out.toString(Charsets.UTF_8.name())
-                    } finally { inflater.end() }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("HomeViewModel", "decompress failed, returning raw", e)
-            String(bytes, Charsets.UTF_8)
-        }
-    }
-
     fun loadDailyVerse() {
         viewModelScope.launch {
-            runCatching {
-                val verse = dao.getRandomVerse()
-                dailyVerse.value = verse?.let { "${it.text}\n— ${BookCatalog.name(it.bookId)} ${it.chapter}:${it.verse}" }
-                    ?: "Thy word is a lamp unto my feet, and a light unto my path.\n— Psalm 119:105"
-            }.onFailure { dailyVerse.value = "Thy word is a lamp unto my feet, and a light unto my path.\n— Psalm 119:105" }
+            val verse = runCatching { withContext(Dispatchers.IO) { dao.getRandomVerse() } }.getOrNull()
+            dailyVerse.value = verse?.let { "${it.text}\n— ${BookCatalog.name(it.bookId)} ${it.chapter}:${it.verse}" }
+                ?: "Thy word is a lamp unto my feet, and a light unto my path.\n— Psalm 119:105"
         }
     }
     fun showNoteDialog() { if (selectedVerse.value == null) return; showNoteDialogState.value = true }
@@ -474,22 +388,21 @@ class HomeViewModel(
         val verseNum = selectedVerse.value ?: return
         viewModelScope.launch {
             runCatching {
-                val existing = dao.getNoteAtVerse(currentBookId.value, selectedChapter.value, verseNum)
-                if (existing != null) dao.updateNote(existing.copy(text = noteText, timestamp = System.currentTimeMillis()))
-                else dao.saveNote(NoteEntity(bookId = currentBookId.value, chapter = selectedChapter.value, verse = verseNum, text = noteText, timestamp = System.currentTimeMillis()))
+                withContext(Dispatchers.IO) {
+                    val existing = dao.getNoteAtVerse(currentBookId.value, selectedChapter.value, verseNum)
+                    if (existing != null) dao.updateNote(existing.copy(text = noteText, timestamp = System.currentTimeMillis()))
+                    else dao.saveNote(NoteEntity(bookId = currentBookId.value, chapter = selectedChapter.value, verse = verseNum, text = noteText, timestamp = System.currentTimeMillis()))
+                }
                 currentNoteText.value = noteText
             }
         }
     }
     fun saveHighlight(color: Color) {
         val verseNum = selectedVerse.value ?: return
-        viewModelScope.launch { runCatching { dao.saveHighlight(HighlightEntity(bookId = currentBookId.value, chapter = selectedChapter.value, verse = verseNum, color = color.toArgb())) } }
+        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { dao.saveHighlight(HighlightEntity(bookId = currentBookId.value, chapter = selectedChapter.value, verse = verseNum, color = color.toArgb())) } } }
     }
     fun removeHighlight() {
         val verseNum = selectedVerse.value ?: return
-        viewModelScope.launch { runCatching { dao.deleteHighlight(currentBookId.value, selectedChapter.value, verseNum) } }
-    }
-    private fun parseHighlightColor(colorInt: Int): Color {
-        return Color(colorInt)
+        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { dao.deleteHighlight(currentBookId.value, selectedChapter.value, verseNum) } } }
     }
 }
