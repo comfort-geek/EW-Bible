@@ -35,10 +35,10 @@ import com.ewbible.app.data.database.BookCatalog
 import java.net.URLDecoder
 import java.net.URLEncoder
 
-// Single source of truth = BookCatalog (66 books + aliases like Gen, Ps, 1 Sam, Rev)
+// Single source of truth = BookCatalog (66 books + aliases like Gen, Ps, 1 Sam, Rev, Song of Songs)
 private val DISPLAY_NAMES: List<String> = BookCatalog.allDisplayNames()
 private val BOOK_PATTERN = DISPLAY_NAMES
-    .sortedByDescending { it.length }
+    .sortedByDescending { it.length } // "1 Samuel" before "Samuel", "Song of Songs" before "Song"
     .joinToString("|") { Regex.escape(it) }
 // Only real book names link. Supports ranges: Genesis 1:1-5, Psalm 19:1-4
 private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?(?!\\d)")
@@ -68,7 +68,7 @@ private fun linkifyForHtml(html: String): String {
     return VERSE_REGEX.replace(html) { m ->
         val raw = m.groupValues[1].trim()
         val bookId = BookCatalog.id(raw)
-        val canonical = BookCatalog.canonicalName(raw) // Ps -> Psalms, Gen -> Genesis
+        val canonical = BookCatalog.canonicalName(raw) // Ps -> Psalms, Gen -> Genesis, 1 Sam -> 1 Samuel
         val ch = m.groupValues[2].toIntOrNull() ?: return@replace m.value
         val vs = m.groupValues[3].toIntOrNull() ?: return@replace m.value
         val endRaw = m.groupValues[4]
@@ -100,6 +100,9 @@ fun OpenEWContent(
     val currentOnPrev by rememberUpdatedState(onPreviousChapter)
     val density = LocalDensity.current
 
+    // NO SMALL FONT: Open EW never goes below 18sp, even if settings say 16sp
+    val effectiveFontSize = fontSize.coerceAtLeast(18f)
+
     // NO LAG: parse once per chapter, cache gold Spannable. No re-parse on font/theme change.
     val goldSpanned = remember(commentaryHtml, bookName, chapter) {
         if (commentaryHtml.isBlank()) null
@@ -122,7 +125,12 @@ fun OpenEWContent(
 
     if (hasError && goldSpanned == null) {
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
-            Text("Could not load commentary. Please try again.", color = textColor.copy(alpha = 0.6f), fontSize = fontSize.sp, lineHeight = (fontSize + 8).sp)
+            Text(
+                "Could not load commentary. Please try again.",
+                color = textColor.copy(alpha = 0.6f),
+                fontSize = effectiveFontSize.sp,
+                lineHeight = (effectiveFontSize + 8).sp
+            )
             Button(onClick = onRetry, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC9A227))) {
                 Text("Try Again", color = Color.White, fontWeight = FontWeight.Bold)
             }
@@ -134,7 +142,12 @@ fun OpenEWContent(
         if (goldSpanned == null) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
                 if (!isLoading) {
-                    Text("No commentary available for this chapter.", color = textColor.copy(alpha = 0.6f), fontSize = fontSize.sp, lineHeight = (fontSize + 8).sp)
+                    Text(
+                        "No commentary available for this chapter.",
+                        color = textColor.copy(alpha = 0.6f),
+                        fontSize = effectiveFontSize.sp,
+                        lineHeight = (effectiveFontSize + 8).sp
+                    )
                 }
             }
         } else {
@@ -144,7 +157,7 @@ fun OpenEWContent(
                 factory = { ctx ->
                     val padPx = with(density) { 16.dp.roundToPx() }
                     val bottomPx = with(density) { 96.dp.roundToPx() }
-                    val swipePx = with(density) { 80.dp.toPx() } // was 150px - too far, felt dead
+                    val swipePx = with(density) { 80.dp.toPx() }
 
                     lateinit var gestureDetector: GestureDetector
                     val textView = object : TextView(ctx) {
@@ -155,13 +168,12 @@ fun OpenEWContent(
                             return super.onTouchEvent(event)
                         }
                     }.apply {
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
                         setLineSpacing(0f, 1.45f)
                         setTextColor(textColor.toArgb())
                         setPadding(padPx, 0, padPx, bottomPx)
                         isVerticalScrollBarEnabled = true
                         scrollBarStyle = SCROLLBARS_INSIDE_OVERLAY
-                        // Links still work, but TextView handles scrolling natively
                         movementMethod = object : LinkMovementMethod() {
                             override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
                                 if (event.action == MotionEvent.ACTION_UP) {
@@ -219,7 +231,7 @@ fun OpenEWContent(
                 update = { textView ->
                     if (textView.tag !== goldSpanned) {
                         textView.tag = goldSpanned
-                        textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
+                        textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
                         textView.setTextColor(textColor.toArgb())
                         textView.text = goldSpanned
                         textView.scrollTo(0, 0)
