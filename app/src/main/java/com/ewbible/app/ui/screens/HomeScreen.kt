@@ -96,28 +96,20 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val textColor = if (isDark) Color(0xFFF5F0E6) else Color(0xFF1E1E22)
     val currentBookId = state.currentBookId
     val currentBookName = BookCatalog.name(currentBookId)
-
-    // FIX: Same font rule as Bible + Open EW - never below 18sp
     val effectiveFontSize = state.fontSize.coerceAtLeast(18f)
 
     LaunchedEffect(state.isReadingRestored) {
         if (state.isReadingRestored) initialLoadDone = true
     }
 
-    // PATCH: Restore ONLY once, ONLY for restored book/chapter, ONLY when those verses arrive.
-    // Before: FIX 1 + FIX 2 scrolled to 0 on every chapter change, fighting BibleContent -> jump.
-    // Now: HomeScreen owns app-restart restore. BibleContent owns chapter-change scroll to 0.
     LaunchedEffect(state.isReadingRestored, state.verses, savedScrollIndex, savedScrollOffset) {
         if (hasRestoredScroll) return@LaunchedEffect
         if (!state.isReadingRestored) return@LaunchedEffect
         if (state.verses.isEmpty()) return@LaunchedEffect
-        // Verses must be for the restored chapter, not a later chapter
         val first = state.verses.first()
         if (first.bookId != state.currentBookId || first.chapter != state.selectedChapter) return@LaunchedEffect
-
         hasRestoredScroll = true
         if (savedScrollIndex > 0 || savedScrollOffset > 0) {
-            // +1 = summary card is item 0, verses start at 1
             val target = (savedScrollIndex + 1).coerceIn(0, state.verses.size)
             runCatching { listState.scrollToItem(target, savedScrollOffset) }
         }
@@ -177,8 +169,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
             if (state.selectedTab == "Bible") {
                 Text(text = "$currentBookName ${state.selectedChapter}", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
-            // FIXED: Render ONLY the selected tab - no hidden size(0.dp) LayoutNodes
-            // Your ViewModel already caches verses / commentary / summary, so no reload on switch.
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (state.selectedTab) {
                     "Bible" -> {
@@ -254,7 +244,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         .verticalScroll(rememberScrollState())
                         .padding(vertical = 8.dp)
                 ) {
-                    // PATCH: Same font rule - was state.fontSize (16sp) before
                     Text(text = state.linkedVerseText.ifBlank { "Loading..." }, color = textColor, fontSize = effectiveFontSize.sp, lineHeight = (effectiveFontSize + 8).sp)
                 }
                 Button(
@@ -275,6 +264,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
         onClose = { settingsOpen = false }, onFontSizeChange = { viewModel.setFontSize(it) }, onDarkModeChange = { viewModel.setDarkMode(it) },
         onDailyVerse = { settingsOpen = false; viewModel.loadDailyVerse(); dailyVerseDialog = true },
         onShowNotes = { settingsOpen = false; showAllNotes = true },
+        onOpenAiChat = { settingsOpen = false; viewModel.openAiChat() },
         onGoogleSignIn = {
             scope.launch {
                 val result = googleAuth.signInWithGoogle(activity)
@@ -348,5 +338,17 @@ fun HomeScreen(viewModel: HomeViewModel) {
 
     if (showBibleCom) {
         WebViewScreen(url = "https://www.bible.com", title = "Bible.com", background = background, textColor = textColor, gold = gold, onClose = { showBibleCom = false })
+    }
+
+    if (state.showAiChat) {
+        AlertDialog(
+            onDismissRequest = { viewModel.closeAiChat() },
+            containerColor = background,
+            title = { Text("Ask Gemini", color = textColor, fontWeight = FontWeight.Bold) },
+            text = { Text("Chat screen coming next.\n\nYou are reading: $currentBookName ${state.selectedChapter}", color = textColor) },
+            confirmButton = {
+                TextButton(onClick = { viewModel.closeAiChat() }) { Text("Close", color = gold) }
+            }
+        )
     }
 }
