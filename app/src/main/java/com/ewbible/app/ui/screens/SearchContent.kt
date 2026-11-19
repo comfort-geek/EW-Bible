@@ -154,7 +154,9 @@ fun SearchContent(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             maxItemsInEachRow = 3
         ) {
-            filters.forEach { filter ->
+            // FIXED: for() not forEach{} - forEach lambda is NOT @Composable,
+            // so FilterChip() inside it = "Composable invocations can only happen..."
+            for (filter in filters) {
                 FilterChip(
                     selected = searchFilter == filter,
                     onClick = { onFilterChange(filter) },
