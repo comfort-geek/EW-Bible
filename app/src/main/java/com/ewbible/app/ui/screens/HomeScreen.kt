@@ -78,7 +78,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     var dailyVerseDialog by remember { mutableStateOf(false) }
     var hasRestoredScroll by remember { mutableStateOf(false) }
     var lastBookChapter by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    var pendingScrollKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var expandedBook by remember { mutableStateOf<Int?>(null) }
     var showHighlightPicker by remember { mutableStateOf(false) }
@@ -98,40 +97,35 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val currentBookId = state.currentBookId
     val currentBookName = BookCatalog.name(currentBookId)
 
+    // FIX: Same font rule as Bible + Open EW - never below 18sp
+    val effectiveFontSize = state.fontSize.coerceAtLeast(18f)
+
     LaunchedEffect(state.isReadingRestored) {
         if (state.isReadingRestored) initialLoadDone = true
     }
 
-    // FIX 1: Chapter changed -> remember we need to scroll (don't scroll yet, verses not loaded)
-    LaunchedEffect(state.currentBookId, state.selectedChapter) {
-        val key = state.currentBookId to state.selectedChapter
-        if (lastBookChapter != null && lastBookChapter != key) {
-            pendingScrollKey = key
-        } else if (lastBookChapter == null) {
-            lastBookChapter = key
-        }
-    }
-
-    // FIX 2: Verses arrived -> now do the scroll
-    LaunchedEffect(state.verses) {
+    // PATCH: Restore ONLY once, ONLY for restored book/chapter, ONLY when those verses arrive.
+    // Before: FIX 1 + FIX 2 scrolled to 0 on every chapter change, fighting BibleContent -> jump.
+    // Now: HomeScreen owns app-restart restore. BibleContent owns chapter-change scroll to 0.
+    LaunchedEffect(state.isReadingRestored, state.verses, savedScrollIndex, savedScrollOffset) {
+        if (hasRestoredScroll) return@LaunchedEffect
+        if (!state.isReadingRestored) return@LaunchedEffect
         if (state.verses.isEmpty()) return@LaunchedEffect
-        val key = state.currentBookId to state.selectedChapter
-        if (!hasRestoredScroll && (savedScrollIndex > 0 || savedScrollOffset > 0)) {
-            val target = savedScrollIndex.coerceIn(0, (state.verses.size + 2).coerceAtLeast(0))
+        // Verses must be for the restored chapter, not a later chapter
+        val first = state.verses.first()
+        if (first.bookId != state.currentBookId || first.chapter != state.selectedChapter) return@LaunchedEffect
+
+        hasRestoredScroll = true
+        if (savedScrollIndex > 0 || savedScrollOffset > 0) {
+            // +1 = summary card is item 0, verses start at 1
+            val target = (savedScrollIndex + 1).coerceIn(0, state.verses.size)
             runCatching { listState.scrollToItem(target, savedScrollOffset) }
-            hasRestoredScroll = true
-            lastBookChapter = key
-            pendingScrollKey = null
-        } else if (pendingScrollKey == key) {
-            runCatching { listState.scrollToItem(0) }
-            lastBookChapter = key
-            pendingScrollKey = null
         }
+        lastBookChapter = state.currentBookId to state.selectedChapter
     }
 
     fun openBook(bookId: Int, chapter: Int) {
         hasRestoredScroll = true
-        pendingScrollKey = null
         expandedBook = null
         viewModel.openBook(bookId, chapter)
         scope.launch {
@@ -260,7 +254,8 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         .verticalScroll(rememberScrollState())
                         .padding(vertical = 8.dp)
                 ) {
-                    Text(text = state.linkedVerseText.ifBlank { "Loading..." }, color = textColor, fontSize = state.fontSize.sp, lineHeight = (state.fontSize + 8).sp)
+                    // PATCH: Same font rule - was state.fontSize (16sp) before
+                    Text(text = state.linkedVerseText.ifBlank { "Loading..." }, color = textColor, fontSize = effectiveFontSize.sp, lineHeight = (effectiveFontSize + 8).sp)
                 }
                 Button(
                     onClick = { showLinkedVerseSheet = false; openBook(linkedVerseBook, linkedVerseChapter); viewModel.selectTab("Bible"); viewModel.selectVerse(linkedVerseNum) },
