@@ -1,6 +1,6 @@
 package com.ewbible.app.data.database
 
-import com.ewbible.app.data.database.BuildConfig
+import com.ewbible.app.BuildConfig
 import android.graphics.Bitmap
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
