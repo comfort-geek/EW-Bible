@@ -23,14 +23,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -41,22 +40,32 @@ import com.ewbible.app.data.database.SummaryEntity
 import com.ewbible.app.data.database.VerseEntity
 import kotlin.math.abs
 
-// Swipe left = next chapter, swipe right = previous chapter
-// Same 150px threshold as Open EW, horizontal drag only so vertical scroll still works
+// Swipe left = next, swipe right = prev. Same logic as Open EW: 80dp, mostly horizontal.
 private fun Modifier.swipeChapter(
     onNextChapter: () -> Unit,
     onPreviousChapter: () -> Unit
 ): Modifier = pointerInput(onNextChapter, onPreviousChapter) {
     var totalDx = 0f
+    var totalDy = 0f
     detectHorizontalDragGestures(
-        onHorizontalDrag = { _, delta -> totalDx += delta },
+        onHorizontalDrag = { change, delta ->
+            totalDx += delta
+            totalDy += abs(change.position.y - change.previousPosition.y)
+            // Don't consume vertical scroll - let LazyColumn handle it
+            if (abs(totalDx) < abs(totalDy) * 1.5f) {
+                totalDx = 0f
+                totalDy = 0f
+            }
+        },
         onDragEnd = {
-            if (abs(totalDx) > 150) {
+            // 80dp in px, not 150px - 150px felt dead on small phones
+            if (abs(totalDx) > 80 * density) {
                 if (totalDx < 0) onNextChapter() else onPreviousChapter()
             }
             totalDx = 0f
+            totalDy = 0f
         },
-        onDragCancel = { totalDx = 0f }
+        onDragCancel = { totalDx = 0f; totalDy = 0f }
     )
 }
 
@@ -116,6 +125,11 @@ fun BibleContent(
     summaryLoading: Boolean = false,
 ) {
     val haptic = LocalHapticFeedback.current
+    val density = LocalDensity.current
+
+    // FIX: Same font rule as Open EW - never below 18sp
+    val effectiveFontSize = fontSize.coerceAtLeast(18f)
+    val lineHeight = (effectiveFontSize + 6).sp
 
     val safeBookId = selectedBookId.coerceIn(1, 66)
     val bookName = BookCatalog.name(safeBookId)
@@ -123,44 +137,19 @@ fun BibleContent(
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
     val currentKey = safeBookId to safeChapter
 
-    // FIXED: Keep previous chapter visible while new one loads,
-    // NEVER lock in an empty list. Only switch key when new verses are ready.
-    var displayedSummary by remember { mutableStateOf<SummaryEntity?>(null) }
-    var displayedVerses by remember { mutableStateOf<List<VerseEntity>>(emptyList()) }
-    var displayedKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-
-    // FIXED: Update in LaunchedEffect, not during composition - no recomposition loop
-    LaunchedEffect(currentKey, versesList, summary) {
-        if (versesList.isNotEmpty() && displayedKey != currentKey) {
-            displayedVerses = versesList
-            displayedSummary = summary
-            displayedKey = currentKey
-        } else if (displayedKey == currentKey) {
-            if (displayedVerses.isEmpty() && versesList.isNotEmpty()) displayedVerses = versesList
-            if (displayedSummary == null && summary != null) displayedSummary = summary
-        } else if (displayedKey == null && versesList.isNotEmpty()) {
-            // First ever load
-            displayedVerses = versesList
-            displayedSummary = summary
-            displayedKey = currentKey
+    // FIX: No jumping - when chapter changes, jump to top BEFORE new list is measured.
+    // Old code kept old list + old scroll offset, then swapped list -> jump.
+    LaunchedEffect(currentKey) {
+        // Only scroll if we are not already at top, avoids flicker on first load
+        if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+            listState.scrollToItem(0)
         }
     }
 
-    val finalSummary = if (displayedKey == currentKey) displayedSummary else summary
-    val finalVerses = if (displayedKey == currentKey) displayedVerses else versesList
-
-    // If we are on a new chapter and still waiting for verses, show OLD chapter, not empty.
-    // If we have no old chapter (first open), show incoming list directly.
-    val versesToShow = if (displayedKey != null && displayedKey != currentKey && finalVerses.isEmpty()) {
-        displayedVerses
-    } else {
-        finalVerses
-    }
-    val summaryToShow = if (displayedKey != null && displayedKey != currentKey && finalSummary == null) {
-        displayedSummary
-    } else {
-        finalSummary
-    }
+    // FIX: No caching. Use DB list directly - no old -> new swap, no height jump.
+    // Parent ViewModel already holds previous chapter until new one loads, so no empty flash.
+    val versesToShow = versesList
+    val summaryToShow = summary
 
     Box(
         modifier = Modifier
@@ -175,9 +164,9 @@ fun BibleContent(
             modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
             contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
         ) {
-            item(key = "summary-${currentKey.first}-${currentKey.second}") {
-                val s = summaryToShow
-                if (s != null) {
+            // Summary - key includes book+chapter so it is not reused across chapters
+            if (summaryToShow != null) {
+                item(key = "summary-${currentKey.first}-${currentKey.second}", contentType = "summary") {
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                         colors = CardDefaults.cardColors(containerColor = panel),
@@ -185,33 +174,40 @@ fun BibleContent(
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(s.summary, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
+                            Text(summaryToShow.summary, color = textColor, fontSize = effectiveFontSize.sp, lineHeight = lineHeight)
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(s.whatHappened, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
+                            Text(summaryToShow.whatHappened, color = textColor, fontSize = effectiveFontSize.sp, lineHeight = lineHeight)
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(s.application, color = textColor, fontSize = fontSize.sp, lineHeight = (fontSize + 6).sp)
+                            Text(summaryToShow.application, color = textColor, fontSize = effectiveFontSize.sp, lineHeight = lineHeight)
                         }
                     }
+                }
+            } else if (summaryLoading) {
+                item(key = "summary-loading-${currentKey.first}-${currentKey.second}", contentType = "summary") {
+                    // Keep same height as summary card so list does not jump when summary arrives
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
             }
 
             if (versesToShow.isEmpty()) {
-                item(key = "empty-${currentKey.first}-${currentKey.second}") {
+                item(key = "empty-${currentKey.first}-${currentKey.second}", contentType = "empty") {
                     Text(
                         text = "Loading...",
                         color = textColor.copy(alpha = 0.6f),
-                        fontSize = fontSize.sp,
+                        fontSize = effectiveFontSize.sp,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
                         textAlign = TextAlign.Center
                     )
                 }
             }
 
+            // FIX: Stable key + contentType stops Compose reusing wrong verse row on scroll/chapter change
             itemsIndexed(
                 versesToShow,
-                key = { _, verse -> "${verse.bookId}-${verse.chapter}-${verse.verse}" }
+                key = { _, verse -> "${verse.bookId}-${verse.chapter}-${verse.verse}" },
+                contentType = { _, _ -> "verse" }
             ) { _, verse ->
                 val verseBackground = currentHighlightMap[verse.verse] ?: Color.Transparent
                 Row(
@@ -230,17 +226,19 @@ fun BibleContent(
                         .padding(vertical = 8.dp, horizontal = 8.dp),
                 ) {
                     Text(
-                        text = "${verse.verse}",
+                        text = verse.verse.toString(),
                         color = gold,
                         fontWeight = FontWeight.Bold,
-                        fontSize = fontSize.sp,
+                        fontSize = effectiveFontSize.sp,
+                        // FIX: Fixed width + no wrap for number, so verse text column never shifts
+                        maxLines = 1,
                         modifier = Modifier.width(32.dp),
                     )
                     Text(
                         verse.text,
                         color = textColor,
-                        fontSize = fontSize.sp,
-                        lineHeight = (fontSize + 6).sp,
+                        fontSize = effectiveFontSize.sp,
+                        lineHeight = lineHeight,
                         modifier = Modifier.weight(1f)
                     )
                 }
