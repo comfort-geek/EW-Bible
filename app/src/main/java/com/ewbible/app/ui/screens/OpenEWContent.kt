@@ -20,7 +20,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -33,16 +33,23 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.text.HtmlCompat
 import com.ewbible.app.data.database.BookCatalog
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.net.URLDecoder
 import java.net.URLEncoder
 
-// Single source of truth = BookCatalog (66 books + aliases like Gen, Ps, 1 Sam, Rev, Song of Songs)
 private val DISPLAY_NAMES: List<String> = BookCatalog.allDisplayNames()
 private val BOOK_PATTERN = DISPLAY_NAMES
-    .sortedByDescending { it.length } // "1 Samuel" before "Samuel", "Song of Songs" before "Song"
+    .sortedByDescending { it.length }
     .joinToString("|") { Regex.escape(it) }
-// Only real book names link. Supports ranges: Genesis 1:1-5, Psalm 19:1-4
 private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?(?!\\d)")
+
+// FIXED: Pre-compile - was compiling 7 Regex on every chapter
+private val H1_REGEX = Regex("(?is)<h1[^>]*>.*?</h1>")
+private val H2_6_REGEX = Regex("(?is)<h[2-6][^>]*>(.*?)</h[2-6]>")
+private val TAG_REGEX = Regex("(?i)</?(b|strong|i|em)>")
+private val BOLD_REGEX = Regex("(?i)font-weight\\s*:\\s*(bold|[700-900])\\s*;?")
+private val ITALIC_REGEX = Regex("(?i)font-style\\s*:\\s*italic\\s*;?")
 
 private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
     if (html.isBlank()) return ""
@@ -50,18 +57,15 @@ private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
     if (t.contains("<body", ignoreCase = true)) {
         t = t.substringAfter("<body", "").substringAfter(">", "").substringBeforeLast("</body>", t)
     }
-    // NO DUPLICATES: strip <h1> title + any first paragraph that is just "Genesis 1"
-    // FIX: String.replace(Regex, "", 1) does not exist - use Regex.replaceFirst()
-    t = Regex("(?is)<h1[^>]*>.*?</h1>").replaceFirst(t, "")
+    t = H1_REGEX.replaceFirst(t, "")
     t = t.replace(
         Regex("(?is)^\\s*<p[^>]*>\\s*${Regex.escape(bookName)}\\s+$chapter\\s*</p>"),
         ""
     )
-    // Headings huge -> body looked tiny. Normalize h2-h6 to bold normal text.
-    t = t.replace(Regex("(?is)<h[2-6][^>]*>(.*?)</h[2-6]>"), "<p><b>$1</b></p>")
-    t = t.replace(Regex("(?i)</?(b|strong|i|em)>"), "")
-    t = t.replace(Regex("(?i)font-weight\\s*:\\s*(bold|[700-900])\\s*;?"), "")
-    t = t.replace(Regex("(?i)font-style\\s*:\\s*italic\\s*;?"), "")
+    t = H2_6_REGEX.replace(t, "<p><b>$1</b></p>")
+    t = TAG_REGEX.replace(t, "")
+    t = BOLD_REGEX.replace(t, "")
+    t = ITALIC_REGEX.replace(t, "")
     return t
 }
 
@@ -70,7 +74,7 @@ private fun linkifyForHtml(html: String): String {
     return VERSE_REGEX.replace(html) { m ->
         val raw = m.groupValues[1].trim()
         val bookId = BookCatalog.id(raw)
-        val canonical = BookCatalog.canonicalName(raw) // Ps -> Psalms, Gen -> Genesis, 1 Sam -> 1 Samuel
+        val canonical = BookCatalog.canonicalName(raw)
         val ch = m.groupValues[2].toIntOrNull() ?: return@replace m.value
         val vs = m.groupValues[3].toIntOrNull() ?: return@replace m.value
         val endRaw = m.groupValues[4]
@@ -102,27 +106,27 @@ fun OpenEWContent(
     val currentOnPrev by rememberUpdatedState(onPreviousChapter)
     val density = LocalDensity.current
 
-    // NO SMALL FONT: Open EW never goes below 18sp, even if settings say 16sp
     val effectiveFontSize = fontSize.coerceAtLeast(18f)
 
-    // NO LAG: parse once per chapter, cache gold Spannable. No re-parse on font/theme change.
-    val goldSpanned = remember(commentaryHtml, bookName, chapter) {
-        if (commentaryHtml.isBlank()) null
-        else runCatching {
-            val parsed = HtmlCompat.fromHtml(
-                linkifyForHtml(cleanForHtml(commentaryHtml, bookName, chapter)),
-                HtmlCompat.FROM_HTML_MODE_LEGACY, null, null
-            )
-            val copy = SpannableString(parsed)
-            copy.getSpans(0, copy.length, URLSpan::class.java).forEach { span ->
-                copy.setSpan(
-                    ForegroundColorSpan(0xFFC9A227.toInt()),
-                    copy.getSpanStart(span), copy.getSpanEnd(span),
-                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+    // FIXED: Parse off Main thread - was janking UI on every chapter
+    val goldSpanned by produceState<SpannableString?>(initialValue = null, commentaryHtml, bookName, chapter) {
+        value = if (commentaryHtml.isBlank()) null else withContext(Dispatchers.Default) {
+            runCatching {
+                val parsed = HtmlCompat.fromHtml(
+                    linkifyForHtml(cleanForHtml(commentaryHtml, bookName, chapter)),
+                    HtmlCompat.FROM_HTML_MODE_LEGACY, null, null
                 )
-            }
-            copy
-        }.getOrNull()
+                val copy = SpannableString(parsed)
+                copy.getSpans(0, copy.length, URLSpan::class.java).forEach { span ->
+                    copy.setSpan(
+                        ForegroundColorSpan(0xFFC9A227.toInt()),
+                        copy.getSpanStart(span), copy.getSpanEnd(span),
+                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                }
+                copy
+            }.getOrNull()
+        }
     }
 
     if (hasError && goldSpanned == null) {
@@ -154,19 +158,20 @@ fun OpenEWContent(
             }
         } else {
             AndroidView(
-                // NO OVERLAP: clip + TextView alone (no ScrollView). Height = Compose box.
                 modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds(),
                 factory = { ctx ->
                     val padPx = with(density) { 16.dp.roundToPx() }
                     val bottomPx = with(density) { 96.dp.roundToPx() }
                     val swipePx = with(density) { 80.dp.toPx() }
 
+                    // FIXED: Only consume touch if fling actually fired, else let TextView scroll
+                    var flingFired = false
                     lateinit var gestureDetector: GestureDetector
                     val textView = object : TextView(ctx) {
                         override fun onTouchEvent(event: MotionEvent): Boolean {
-                            // SWIPE FIX: GestureDetector runs FIRST, LinkMovementMethod runs SECOND.
-                            // Fling = chapter change. Tap on link = verse. Scroll = scroll. No fight.
-                            if (gestureDetector.onTouchEvent(event)) return true
+                            if (event.action == MotionEvent.ACTION_DOWN) flingFired = false
+                            gestureDetector.onTouchEvent(event)
+                            if (flingFired) return true
                             return super.onTouchEvent(event)
                         }
                     }.apply {
@@ -175,7 +180,6 @@ fun OpenEWContent(
                         setTextColor(textColor.toArgb())
                         setPadding(padPx, 0, padPx, bottomPx)
                         isVerticalScrollBarEnabled = true
-                        // FIX: SCROLLBARS_INSIDE_OVERLAY is on View, not bare
                         scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
                         movementMethod = object : LinkMovementMethod() {
                             override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
@@ -209,7 +213,7 @@ fun OpenEWContent(
                     }
 
                     gestureDetector = GestureDetector(ctx, object : GestureDetector.SimpleOnGestureListener() {
-                        override fun onDown(e: MotionEvent): Boolean = true
+                        override fun onDown(e: MotionEvent): Boolean = false // FIXED: was true = blocked scroll
                         override fun onFling(
                             e1: MotionEvent?, e2: MotionEvent,
                             velocityX: Float, velocityY: Float
@@ -217,12 +221,12 @@ fun OpenEWContent(
                             if (e1 == null) return false
                             val dx = e2.x - e1.x
                             val dy = e2.y - e1.y
-                            // Must be mostly horizontal + fast + far enough
                             if (kotlin.math.abs(dx) > swipePx &&
                                 kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.5f &&
                                 kotlin.math.abs(velocityX) > 600
                             ) {
                                 if (dx < 0) currentOnNext() else currentOnPrev()
+                                flingFired = true
                                 return true
                             }
                             return false
@@ -232,10 +236,11 @@ fun OpenEWContent(
                     textView
                 },
                 update = { textView ->
+                    // FIXED: Always apply font/theme, only re-set text + scroll on new chapter
+                    textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
+                    textView.setTextColor(textColor.toArgb())
                     if (textView.tag !== goldSpanned) {
                         textView.tag = goldSpanned
-                        textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
-                        textView.setTextColor(textColor.toArgb())
                         textView.text = goldSpanned
                         textView.scrollTo(0, 0)
                     }
