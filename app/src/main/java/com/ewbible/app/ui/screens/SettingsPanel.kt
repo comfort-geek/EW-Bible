@@ -64,9 +64,6 @@ fun SettingsPanel(
     onShowNotes: () -> Unit,
     onGoogleSignIn: () -> Unit,
     onSignOut: () -> Unit,
-    onOpenResource: () -> Unit,
-    // STEP 1: New - Chat with AI. Default = {} so old call sites still compile.
-    // Next step we will pass a real handler from HomeScreen / HomeViewModel.
     onOpenAiChat: () -> Unit = {},
 ) {
     if (!visible) return
@@ -147,18 +144,7 @@ fun SettingsPanel(
             }
 
             if (resourcesExpanded) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(panel, RoundedCornerShape(12.dp))
-                        .clickable { onOpenResource() }
-                        .padding(16.dp)
-                ) {
-                    Text("Bible.com", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // STEP 1: Chat with AI - below Bible.com, same card style
+                // Ask Gemini - reads your NKJV in the app
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -179,7 +165,7 @@ fun SettingsPanel(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text("Ask Gemini", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
-                            Text("Ask anything", fontSize = 13.sp, color = textColor.copy(alpha = 0.6f))
+                            Text("Ask anything about the Bible", fontSize = 13.sp, color = textColor.copy(alpha = 0.6f))
                         }
                     }
                 }
