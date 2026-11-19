@@ -1,7 +1,7 @@
 [versions]
 agp = "8.9.1"
 kotlin = "2.2.20"
-ksp = "ksp = "2.2.20-2.0.2"
+ksp = "2.2.20-2.0.2"
 googleServices = "4.4.2"
 compileSdk = "35"
 minSdk = "24"
