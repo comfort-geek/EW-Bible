@@ -80,10 +80,7 @@ object BookCatalog {
     )
 
     private val byId = all.associateBy { it.id }
-    private val byName = all.associateBy { it.name.lowercase() }
-    private val byKey = all.associateBy { it.key.lowercase() }
 
-    // FIX: alias -> id, lookup is case-insensitive via id()
     private val aliases = mapOf(
         "psalm" to 19, "ps" to 19,
         "song" to 22, "song of songs" to 22, "canticles" to 22, "song-of-songs" to 22,
@@ -115,8 +112,6 @@ object BookCatalog {
         "philem" to 57, "heb" to 58, "jas" to 59
     )
 
-    // FIX: Proper display forms for aliases - no more "Song Of Songs" Title-Case bug.
-    // These are what OpenEW actually writes in commentary.
     private val aliasDisplayNames = listOf(
         "Psalm", "Ps",
         "Song of Songs", "Song",
@@ -129,23 +124,66 @@ object BookCatalog {
         "Rom", "Gal", "Eph", "Phil", "Col", "Philem", "Heb", "Jas"
     )
 
+    // MAX: Cached once. Before: allDisplayNames() built a new List + distinct() on every call.
+    // OpenEWContent calls it to build VERSE_REGEX - now it's one list.
+    private val cachedDisplayNames: List<String> = (all.map { it.name } + aliasDisplayNames).distinct()
+
+    // MAX: Single normalized lookup, built ONCE at startup.
+    // Before: id() did 7 map lookups + 4x replace + Regex("\\s+").compile() on EVERY call.
+    // id() is called per verse link in Open EW (100s per chapter) + per Search result + per Bible row.
+    private val normalizedLookup: Map<String, Int> = buildMap {
+        fun putNormalized(key: String, id: Int) {
+            val n = normalize(key)
+            put(n, id)
+            // Also store dash<->space variants so id() needs only 1 lookup
+            put(n.replace('-', ' '), id)
+            put(n.replace(' ', '-'), id)
+        }
+        for (info in all) {
+            putNormalized(info.name, info.id)
+            putNormalized(info.key, info.id)
+        }
+        for ((k, v) in aliases) putNormalized(k, v)
+        // Extra: "1samuel" / "1sam" without space - OpenEW sometimes writes "1Sam 1:1"
+        for (info in all) {
+            if (info.name[0].isDigit()) {
+                putNormalized(info.name.replace(" ", ""), info.id)
+            }
+        }
+    }
+
+    // No Regex, no allocation-heavy replace chain. Manual collapse: trim + lowercase + '_'->'-' + collapse spaces
+    private fun normalize(input: String): String {
+        if (input.isEmpty()) return ""
+        val sb = StringBuilder(input.length)
+        var lastWasSpace = true // trims leading
+        for (c in input) {
+            val ch = when (c) {
+                '_', '-', ' ' -> ' ' // normalize all separators to space, dash variants added in putNormalized
+                else -> c.lowercaseChar()
+            }
+            if (ch == ' ') {
+                if (!lastWasSpace) sb.append(' ')
+                lastWasSpace = true
+            } else {
+                sb.append(ch)
+                lastWasSpace = false
+            }
+        }
+        // Trim trailing space
+        if (sb.isNotEmpty() && sb[sb.length - 1] == ' ') sb.setLength(sb.length - 1)
+        return sb.toString()
+    }
+
     fun name(id: Int): String = byId[id]?.name ?: "Genesis"
     fun key(id: Int): String = byId[id]?.key ?: "genesis"
 
+    // MAX: 1 normalize + 1 map lookup. Before: 7 lookups + Regex compile per call.
     fun id(name: String): Int {
-        val clean = name.trim().lowercase()
-            .replace('_', '-')
-            .replace(Regex("\\s+"), " ")
-            .trim()
-        return byName[clean]?.id
-            ?: byKey[clean]?.id
-            ?: aliases[clean]
-            ?: byName[clean.replace('-', ' ')]?.id
-            ?: byKey[clean.replace(' ', '-')]?.id
-            ?: aliases[clean.replace('-', ' ')]
-            ?: aliases[clean.replace(' ', '-')]
-            ?: 1
+        if (name.isEmpty()) return 1
+        return normalizedLookup[normalize(name)] ?: 1
     }
+
     fun testament(id: Int): String = byId[id]?.testament ?: "OT"
     fun chapters(id: Int): Int = byId[id]?.chapters ?: 1
     fun toEntity(info: BookInfo): BookEntity = BookEntity(
@@ -157,8 +195,5 @@ object BookCatalog {
 
     fun canonicalName(raw: String): String = name(id(raw))
 
-    // FIX: canonical names + clean alias display names, no duplicates, no "Of" bug
-    fun allDisplayNames(): List<String> {
-        return (all.map { it.name } + aliasDisplayNames).distinct()
-    }
+    fun allDisplayNames(): List<String> = cachedDisplayNames
 }
