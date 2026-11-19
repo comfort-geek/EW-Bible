@@ -178,7 +178,7 @@ fun SettingsPanel(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
-                            Text("Chat with AI", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
+                            Text("Ask Gemini", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
                             Text("Ask anything", fontSize = 13.sp, color = textColor.copy(alpha = 0.6f))
                         }
                     }
