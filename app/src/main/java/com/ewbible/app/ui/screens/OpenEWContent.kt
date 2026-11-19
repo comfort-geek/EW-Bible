@@ -1,10 +1,11 @@
 package com.ewbible.app.ui.screens
 
 import android.text.Spannable
+import android.text.SpannableString
 import android.text.method.LinkMovementMethod
+import android.text.style.ForegroundColorSpan
 import android.text.style.URLSpan
 import android.view.MotionEvent
-import android.view.View
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.compose.foundation.layout.Box
@@ -21,6 +22,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -77,14 +79,13 @@ fun OpenEWContent(
     val currentOnVerseClick by rememberUpdatedState(onVerseClick)
     val currentOnNext by rememberUpdatedState(onNextChapter)
     val currentOnPrev by rememberUpdatedState(onPreviousChapter)
+    val density = LocalDensity.current
 
-    val spanned = remember(commentaryHtml, bookName) {
+    val spanned = remember(commentaryHtml) {
         if (commentaryHtml.isBlank()) null
-        else {
-            val cleaned = cleanForHtml(commentaryHtml)
-            val linked = linkifyForHtml(cleaned)
-            HtmlCompat.fromHtml(linked, HtmlCompat.FROM_HTML_MODE_LEGACY, null, null)
-        }
+        else runCatching {
+            HtmlCompat.fromHtml(linkifyForHtml(cleanForHtml(commentaryHtml)), HtmlCompat.FROM_HTML_MODE_LEGACY, null, null)
+        }.getOrNull()
     }
 
     if (hasError && spanned == null) {
@@ -108,16 +109,19 @@ fun OpenEWContent(
             AndroidView(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 factory = { ctx ->
+                    val padPx = with(density) { 16.dp.roundToPx() }
+                    val bottomPx = with(density) { 96.dp.roundToPx() }
                     val textView = TextView(ctx).apply {
                         textSize = fontSize
                         setTextColor(textColor.toArgb())
-                        setPadding(48, 0, 48, 96)
+                        setPadding(padPx, 0, padPx, bottomPx)
                         movementMethod = object : LinkMovementMethod() {
                             override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
                                 if (event.action == MotionEvent.ACTION_UP) {
+                                    val layout = widget.layout ?: return super.onTouchEvent(widget, buffer, event)
                                     val x = event.x.toInt() - widget.totalPaddingLeft + widget.scrollX
                                     val y = event.y.toInt() - widget.totalPaddingTop + widget.scrollY
-                                    val layout = widget.layout
+                                    if (y < 0 || y > layout.height) return super.onTouchEvent(widget, buffer, event)
                                     val line = layout.getLineForVertical(y)
                                     val offset = layout.getOffsetForHorizontal(line, x.toFloat())
                                     val link = buffer.getSpans(offset, offset, URLSpan::class.java).firstOrNull()
@@ -167,15 +171,16 @@ fun OpenEWContent(
                         textView.tag = spanned
                         textView.textSize = fontSize
                         textView.setTextColor(textColor.toArgb())
-                        val s = spanned as Spannable
-                        s.getSpans(0, s.length, URLSpan::class.java).forEach { span ->
-                            s.setSpan(
-                                object : android.text.style.ForegroundColorSpan(0xFFC9A227.toInt()) {},
-                                s.getSpanStart(span), s.getSpanEnd(span),
+                        // Copy first - don't mutate the cached spanned
+                        val copy = SpannableString(spanned)
+                        copy.getSpans(0, copy.length, URLSpan::class.java).forEach { span ->
+                            copy.setSpan(
+                                ForegroundColorSpan(0xFFC9A227.toInt()),
+                                copy.getSpanStart(span), copy.getSpanEnd(span),
                                 Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
                             )
                         }
-                        textView.text = s
+                        textView.text = copy
                         scrollView.scrollTo(0, 0)
                     }
                 },
