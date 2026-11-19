@@ -5,6 +5,7 @@ import android.graphics.ImageDecoder
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -50,21 +51,40 @@ fun AiChatScreenAdvanced(
         }
     }
 
+    LaunchedEffect(Unit) { viewModel.loadChats() }
+
     LaunchedEffect(state.currentChatId) {
         if (state.currentChatId == null) viewModel.startNewChat(currentRef)
     }
-    LaunchedEffect(state.messages.size, state.streamingText) {
-        if (state.messages.isNotEmpty()) listState.animateScrollToItem(state.messages.size - 1)
+
+    LaunchedEffect(state.messages.size, state.streamingText, state.isLoading) {
+        if (state.messages.isNotEmpty() || state.isLoading) {
+            try {
+                val lastIndex = state.messages.size // +1 for streaming bubble when loading
+                if (lastIndex > 0) listState.animateScrollToItem(lastIndex)
+            } catch (e: Exception) { /* ignore scroll race */ }
+        }
     }
 
-    // HISTORY DRAWER
+    // HISTORY DRAWER - FIXED: tap to open
     if (showHistory) {
         ModalBottomSheet(onDismissRequest = { showHistory = false }) {
             Text("Chat History", fontWeight = FontWeight.Bold, modifier = Modifier.padding(16.dp))
             LazyColumn(modifier = Modifier.fillMaxHeight(0.6f)) {
                 items(state.chats) { chat ->
-                    Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(chat.title, modifier = Modifier.weight(1f))
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .clickable {
+                                viewModel.openChat(chat.id)
+                                showHistory = false
+                            }
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(chat.title, fontWeight = FontWeight.Bold)
+                            Text(chat.ref, fontSize = 12.sp, color = Color.Gray)
+                        }
                         IconButton(onClick = { viewModel.deleteChat(chat.id) }) { Icon(Icons.Default.Delete, null) }
                     }
                 }
