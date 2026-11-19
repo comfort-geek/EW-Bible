@@ -125,6 +125,6 @@ private suspend fun askGemini(question: String, currentRef: String): String = wi
             .getJSONObject("content").getJSONArray("parts")
             .getJSONObject(0).getString("text")
     } catch (e: Exception) {
-        "Sorry, I couldn't answer that. Check internet / API key. (${e.message})"
+        "Sorry, I couldn't answer that. Check internet / Try later. (${e.message})"
     }
 }
