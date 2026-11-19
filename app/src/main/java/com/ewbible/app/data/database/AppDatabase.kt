@@ -12,13 +12,16 @@ import androidx.room.RoomDatabase
         SummaryEntity::class,
         CommentaryEntity::class,
         NoteEntity::class,
-        HighlightEntity::class
+        HighlightEntity::class,
+        ChatEntity::class,
+        MessageEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun bibleDao(): BibleDao
+    abstract fun chatDao(): ChatDao
 
     companion object {
         @Volatile
@@ -33,6 +36,7 @@ abstract class AppDatabase : RoomDatabase() {
                     DB_NAME
                 )
                     .createFromAsset(DB_NAME)
+                    .fallbackToDestructiveMigration()
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
                     .also { INSTANCE = it }
