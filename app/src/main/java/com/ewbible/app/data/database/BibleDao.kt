@@ -138,4 +138,33 @@ interface BibleDao {
 
     @Query("SELECT * FROM notes ORDER BY timestamp DESC")
     fun getAllNotes(): Flow<List<NoteEntity>>
+
+    // --- CHAT - FIXED: was missing, AppDatabase has chats/messages tables but no DAO methods ---
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertChat(chat: ChatEntity): Long
+
+    @Query("SELECT * FROM chats ORDER BY createdAt DESC")
+    fun getAllChats(): Flow<List<ChatEntity>>
+
+    @Query("SELECT * FROM chats ORDER BY createdAt DESC")
+    suspend fun getAllChatsSync(): List<ChatEntity>
+
+    @Query("DELETE FROM chats WHERE id = :chatId")
+    suspend fun deleteChat(chatId: Long)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMessage(message: MessageEntity): Long
+
+    @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY timestamp ASC")
+    fun getMessagesForChat(chatId: Long): Flow<List<MessageEntity>>
+
+    @Query("SELECT * FROM messages WHERE chatId = :chatId ORDER BY timestamp ASC")
+    suspend fun getMessagesForChatSync(chatId: Long): List<MessageEntity>
+
+    @Query("DELETE FROM messages WHERE chatId = :chatId")
+    suspend fun deleteMessagesForChat(chatId: Long)
+
+    @Query("SELECT COUNT(*) FROM messages WHERE chatId = :chatId AND isUser = 1 AND date(timestamp / 1000, 'unixepoch') = date('now')")
+    suspend fun getTodayUserMessageCount(chatId: Long): Int
 }
