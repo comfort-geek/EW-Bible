@@ -7,8 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ewbible.app.data.database.AppDatabase
@@ -28,16 +27,20 @@ class MainActivity : ComponentActivity() {
         CrashReporter.init(this)
         CrashReporter.breadcrumb(this, "MainActivity.onCreate")
 
-        if (CrashReporter.getLastCrash(this) != null) {
-            CrashReporter.clear(this)
+        // Read crash ONCE before setContent
+        val savedCrash = CrashReporter.getLastCrash(this)
+            ?: CrashReporter.getLastNonFatal(this)
+        if (savedCrash != null) {
+            CrashReporter.breadcrumb(this, "App restarted after crash")
+            // Backup to Downloads - so you can see it in Files app even if app is broken
+            exportCrashToDownloads(this, savedCrash)
         }
 
         val database = AppDatabase.getInstance(applicationContext)
-        val dao = database.bibleDao() // ONLY DAO - chats + bible in same DB
+        val dao = database.bibleDao()
         val preferences = AppPreferences(applicationContext)
         val geminiRepository = GeminiRepository()
 
-        // FIXED: No ChatDatabase, no chatDao param
         val factory = HomeViewModelFactory(
             dao = dao,
             preferences = preferences,
@@ -47,7 +50,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val isDarkMode by preferences.isDarkMode.collectAsState(initial = null)
-            val useDarkTheme = isDarkMode ?: false
+            val useDarkTheme = isDarkTheme ?: false
+
+            // Popup state - shows automatically if crash exists
+            var showCrashDialog by remember { mutableStateOf(savedCrash != null) }
+            var crashText by remember { mutableStateOf(savedCrash ?: "") }
 
             val homeViewModel: HomeViewModel = viewModel(factory = factory)
             val chatViewModel: ChatViewModel = viewModel(factory = factory)
@@ -61,6 +68,20 @@ class MainActivity : ComponentActivity() {
                         viewModel = homeViewModel,
                         chatViewModel = chatViewModel
                     )
+
+                    // AUTO POPUP - on top of everything, even if HomeScreen is broken
+                    if (showCrashDialog) {
+                        CrashReportDialog(
+                            crashText = crashText,
+                            onShare = { shareCrashText(this@MainActivity, crashText) },
+                            onClear = {
+                                CrashReporter.clear(this@MainActivity)
+                                CrashReporter.clearAll(this@MainActivity)
+                                showCrashDialog = false
+                            },
+                            onDismiss = { showCrashDialog = false }
+                        )
+                    }
                 }
             }
         }
