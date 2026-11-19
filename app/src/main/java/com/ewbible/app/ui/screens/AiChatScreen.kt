@@ -27,8 +27,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-// MAX: Extracted bubble = Compose can SKIP unchanged messages.
-// Before: Box+Text inline in items() = every streaming token recomposed ALL visible messages
 @Composable
 private fun MessageBubble(
     text: String,
@@ -69,20 +67,19 @@ fun AiChatScreen(
     var selectedImage by remember { mutableStateOf<Bitmap?>(null) }
     var showHistory by remember { mutableStateOf(false) }
     var selectedTranslation by remember { mutableStateOf("NKJV") }
-    // MAX: Was listOf() on every streaming token = new list, all 4 chips recomposed per token
     val translations = remember { listOf("NKJV", "KJV", "NIV", "ESV") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    // MAX: Decode off Main + downsample. Before: ImageDecoder.decodeBitmap() on Main, full-size photo = jank + OOM
+    // FIX: OnHeaderDecodedListener is (decoder, info, source) -> 3 params, not 2.
+    // Your version had { decoder, info -> } = "Argument type mismatch" at :84
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
             scope.launch(Dispatchers.IO) {
                 val bitmap = runCatching {
                     val source = ImageDecoder.createSource(context.contentResolver, it)
-                    ImageDecoder.decodeBitmap(source) { decoder, info ->
-                        // Cap at 1024px longest side - Gemini doesn't need 4000px
+                    ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                         val max = 1024
                         val scale = maxOf(info.size.width / max.toFloat(), info.size.height / max.toFloat(), 1f)
                         if (scale > 1f) decoder.setTargetSize((info.size.width / scale).toInt(), (info.size.height / scale).toInt())
@@ -99,9 +96,6 @@ fun AiChatScreen(
         if (state.currentChatId == null) viewModel.startNewChat(currentRef)
     }
 
-    // MAX: Only auto-scroll when a NEW message arrives, NOT on every streaming token.
-    // Before: key included streamingText = animateScrollToItem() fired on every token, fought user scroll, janked
-    // MAX: Only scroll if user is already near bottom - don't yank them if they're reading history
     LaunchedEffect(state.messages.size, state.isLoading) {
         if (state.messages.isEmpty() && !state.isLoading) return@LaunchedEffect
         val lastIndex = if (state.isLoading) state.messages.size else state.messages.size - 1
@@ -114,7 +108,6 @@ fun AiChatScreen(
         }
     }
 
-    // MAX: Cached colors - was textColor.copy(alpha=..) + Color.Gray on every token
     val dimTextColor = remember(textColor) { textColor.copy(alpha = 0.5f) }
     val gray = remember { Color.Gray }
 
@@ -170,7 +163,6 @@ fun AiChatScreen(
         }
 
         LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            // MAX: key = message id / hash, contentType = user/ai. Before: no key = Compose reused wrong bubble on new message
             items(state.messages, key = { it.id ?: it.text.hashCode() }, contentType = { if (it.isUser) "user" else "ai" }) { msg ->
                 MessageBubble(text = msg.text, isUser = msg.isUser, textColor = textColor, gold = gold, panel = panel)
             }
