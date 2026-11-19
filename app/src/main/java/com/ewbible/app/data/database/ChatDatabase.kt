@@ -1,4 +1,4 @@
-package com.ewbible.app.data
+package com.ewbible.app.data.database
 
 import androidx.room.*
 
