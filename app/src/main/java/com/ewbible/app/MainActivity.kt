@@ -49,7 +49,7 @@ class MainActivity : ComponentActivity() {
         // This stops the crash loop
         if (savedCrash != null) {
             setContent {
-                var lastCrash by remember { mutableStateOf(savedCrash) }
+                var lastCrash: String? by remember { mutableStateOf(savedCrash) }
                 EWBibleTheme(darkTheme = false) {
                     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                         if (lastCrash != null) {
