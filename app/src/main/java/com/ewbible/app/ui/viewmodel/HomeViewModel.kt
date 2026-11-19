@@ -286,7 +286,6 @@ class HomeViewModel(
             viewModelScope.launch {
                 runCatching {
                     val note = dao.getNoteAtVerse(currentBookId.value, selectedChapter.value, verse)
-                    // FIXED: field is `text`, not `noteText`
                     currentNoteText.value = note?.text ?: ""
                 }
             }
@@ -352,8 +351,8 @@ class HomeViewModel(
         viewModelScope.launch {
             _summaryLoading.value = true
             runCatching {
-                // FIXED: getSummaryEntity returns SummaryEntity, getSummary returns String
-                val s = dao.getSummaryEntity(bookId, chapter)
+                // FIXED: DAO has getSummary(), not getSummaryEntity()
+                val s = dao.getSummary(bookId, chapter)
                 summaryCache[key] = s
                 if (bookId == currentBookId.value && chapter == selectedChapter.value) {
                     summaryState.value = s
@@ -476,7 +475,6 @@ class HomeViewModel(
         viewModelScope.launch {
             runCatching {
                 val existing = dao.getNoteAtVerse(currentBookId.value, selectedChapter.value, verseNum)
-                // FIXED: field is `text`
                 if (existing != null) dao.updateNote(existing.copy(text = noteText, timestamp = System.currentTimeMillis()))
                 else dao.saveNote(NoteEntity(bookId = currentBookId.value, chapter = selectedChapter.value, verse = verseNum, text = noteText, timestamp = System.currentTimeMillis()))
                 currentNoteText.value = noteText
@@ -485,14 +483,12 @@ class HomeViewModel(
     }
     fun saveHighlight(color: Color) {
         val verseNum = selectedVerse.value ?: return
-        // FIXED: color is Int, not String
         viewModelScope.launch { runCatching { dao.saveHighlight(HighlightEntity(bookId = currentBookId.value, chapter = selectedChapter.value, verse = verseNum, color = color.toArgb())) } }
     }
     fun removeHighlight() {
         val verseNum = selectedVerse.value ?: return
         viewModelScope.launch { runCatching { dao.deleteHighlight(currentBookId.value, selectedChapter.value, verseNum) } }
     }
-    // FIXED: takes Int, not String
     private fun parseHighlightColor(colorInt: Int): Color {
         return Color(colorInt)
     }
