@@ -23,7 +23,35 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.ui.viewmodel.ChatViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+// MAX: Extracted bubble = Compose can SKIP unchanged messages.
+// Before: Box+Text inline in items() = every streaming token recomposed ALL visible messages
+@Composable
+private fun MessageBubble(
+    text: String,
+    isUser: Boolean,
+    textColor: Color,
+    gold: Color,
+    panel: Color,
+) {
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart
+    ) {
+        Text(
+            text,
+            color = if (isUser) Color.White else textColor,
+            fontSize = 15.sp,
+            modifier = Modifier
+                .background(if (isUser) gold else panel, RoundedCornerShape(12.dp))
+                .padding(10.dp)
+                .widthIn(max = 300.dp)
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,17 +68,28 @@ fun AiChatScreen(
     var input by remember { mutableStateOf("") }
     var selectedImage by remember { mutableStateOf<Bitmap?>(null) }
     var showHistory by remember { mutableStateOf(false) }
-    // NEW - Translation picker state
     var selectedTranslation by remember { mutableStateOf("NKJV") }
-    val translations = listOf("NKJV", "KJV", "NIV", "ESV")
+    // MAX: Was listOf() on every streaming token = new list, all 4 chips recomposed per token
+    val translations = remember { listOf("NKJV", "KJV", "NIV", "ESV") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
+    // MAX: Decode off Main + downsample. Before: ImageDecoder.decodeBitmap() on Main, full-size photo = jank + OOM
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
-            val source = ImageDecoder.createSource(context.contentResolver, it)
-            selectedImage = ImageDecoder.decodeBitmap(source)
+            scope.launch(Dispatchers.IO) {
+                val bitmap = runCatching {
+                    val source = ImageDecoder.createSource(context.contentResolver, it)
+                    ImageDecoder.decodeBitmap(source) { decoder, info ->
+                        // Cap at 1024px longest side - Gemini doesn't need 4000px
+                        val max = 1024
+                        val scale = maxOf(info.size.width / max.toFloat(), info.size.height / max.toFloat(), 1f)
+                        if (scale > 1f) decoder.setTargetSize((info.size.width / scale).toInt(), (info.size.height / scale).toInt())
+                    }
+                }.getOrNull()
+                if (bitmap != null) withContext(Dispatchers.Main) { selectedImage = bitmap }
+            }
         }
     }
 
@@ -60,20 +99,30 @@ fun AiChatScreen(
         if (state.currentChatId == null) viewModel.startNewChat(currentRef)
     }
 
-    LaunchedEffect(state.messages.size, state.streamingText, state.isLoading) {
-        if (state.messages.isNotEmpty() || state.isLoading) {
-            try {
-                val lastIndex = if (state.isLoading) state.messages.size else state.messages.size - 1
-                if (lastIndex >= 0) listState.animateScrollToItem(lastIndex)
-            } catch (e: Exception) { /* ignore scroll race */ }
+    // MAX: Only auto-scroll when a NEW message arrives, NOT on every streaming token.
+    // Before: key included streamingText = animateScrollToItem() fired on every token, fought user scroll, janked
+    // MAX: Only scroll if user is already near bottom - don't yank them if they're reading history
+    LaunchedEffect(state.messages.size, state.isLoading) {
+        if (state.messages.isEmpty() && !state.isLoading) return@LaunchedEffect
+        val lastIndex = if (state.isLoading) state.messages.size else state.messages.size - 1
+        if (lastIndex < 0) return@LaunchedEffect
+        val visible = listState.layoutInfo.visibleItemsInfo
+        val lastVisible = visible.lastOrNull()?.index ?: 0
+        val isNearBottom = lastVisible >= lastIndex - 2
+        if (isNearBottom) {
+            runCatching { listState.animateScrollToItem(lastIndex) }
         }
     }
+
+    // MAX: Cached colors - was textColor.copy(alpha=..) + Color.Gray on every token
+    val dimTextColor = remember(textColor) { textColor.copy(alpha = 0.5f) }
+    val gray = remember { Color.Gray }
 
     if (showHistory) {
         ModalBottomSheet(onDismissRequest = { showHistory = false }) {
             Text("Chat History", fontWeight = FontWeight.Bold, modifier = Modifier.padding(16.dp))
             LazyColumn(modifier = Modifier.fillMaxHeight(0.6f)) {
-                items(state.chats) { chat ->
+                items(state.chats, key = { it.id }) { chat ->
                     Row(
                         modifier = Modifier.fillMaxWidth()
                             .clickable {
@@ -85,7 +134,7 @@ fun AiChatScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(chat.title, fontWeight = FontWeight.Bold)
-                            Text(chat.ref, fontSize = 12.sp, color = Color.Gray)
+                            Text(chat.ref, fontSize = 12.sp, color = gray)
                         }
                         IconButton(onClick = { viewModel.deleteChat(chat.id) }) { Icon(Icons.Default.Delete, null) }
                     }
@@ -95,7 +144,6 @@ fun AiChatScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().background(background).statusBarsPadding().navigationBarsPadding()) {
-        // TOP BAR
         Row(modifier = Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onClose) { Icon(Icons.Default.Close, null, tint = textColor) }
             IconButton(onClick = { showHistory = true }) { Icon(Icons.Default.History, null, tint = textColor) }
@@ -104,7 +152,6 @@ fun AiChatScreen(
             IconButton(onClick = { viewModel.startNewChat(currentRef) }) { Icon(Icons.Default.Add, null, tint = gold) }
         }
 
-        // NEW - TRANSLATION PICKER
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -122,16 +169,13 @@ fun AiChatScreen(
             }
         }
 
-        // MESSAGES
         LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(state.messages) { msg ->
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = if (msg.isUser) Alignment.CenterEnd else Alignment.CenterStart) {
-                    Text(msg.text, color = if (msg.isUser) Color.White else textColor, fontSize = 15.sp,
-                        modifier = Modifier.background(if (msg.isUser) gold else panel, RoundedCornerShape(12.dp)).padding(10.dp).widthIn(max = 300.dp))
-                }
+            // MAX: key = message id / hash, contentType = user/ai. Before: no key = Compose reused wrong bubble on new message
+            items(state.messages, key = { it.id ?: it.text.hashCode() }, contentType = { if (it.isUser) "user" else "ai" }) { msg ->
+                MessageBubble(text = msg.text, isUser = msg.isUser, textColor = textColor, gold = gold, panel = panel)
             }
             if (state.isLoading) {
-                item {
+                item(key = "loading", contentType = "loading") {
                     Text(
                         if (state.streamingText.isNotEmpty()) state.streamingText else "Gemini is thinking...",
                         color = textColor, fontSize = 15.sp,
@@ -141,7 +185,6 @@ fun AiChatScreen(
             }
         }
 
-        // IMAGE PREVIEW
         if (selectedImage != null) {
             Row(modifier = Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Image attached ✓", color = gold, fontSize = 13.sp, modifier = Modifier.weight(1f))
@@ -149,19 +192,17 @@ fun AiChatScreen(
             }
         }
 
-        // INPUT
         Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { picker.launch("image/*") }) { Icon(Icons.Default.Image, null, tint = gold) }
             OutlinedTextField(value = input, onValueChange = { input = it }, placeholder = { Text("Ask anything...") }, modifier = Modifier.weight(1f), maxLines = 4)
             IconButton(onClick = {
                 val q = input.trim()
                 if (q.isBlank() || state.isLoading) return@IconButton
-                // WIRED - now passes translation
                 viewModel.send(q, currentRef, selectedImage, selectedTranslation)
                 input = ""
                 selectedImage = null
             }) { Icon(Icons.Default.Send, null, tint = gold) }
         }
-        Text("Daily: ${state.dailyCount}/50 • No login needed • Verses/notes never sent", color = textColor.copy(alpha = 0.5f), fontSize = 11.sp, modifier = Modifier.padding(start = 12.dp, bottom = 4.dp))
+        Text("Daily: ${state.dailyCount}/50 • No login needed • Verses/notes never sent", color = dimTextColor, fontSize = 11.sp, modifier = Modifier.padding(start = 12.dp, bottom = 4.dp))
     }
 }
