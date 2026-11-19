@@ -27,7 +27,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AiChatScreenAdvanced(
+fun AiChatScreen(
     viewModel: ChatViewModel,
     currentRef: String,
     background: Color,
@@ -60,8 +60,9 @@ fun AiChatScreenAdvanced(
     LaunchedEffect(state.messages.size, state.streamingText, state.isLoading) {
         if (state.messages.isNotEmpty() || state.isLoading) {
             try {
-                val lastIndex = state.messages.size // +1 for streaming bubble when loading
-                if (lastIndex > 0) listState.animateScrollToItem(lastIndex)
+                // FIXED: Don't scroll past last item when not loading
+                val lastIndex = if (state.isLoading) state.messages.size else state.messages.size - 1
+                if (lastIndex >= 0) listState.animateScrollToItem(lastIndex)
             } catch (e: Exception) { /* ignore scroll race */ }
         }
     }
