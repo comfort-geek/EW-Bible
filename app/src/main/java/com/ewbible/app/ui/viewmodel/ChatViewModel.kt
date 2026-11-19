@@ -3,7 +3,7 @@ package com.ewbible.app.ui.viewmodel
 import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ewbible.app.data.database*
+import com.ewbible.app.data.database.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -43,22 +43,33 @@ class ChatViewModel(
 
     fun send(question: String, ref: String, image: Bitmap?) = viewModelScope.launch {
         val chatId = _state.value.currentChatId ?: return@launch
+        if (question.isBlank()) return@launch
         if (_state.value.dailyCount >= 50) {
             // Local per-device limit, no login needed
             dao.insertMessage(MessageEntity(chatId = chatId, text = "Daily limit reached (50). Try tomorrow.", isUser = false))
+            _state.value = _state.value.copy(messages = dao.getMessages(chatId))
             return@launch
         }
 
         dao.insertMessage(MessageEntity(chatId = chatId, text = question, isUser = true))
-        _state.value = _state.value.copy(messages = dao.getMessages(chatId), isLoading = true, streamingText = "")
+        val messagesWithUser = dao.getMessages(chatId)
+        _state.value = _state.value.copy(messages = messagesWithUser, isLoading = true, streamingText = "")
 
         var fullAnswer = ""
-        repo.askStreaming(question, ref, _state.value.messages, image).collect { chunk ->
-            fullAnswer += chunk
-            _state.value = _state.value.copy(streamingText = fullAnswer)
+        try {
+            // FIXED: dropLast(1) so Gemini doesn't see the question twice
+            // messagesWithUser already contains the question, history should be BEFORE it
+            repo.askStreaming(question, ref, messagesWithUser.dropLast(1), image).collect { chunk ->
+                fullAnswer += chunk
+                _state.value = _state.value.copy(streamingText = fullAnswer)
+            }
+        } catch (e: Exception) {
+            fullAnswer = if (fullAnswer.isBlank()) "Sorry, I couldn't reach the AI. Check your connection and try again." else fullAnswer
         }
 
-        dao.insertMessage(MessageEntity(chatId = chatId, text = fullAnswer, isUser = false))
+        if (fullAnswer.isNotBlank()) {
+            dao.insertMessage(MessageEntity(chatId = chatId, text = fullAnswer, isUser = false))
+        }
         _state.value = _state.value.copy(
             messages = dao.getMessages(chatId),
             isLoading = false,
@@ -70,6 +81,9 @@ class ChatViewModel(
     fun deleteChat(chatId: Long) = viewModelScope.launch {
         dao.deleteMessages(chatId)
         dao.deleteChat(chatId)
+        if (_state.value.currentChatId == chatId) {
+            _state.value = _state.value.copy(currentChatId = null, messages = emptyList())
+        }
         loadChats()
     }
 }
