@@ -38,12 +38,15 @@ class MainActivity : ComponentActivity() {
         val preferences = AppPreferences(applicationContext)
         val geminiRepository = GeminiRepository()
 
-        // FIXED: One factory for BOTH viewmodels, with ChatDao from ChatDatabase
+        // WIRED: One factory for BOTH viewmodels
+        // bibleDao is from AppDatabase (ewbible.db) - for NKJV context
+        // chatDao is from ChatDatabase - for chat history
         val factory = HomeViewModelFactory(
             dao = database.bibleDao(),
             preferences = preferences,
             chatDao = chatDatabase.chatDao(),
-            geminiRepository = geminiRepository
+            geminiRepository = geminiRepository,
+            bibleDao = database.bibleDao() // <-- WIRED: This was missing
         )
 
         setContent {
