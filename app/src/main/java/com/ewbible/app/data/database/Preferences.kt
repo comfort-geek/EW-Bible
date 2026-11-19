@@ -2,20 +2,26 @@ package com.ewbible.app.data.preferences
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
-import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.io.IOException
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "ewbible_settings")
 
-class AppPreferences(private val context: Context) {
+class AppPreferences(context: Context) {
+    // FIXED: Use applicationContext - was holding Activity context = leak
+    private val appContext = context.applicationContext
+
     companion object {
         val LAST_MODE = stringPreferencesKey("last_mode")
         val LAST_BOOK_ID = intPreferencesKey("last_book_id")
@@ -34,19 +40,29 @@ class AppPreferences(private val context: Context) {
         val DAILY_VERSE_NUMBER = intPreferencesKey("daily_verse_number")
     }
 
-    val lastMode: Flow<String> = context.dataStore.data.map { it[LAST_MODE] ?: "New King James Version" }
-    val lastBook: Flow<String> = context.dataStore.data.map { it[LAST_BOOK] ?: "Genesis" }
-    val lastChapter: Flow<Int> = context.dataStore.data.map { it[LAST_CHAPTER] ?: 1 }
-    val lastVerse: Flow<Int> = context.dataStore.data.map { it[LAST_VERSE] ?: 1 }
-    val isDarkMode: Flow<Boolean?> = context.dataStore.data.map { it[IS_DARK_MODE] }
-    val fontSize: Flow<Float> = context.dataStore.data.map { it[FONT_SIZE] ?: 16f }
-    val userName: Flow<String> = context.dataStore.data.map { it[USER_NAME] ?: "Guest" }
-    val userEmail: Flow<String> = context.dataStore.data.map { it[USER_EMAIL] ?: "" }
-    val lastScrollIndex: Flow<Int> = context.dataStore.data.map { it[LAST_SCROLL_INDEX] ?: 0 }
-    val lastScrollOffset: Flow<Int> = context.dataStore.data.map { it[LAST_SCROLL_OFFSET] ?: 0 }
-    val dailyVerseDate: Flow<String> = context.dataStore.data.map { it[DAILY_VERSE_DATE] ?: "" }
+    // FIXED: catch IOException - corrupt DataStore file was crashing all Flows
+    private fun <T> Flow<T>.safe(): Flow<T> = catch { e ->
+        if (e is IOException) emit(emptyPreferences() as T) else throw e
+    }
+    // Simpler: apply catch per-flow below via helper
+    private val data: Flow<Preferences> = appContext.dataStore.data
+        .catch { e ->
+            if (e is IOException) emit(emptyPreferences()) else throw e
+        }
 
-    val dailyVerseReference: Flow<DailyVerseReference?> = context.dataStore.data.map { preferences ->
+    val lastMode: Flow<String> = data.map { it[LAST_MODE] ?: "New King James Version" }
+    val lastBook: Flow<String> = data.map { it[LAST_BOOK] ?: "Genesis" }
+    val lastChapter: Flow<Int> = data.map { it[LAST_CHAPTER] ?: 1 }
+    val lastVerse: Flow<Int> = data.map { it[LAST_VERSE] ?: 1 }
+    val isDarkMode: Flow<Boolean?> = data.map { it[IS_DARK_MODE] }
+    val fontSize: Flow<Float> = data.map { it[FONT_SIZE] ?: 16f }
+    val userName: Flow<String> = data.map { it[USER_NAME] ?: "Guest" }
+    val userEmail: Flow<String> = data.map { it[USER_EMAIL] ?: "" }
+    val lastScrollIndex: Flow<Int> = data.map { it[LAST_SCROLL_INDEX] ?: 0 }
+    val lastScrollOffset: Flow<Int> = data.map { it[LAST_SCROLL_OFFSET] ?: 0 }
+    val dailyVerseDate: Flow<String> = data.map { it[DAILY_VERSE_DATE] ?: "" }
+
+    val dailyVerseReference: Flow<DailyVerseReference?> = data.map { preferences ->
         val bookId = preferences[DAILY_VERSE_BOOK_ID]
         val chapter = preferences[DAILY_VERSE_CHAPTER]
         val verse = preferences[DAILY_VERSE_NUMBER]
@@ -54,7 +70,7 @@ class AppPreferences(private val context: Context) {
     }
 
     suspend fun saveReading(mode: String, book: String, chapter: Int, verse: Int) {
-        context.dataStore.edit { prefs ->
+        appContext.dataStore.edit { prefs ->
             prefs[LAST_MODE] = mode
             prefs[LAST_BOOK] = book
             prefs[LAST_CHAPTER] = chapter
@@ -63,7 +79,7 @@ class AppPreferences(private val context: Context) {
     }
 
     suspend fun saveLastReading(bookId: Int, chapter: Int, verse: Int, scrollIndex: Int, scrollOffset: Int) {
-        context.dataStore.edit { prefs ->
+        appContext.dataStore.edit { prefs ->
             prefs[LAST_BOOK_ID] = bookId
             prefs[LAST_CHAPTER] = chapter
             prefs[LAST_VERSE] = verse
@@ -73,48 +89,49 @@ class AppPreferences(private val context: Context) {
     }
 
     suspend fun getLastBookId(): Int {
-        return context.dataStore.data.map { it[LAST_BOOK_ID] ?: 1 }.first()
+        return data.map { it[LAST_BOOK_ID] ?: 1 }.first()
     }
 
     suspend fun getLastChapter(): Int {
-        return context.dataStore.data.map { it[LAST_CHAPTER] ?: 1 }.first()
+        return data.map { it[LAST_CHAPTER] ?: 1 }.first()
     }
 
     suspend fun setDarkMode(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
+        appContext.dataStore.edit { prefs ->
             prefs[IS_DARK_MODE] = enabled
         }
     }
 
     suspend fun setFontSize(size: Float) {
-        context.dataStore.edit { prefs ->
-            prefs[FONT_SIZE] = size
+        // FIXED: Clamp - was saving any float, UI could break on 0 or 100
+        appContext.dataStore.edit { prefs ->
+            prefs[FONT_SIZE] = size.coerceIn(12f, 28f)
         }
     }
 
     suspend fun saveSettings(darkMode: Boolean, fontSize: Float) {
-        context.dataStore.edit { prefs ->
+        appContext.dataStore.edit { prefs ->
             prefs[IS_DARK_MODE] = darkMode
-            prefs[FONT_SIZE] = fontSize
+            prefs[FONT_SIZE] = fontSize.coerceIn(12f, 28f)
         }
     }
 
     suspend fun saveUser(name: String, email: String) {
-        context.dataStore.edit { prefs ->
+        appContext.dataStore.edit { prefs ->
             prefs[USER_NAME] = name
             prefs[USER_EMAIL] = email
         }
     }
 
     suspend fun saveScroll(index: Int, offset: Int) {
-        context.dataStore.edit { prefs ->
+        appContext.dataStore.edit { prefs ->
             prefs[LAST_SCROLL_INDEX] = index.coerceAtLeast(0)
             prefs[LAST_SCROLL_OFFSET] = offset.coerceAtLeast(0)
         }
     }
 
     suspend fun saveDailyVerse(date: String, reference: DailyVerseReference) {
-        context.dataStore.edit { prefs ->
+        appContext.dataStore.edit { prefs ->
             prefs[DAILY_VERSE_DATE] = date
             prefs[DAILY_VERSE_BOOK_ID] = reference.bookId
             prefs[DAILY_VERSE_CHAPTER] = reference.chapter
@@ -123,7 +140,7 @@ class AppPreferences(private val context: Context) {
     }
 
     suspend fun clearUser() {
-        context.dataStore.edit { prefs ->
+        appContext.dataStore.edit { prefs ->
             prefs[USER_NAME] = "Guest"
             prefs[USER_EMAIL] = ""
         }
