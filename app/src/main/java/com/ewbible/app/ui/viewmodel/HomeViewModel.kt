@@ -44,13 +44,14 @@ data class HomeUiState(
     val selectedVerse: Int? = null,
     val selectedTab: String = "Bible",
     val darkMode: Boolean? = null,
-    // FIX: Same as Open EW / BibleContent - default 18f, not 16f. No small font before prefs load.
     val fontSize: Float = 18f,
     val isLoggedIn: Boolean = false,
     val userName: String = "Guest",
     val userEmail: String = "",
     val scrollRestoreKey: Int = 0,
     val showNoteDialog: Boolean = false,
+    // STEP 2: NEW - controls Ask Gemini panel
+    val showAiChat: Boolean = false,
     val currentNoteText: String = "",
     val isReadingRestored: Boolean = false
 )
@@ -68,6 +69,8 @@ class HomeViewModel(
     private val searchQuery = MutableStateFlow("")
     private val searchFilter = MutableStateFlow("All")
     private val showNoteDialogState = MutableStateFlow(false)
+    // STEP 2: NEW
+    private val showAiChatState = MutableStateFlow(false)
     private val currentNoteText = MutableStateFlow("")
     private val commentary = MutableStateFlow("")
     private val commentaryError = MutableStateFlow(false)
@@ -110,7 +113,6 @@ class HomeViewModel(
                         if (list.isNotEmpty()) versesCache[key] = list
                         if (list.isEmpty() && cached != null) cached else list
                     }
-                    // FIX: No double emit. Cached + DAO same list = 1 emit, not 2. Was causing LazyColumn re-measure / jump.
                     .distinctUntilChanged()
                     .onStart { if (cached != null) emit(cached) }
             } catch (e: Exception) {
@@ -171,6 +173,8 @@ class HomeViewModel(
             launch { linkedVerseText.collect { t -> _uiState.update { it.copy(linkedVerseText = t) } } }
             launch { linkedVerseRef.collect { r -> _uiState.update { it.copy(linkedVerseRef = r) } } }
             launch { showNoteDialogState.collect { b -> _uiState.update { it.copy(showNoteDialog = b) } } }
+            // STEP 2: NEW
+            launch { showAiChatState.collect { b -> _uiState.update { it.copy(showAiChat = b) } } }
             launch { currentNoteText.collect { t -> _uiState.update { it.copy(currentNoteText = t) } } }
             launch { isReadingRestored.collect { b -> _uiState.update { it.copy(isReadingRestored = b) } } }
 
@@ -179,8 +183,6 @@ class HomeViewModel(
                     .distinctUntilChanged()
                     .collectLatest { (bookId, chapter) ->
                         loadSummary(bookId, chapter)
-                        // INSTANT: always preload commentary, even on Bible tab.
-                        // So when you tap Open EW, it's already in cache.
                         loadCommentary(bookId, chapter)
                     }
             }
@@ -198,8 +200,6 @@ class HomeViewModel(
             runCatching { prefs.isDarkMode.collect { d -> _uiState.update { it.copy(darkMode = d) } } }
         }
         viewModelScope.launch {
-            // FIX: Never let font drop below 18f, same rule as Open EW / BibleContent.
-            // If prefs has old 16f saved, coerce it up here so whole app stays consistent.
             runCatching { prefs.fontSize.collect { f -> _uiState.update { it.copy(fontSize = f.coerceAtLeast(18f)) } } }
         }
         viewModelScope.launch {
@@ -232,8 +232,6 @@ class HomeViewModel(
                 .collectLatest { (query, filter) ->
                     if (query.isBlank()) { searchResults.value = emptyList(); return@collectLatest }
                     runCatching {
-                        // PATCH: Escape LIKE wildcards - Dao uses ESCAPE '\'.
-                        // Before, typing % or _ broke search / returned wrong results.
                         val escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
                         val raw = dao.searchVerses(escaped)
                         searchResults.value = when (filter) {
@@ -315,7 +313,6 @@ class HomeViewModel(
     fun setSearchQuery(query: String) { searchQuery.value = query }
     fun setSearchFilter(filter: String) { searchFilter.value = filter }
     fun setDarkMode(enabled: Boolean) { viewModelScope.launch { runCatching { prefs.setDarkMode(enabled) } } }
-    // FIX: Clamp on save too, so 16f never gets saved again.
     fun setFontSize(size: Float) { viewModelScope.launch { runCatching { prefs.setFontSize(size.coerceAtLeast(18f)) } } }
     fun onUserSignedIn(name: String, email: String) { viewModelScope.launch { runCatching { prefs.saveUser(name, email) } } }
     fun onUserSignedOut() { viewModelScope.launch { runCatching { prefs.clearUser() } } }
@@ -345,8 +342,6 @@ class HomeViewModel(
 
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
-        // PATCH: Use containsKey - cached null (no summary for this chapter) is still a cache hit.
-        // Before, ?.let never hit for null, so it re-queried DB on every tab switch.
         if (summaryCache.containsKey(key)) {
             val cached = summaryCache[key]
             if (bookId == currentBookId.value && chapter == selectedChapter.value) {
@@ -361,14 +356,11 @@ class HomeViewModel(
             runCatching {
                 val s = dao.getSummary(bookId, chapter)
                 summaryCache[key] = s
-                // FIX: Only publish summary if we are still on that chapter.
-                // Old code could publish Genesis 1 summary after you already moved to Genesis 2 -> height jump.
                 if (bookId == currentBookId.value && chapter == selectedChapter.value) {
                     summaryState.value = s
                 }
             }
             summaryLoadingKeys.remove(key)
-            // PATCH: Only clear loading when no other summary is still loading.
             if (summaryLoadingKeys.isEmpty()) _summaryLoading.value = false
         }
     }
@@ -382,7 +374,6 @@ class HomeViewModel(
                                    else "${BookCatalog.name(bookId)} $chapter:$verse"
             linkedVerseText.value = "Loading..."
             runCatching {
-                // PATCH: Use getVerseRange - loads only 1-5 verses, not whole chapter.
                 val range = dao.getVerseRange(bookId, chapter, verse, end)
                 linkedVerseText.value = if (range.isEmpty()) "Verse not found."
                     else range.joinToString("\n\n") { "${it.verse}. ${it.text}" }
@@ -479,6 +470,11 @@ class HomeViewModel(
     }
     fun showNoteDialog() { if (selectedVerse.value == null) return; showNoteDialogState.value = true }
     fun dismissNoteDialog() { showNoteDialogState.value = false }
+
+    // STEP 2: Ask Gemini open / close
+    fun openAiChat() { showAiChatState.value = true }
+    fun closeAiChat() { showAiChatState.value = false }
+
     fun saveNote(noteText: String) {
         val verseNum = selectedVerse.value ?: return
         viewModelScope.launch {
