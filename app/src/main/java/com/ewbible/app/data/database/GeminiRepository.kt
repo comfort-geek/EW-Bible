@@ -6,7 +6,7 @@ import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.flowOn
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -31,7 +31,6 @@ class GeminiRepository {
 
         val contents = JSONArray()
 
-        // System instruction as first turn - WIRED with bibleContext + translation
         contents.put(JSONObject().apply {
             put("role", "user")
             put("parts", JSONArray().put(JSONObject().put("text",
@@ -64,8 +63,18 @@ class GeminiRepository {
 
         val parts = JSONArray().put(JSONObject().put("text", question))
         if (image != null) {
+            val scaled = if (image.width > 1024 || image.height > 1024) {
+                val scale = 1024f / maxOf(image.width, image.height)
+                Bitmap.createScaledBitmap(
+                    image,
+                    (image.width * scale).toInt(),
+                    (image.height * scale).toInt(),
+                    true
+                )
+            } else image
             val stream = ByteArrayOutputStream()
-            image.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+            scaled.compress(Bitmap.CompressFormat.JPEG, 75, stream)
+            if (scaled != image) scaled.recycle()
             val base64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
             parts.put(JSONObject().apply {
                 put("inline_data", JSONObject().apply {
@@ -88,18 +97,27 @@ class GeminiRepository {
         }.toString()
 
         val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=$key")
-        val conn = withContext(Dispatchers.IO) {
-            (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                setRequestProperty("Content-Type", "application/json")
-                doOutput = true
-                connectTimeout = 30000
-                readTimeout = 60000
-                outputStream.use { it.write(body.toByteArray()) }
-            }
+        // FIXED: No withContext() around emit anymore.
+        // flowOn(Dispatchers.IO) below already runs ALL of this on IO.
+        // emit() inside withContext() = "Flow invariant is violated" crash.
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            setRequestProperty("Content-Type", "application/json")
+            doOutput = true
+            connectTimeout = 15000
+            readTimeout = 60000
+            outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
         }
 
-        withContext(Dispatchers.IO) {
+        try {
+            val code = conn.responseCode
+            if (code != HttpURLConnection.HTTP_OK) {
+                val err = conn.errorStream?.bufferedReader()?.readText()?.take(500) ?: "HTTP $code"
+                if (code == 429) emit("Sorry, too many requests. Please try again in a minute.")
+                else emit("Sorry, Gemini returned an error ($code). Please try again.")
+                return@flow
+            }
+
             conn.inputStream.bufferedReader().useLines { lines ->
                 for (line in lines) {
                     if (line.startsWith("data: ")) {
@@ -107,14 +125,16 @@ class GeminiRepository {
                         if (json.isEmpty() || json == "[") continue
                         try {
                             val text = JSONObject(json)
-                                .getJSONArray("candidates").getJSONObject(0)
-                                .getJSONObject("content").getJSONArray("parts")
-                                .getJSONObject(0).optString("text", "")
+                                .optJSONArray("candidates")?.optJSONObject(0)
+                                ?.optJSONObject("content")?.optJSONArray("parts")
+                                ?.optJSONObject(0)?.optString("text", "") ?: ""
                             if (text.isNotEmpty()) emit(text)
                         } catch (e: Exception) { /* skip partial chunk */ }
                     }
                 }
             }
+        } finally {
+            conn.disconnect()
         }
-    }
+    }.flowOn(Dispatchers.IO)
 }
