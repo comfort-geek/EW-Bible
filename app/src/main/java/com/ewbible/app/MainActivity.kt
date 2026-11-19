@@ -72,7 +72,7 @@ class MainActivity : ComponentActivity() {
                                 confirmButton = {
                                     TextButton(onClick = {
                                         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                        clipboard.setPrimaryClip(ClipData.newPlainText("crash", lastCrash))
+                                        clipboard.setPrimaryClip(ClipData.newPlainText("crash", lastCrash ?: ""))
                                         Toast.makeText(this@MainActivity, "Copied!", Toast.LENGTH_SHORT).show()
                                     }) { Text("Copy") }
                                 },
