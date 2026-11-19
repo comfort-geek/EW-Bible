@@ -5,8 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ewbible.app.data.database.BibleDao
 import com.ewbible.app.data.database.BookCatalog
-import com.ewbible.app.data.database.ChatDao
 import com.ewbible.app.data.database.ChatEntity
+import com.ewbible.app.data.database.CommentaryHelper
 import com.ewbible.app.data.database.GeminiRepository
 import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,9 +26,8 @@ data class ChatState(
 )
 
 class ChatViewModel(
-    private val chatDao: ChatDao,
-    private val geminiRepository: GeminiRepository,
-    private val bibleDao: BibleDao // WIRED - NEW
+    private val bibleDao: BibleDao, // ONLY DAO NOW - ChatDao deleted
+    private val geminiRepository: GeminiRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ChatState())
@@ -38,7 +37,7 @@ class ChatViewModel(
 
     fun loadChats() {
         viewModelScope.launch {
-            val chats = chatDao.getChats()
+            val chats = bibleDao.getAllChats()
             _state.update { it.copy(chats = chats) }
         }
     }
@@ -46,7 +45,7 @@ class ChatViewModel(
     fun startNewChat(currentRef: String) {
         viewModelScope.launch {
             val chat = ChatEntity(title = "New Chat", ref = currentRef)
-            val id = chatDao.insertChat(chat)
+            val id = bibleDao.insertChat(chat)
             _state.update {
                 it.copy(currentChatId = id, messages = emptyList(), streamingText = "", isLoading = false)
             }
@@ -56,15 +55,15 @@ class ChatViewModel(
 
     fun openChat(chatId: Long) {
         viewModelScope.launch {
-            val messages = chatDao.getMessages(chatId)
+            val messages = bibleDao.getMessages(chatId)
             _state.update { it.copy(currentChatId = chatId, messages = messages, streamingText = "") }
         }
     }
 
     fun deleteChat(chatId: Long) {
         viewModelScope.launch {
-            chatDao.deleteMessages(chatId)
-            chatDao.deleteChat(chatId)
+            bibleDao.deleteMessagesForChat(chatId)
+            bibleDao.deleteChat(chatId)
             if (_state.value.currentChatId == chatId) {
                 _state.update { it.copy(currentChatId = null, messages = emptyList()) }
             }
@@ -72,7 +71,6 @@ class ChatViewModel(
         }
     }
 
-    // WIRED - added translation param
     fun send(question: String, currentRef: String, image: Bitmap?, translation: String = "NKJV") {
         val chatId = _state.value.currentChatId ?: return
         if (_state.value.isLoading) return
@@ -84,20 +82,17 @@ class ChatViewModel(
 
         viewModelScope.launch {
             val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
-            chatDao.insertMessage(userMsg)
-            chatDao.updateChatTime(chatId, System.currentTimeMillis())
+            bibleDao.insertMessage(userMsg)
 
-            val history = chatDao.getMessages(chatId)
+            val history = bibleDao.getMessages(chatId)
             _state.update {
                 it.copy(messages = history, isLoading = true, streamingText = "", error = null)
             }
 
-            // WIRED - build NKJV context from your DB
             val bibleContext = buildBibleContext(question, currentRef)
 
             val fullAnswer = StringBuilder()
             try {
-                // WIRED - passes bibleContext + translation
                 geminiRepository.askStreaming(
                     question = question,
                     currentRef = currentRef,
@@ -116,11 +111,10 @@ class ChatViewModel(
 
             val answerText = fullAnswer.toString().ifBlank { "Sorry, I couldn't answer that." }
             val aiMsg = MessageEntity(chatId = chatId, text = answerText, isUser = false)
-            chatDao.insertMessage(aiMsg)
-            chatDao.updateChatTime(chatId, System.currentTimeMillis())
+            bibleDao.insertMessage(aiMsg)
 
             dailyCountInternal++
-            val updatedMessages = chatDao.getMessages(chatId)
+            val updatedMessages = bibleDao.getMessages(chatId)
             _state.update {
                 it.copy(
                     messages = updatedMessages,
@@ -133,10 +127,8 @@ class ChatViewModel(
         }
     }
 
-    // WIRED - reads NKJV from ewbible.db
     private suspend fun buildBibleContext(question: String, currentRef: String): String {
         return try {
-            // Case 1: User asked a specific verse like "John 3:16" or "Psalm 23:1"
             val verseRegex = Regex("""([1-3]?\s?[A-Za-z]+)\s+(\d+):(\d+)""")
             val match = verseRegex.find(question)
             if (match != null) {
@@ -144,20 +136,22 @@ class ChatViewModel(
                 val chapter = match.groupValues[2].toIntOrNull() ?: 1
                 val verse = match.groupValues[3].toIntOrNull() ?: 1
                 val bookId = BookCatalog.id(bookName)
-                val text = bibleDao.getVerse(bookId, chapter, verse) ?: ""
+                // FIXED: getVerse returns VerseEntity, take .text
+                val text = bibleDao.getVerse(bookId, chapter, verse)?.text ?: ""
                 val summary = bibleDao.getSummary(bookId, chapter) ?: ""
                 return "USER ASKED ABOUT $bookName $chapter:$verse\nNKJV TEXT: $text\nSUMMARY: $summary\n"
             }
 
-            // Case 2: Use current chapter user is reading (from HomeScreen)
             val parts = currentRef.trim().split(" ")
             val chapter = parts.lastOrNull()?.toIntOrNull() ?: 1
             val bookName = parts.dropLast(1).joinToString(" ")
             val bookId = BookCatalog.id(bookName)
             val chapterText = bibleDao.getChapterText(bookId, chapter).joinToString("\n")
             val summary = bibleDao.getSummary(bookId, chapter) ?: ""
-            val commentary = bibleDao.getCommentary(bookId, chapter) ?: ""
-            return "USER IS READING $bookName $chapter (NKJV):\n$chapterText\n\nSUMMARY: $summary\nCOMMENTARY: ${commentary.take(3000)}\n"
+            // FIXED: getCommentaryCompressed + Helper, not getCommentary()
+            val compressed = bibleDao.getCommentaryCompressed(bookId, chapter)
+            val commentary = CommentaryHelper.clean(compressed).take(3000)
+            return "USER IS READING $bookName $chapter (NKJV):\n$chapterText\n\nSUMMARY: $summary\nCOMMENTARY: $commentary\n"
         } catch (e: Exception) {
             ""
         }
