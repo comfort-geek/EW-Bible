@@ -85,7 +85,6 @@ class HomeViewModel(
     private var commentaryJob: Job? = null
     private var restoreDone = false
 
-    // Caches for instant, no-delay navigation
     private val commentaryCache = object : LinkedHashMap<String, String>(30, 0.75f, true) {
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 30
     }
@@ -96,7 +95,6 @@ class HomeViewModel(
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
     val currentBookId: StateFlow<Int> = selectedBookId.asStateFlow()
 
-    // combine + distinct + shareIn(replay=1) = survives tab switch, no reload
     val verses: Flow<List<VerseEntity>> = combine(selectedBookId, selectedChapter) { bookId, chapter ->
         bookId to chapter
     }
@@ -109,7 +107,6 @@ class HomeViewModel(
                     .distinctUntilChanged()
                     .map { list ->
                         if (list.isNotEmpty()) versesCache[key] = list
-                        // Never emit empty if we have cached data - kills "No verses" flash
                         if (list.isEmpty() && cached != null) cached else list
                     }
                     .onStart { if (cached != null) emit(cached) }
@@ -138,12 +135,9 @@ class HomeViewModel(
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     init {
-        // FIX: Restore FIRST, before any book/chapter collector starts.
-        // This stops the Genesis 1 -> Exodus 3 double-load flash.
         viewModelScope.launch {
             restoreSavedReading()
 
-            // Now that we know the real book/chapter, start collectors
             launch { books.collect { list -> _uiState.update { it.copy(books = list) } } }
             launch { verses.collect { list -> _uiState.update { it.copy(verses = list) } } }
             launch { highlights.collect { map -> _uiState.update { it.copy(highlights = map) } } }
@@ -177,12 +171,14 @@ class HomeViewModel(
             launch { currentNoteText.collect { t -> _uiState.update { it.copy(currentNoteText = t) } } }
             launch { isReadingRestored.collect { b -> _uiState.update { it.copy(isReadingRestored = b) } } }
 
-            // FIX: Summary + Commentary collectors now INSIDE restore block - no Genesis 1 double-load
             launch {
                 combine(currentBookId, selectedChapter) { bookId, chapter -> bookId to chapter }
                     .distinctUntilChanged()
                     .collectLatest { (bookId, chapter) ->
                         loadSummary(bookId, chapter)
+                        if (selectedTab.value == "Open EW") {
+                            loadCommentary(bookId, chapter)
+                        }
                     }
             }
             launch {
@@ -191,11 +187,9 @@ class HomeViewModel(
                 }
             }
 
-            // Load summary for restored chapter immediately
             loadSummary(selectedBookId.value, selectedChapter.value)
         }
 
-        // Prefs - independent of book/chapter, can start immediately
         viewModelScope.launch {
             runCatching { prefs.isDarkMode.collect { d -> _uiState.update { it.copy(darkMode = d) } } }
         }
@@ -305,8 +299,8 @@ class HomeViewModel(
     fun openBook(bookName: String, chapter: Int) = openBook(BookCatalog.id(bookName), chapter)
     fun selectTab(tab: String) {
         selectedTab.value = tab
-        if (tab == "Open EW") loadCommentary(currentBookId.value, selectedChapter.value)
     }
+
     fun searchVerses(query: String) { searchQuery.value = query }
     fun setSearchQuery(query: String) { searchQuery.value = query }
     fun setSearchFilter(filter: String) { searchFilter.value = filter }
@@ -338,7 +332,6 @@ class HomeViewModel(
         }
     }
 
-    // FIX: Cached summary + in-flight guard = instant, no double Room hit
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
         summaryCache[key]?.let { cached ->
@@ -394,7 +387,6 @@ class HomeViewModel(
                 }
                 if (html.isNullOrBlank()) {
                     val fallback = "<html><body><p><i>Commentary for ${BookCatalog.name(bookId)} $chapter is not available yet.</i></p></body></html>"
-                    commentaryCache[key] = fallback
                     commentary.value = fallback
                     commentaryError.value = false
                 } else {
