@@ -8,9 +8,10 @@ plugins {
 
 android {
     namespace = "com.ewbible.app"
-    compileSdk = 36
+    compileSdk = 35
 
     // FIX: Use fixed debug.keystore from repo root, so SHA-1 never changes on GitHub
+    // WARNING: debug.keystore MUST be committed to repo root, or CI fails with "Keystore file not found"
     signingConfigs {
         getByName("debug") {
             storeFile = rootProject.file("debug.keystore")
