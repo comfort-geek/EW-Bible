@@ -62,7 +62,6 @@ fun BookDrawer(
 
     ModalDrawerSheet(
         drawerShape = RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp),
-        // ✅ FIT: 85% on phones, max 320dp on tablets - never clips, never covers full screen
         modifier = Modifier.fillMaxWidth(0.85f).widthIn(max = 320.dp),
         drawerContainerColor = background,
         drawerContentColor = textColor,
@@ -164,7 +163,9 @@ private fun BookDrawerRow(
     val isSelected = selectedBookId == book.id
     val isExpanded = expandedBookId == book.id
     val chapters = remember(chapterCount) { (1..chapterCount.coerceAtLeast(1)).toList() }
-    val gridHeight = remember(chapterCount) { ((chapterCount + 4) / 5 * 48).dp }
+    // FIXED: 40dp chip + 8dp spacing, was 48dp per row which clipped last row for Psalms
+    val rows = (chapterCount + 4) / 5
+    val gridHeight = remember(chapterCount) { (rows * 40 + (rows - 1).coerceAtLeast(0) * 8).dp }
 
     Column {
         Row(
