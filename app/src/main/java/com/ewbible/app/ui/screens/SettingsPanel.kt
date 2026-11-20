@@ -39,7 +39,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -51,6 +50,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.CrashReportDialog
+
+// FIXED: Persists even when Settings closes, so 5 taps across opens still count
+private object GeminiDebugTap {
+    var count = 0
+}
 
 @Composable
 fun SettingsPanel(
@@ -76,19 +80,15 @@ fun SettingsPanel(
 ) {
     var resourcesExpanded by rememberSaveable { mutableStateOf(false) }
     var sliderValue by remember(fontSize) { mutableFloatStateOf(fontSize.coerceIn(12f, 24f)) }
-
-    // NEW: 5-tap hidden debug
-    var geminiTapCount by remember { mutableIntStateOf(0) }
     var showLogs by remember { mutableStateOf(false) }
 
     if (!visible && !showLogs) return
 
     val scrollState = rememberScrollState()
 
-    // NEW: Debug dialog - shows even if panel is closed
     if (showLogs) {
         CrashReportDialog(
-            crashText = "", // empty = opens on Gemini tab
+            crashText = "",
             onCopy = {},
             onClear = {},
             onDismiss = { showLogs = false }
@@ -184,10 +184,9 @@ fun SettingsPanel(
                         .fillMaxWidth()
                         .background(panel, RoundedCornerShape(12.dp))
                         .clickable {
-                            // 5-TAP TRICK: 1-4 = normal, 5th = open logs
-                            geminiTapCount++
-                            if (geminiTapCount >= 5) {
-                                geminiTapCount = 0
+                            GeminiDebugTap.count++
+                            if (GeminiDebugTap.count >= 5) {
+                                GeminiDebugTap.count = 0
                                 showLogs = true
                             } else {
                                 onClose()
