@@ -25,7 +25,6 @@ data class HomeUiState(
     val summaryText: String = "",
     val summaryWhatHappened: String = "",
     val summaryApplication: String = "",
-    val summaryItalicText: String = "",
     val commentaryHtml: String = "",
     val commentaryError: Boolean = false,
     val linkedVerseText: String = "",
@@ -148,7 +147,7 @@ class HomeViewModel(
         viewModelScope.launch { commentary.collect { _uiState.update { s -> s.copy(commentaryHtml = it) } } }
         viewModelScope.launch { commentaryError.collect { _uiState.update { s -> s.copy(commentaryError = it) } } }
         viewModelScope.launch { summaryState.collect { summ ->
-            _uiState.update { s -> s.copy(summary = summ, summaryText = summ?.summary ?: "", summaryWhatHappened = summ?.whatHappened ?: "", summaryApplication = summ?.application ?: "", summaryItalicText = summ?.summary ?: "") }
+            _uiState.update { s -> s.copy(summary = summ, summaryText = summ?.summary ?: "", summaryWhatHappened = summ?.whatHappened ?: "", summaryApplication = summ?.application ?: "") }
         } }
         viewModelScope.launch { _summaryLoading.collect { _uiState.update { s -> s.copy(summaryLoading = it) } } }
         viewModelScope.launch { chapterCounts.collect { _uiState.update { s -> s.copy(chapterCounts = it) } } }
@@ -317,7 +316,6 @@ class HomeViewModel(
             if (summaryLoadingKeys.isEmpty()) _summaryLoading.value = false
         }
     }
-    // FIXED: deleted ambiguous no-arg loadSummary() overload - default params above already allow loadSummary()
 
     fun loadLinkedVerse(bookName: String, chapter: Int, verse: Int, endVerse: Int = verse) {
         viewModelScope.launch {
@@ -330,7 +328,6 @@ class HomeViewModel(
         }
     }
 
-    // FIXED: removed 1 extra } here - it was closing the class early
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
         synchronized(commentaryCache) { commentaryCache.get(key) }?.let {
@@ -359,7 +356,6 @@ class HomeViewModel(
             }
         }
     }
-    // FIXED: deleted ambiguous no-arg loadCommentary() overload - default params above already allow loadCommentary()
 
     fun loadDailyVerse() {
         viewModelScope.launch {
