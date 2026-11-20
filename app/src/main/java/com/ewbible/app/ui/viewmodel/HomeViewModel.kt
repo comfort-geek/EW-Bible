@@ -317,7 +317,7 @@ class HomeViewModel(
             if (summaryLoadingKeys.isEmpty()) _summaryLoading.value = false
         }
     }
-    fun loadSummary() { loadSummary(currentBookId.value, selectedChapter.value) }
+    // FIXED: deleted ambiguous no-arg loadSummary() overload - default params above already allow loadSummary()
 
     fun loadLinkedVerse(bookName: String, chapter: Int, verse: Int, endVerse: Int = verse) {
         viewModelScope.launch {
@@ -359,7 +359,7 @@ class HomeViewModel(
             }
         }
     }
-    fun loadCommentary() { loadCommentary(currentBookId.value, selectedChapter.value) }
+    // FIXED: deleted ambiguous no-arg loadCommentary() overload - default params above already allow loadCommentary()
 
     fun loadDailyVerse() {
         viewModelScope.launch {
