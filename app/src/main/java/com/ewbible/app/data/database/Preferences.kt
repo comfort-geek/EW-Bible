@@ -1,4 +1,4 @@
-package com.ewbible.app.data.database
+package com.ewbible.app.data.preferences
 
 import android.content.Context
 import androidx.datastore.core.DataStore
