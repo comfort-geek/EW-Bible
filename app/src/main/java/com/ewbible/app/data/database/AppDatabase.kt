@@ -56,7 +56,6 @@ data class CommentaryEntity(
     }
 }
 
-// FIXED: color is INTEGER in real db, not String
 @Entity(
     tableName = "highlights",
     primaryKeys = ["book_id", "chapter", "verse"]
@@ -68,7 +67,6 @@ data class HighlightEntity(
     val color: Int
 )
 
-// FIXED: text column is really called note_text, no updatedAt
 @Entity(tableName = "notes")
 data class NoteEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
@@ -83,6 +81,7 @@ data class NoteEntity(
 data class ChatEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String = "New Chat",
+    val ref: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -117,7 +116,7 @@ data class MessageEntity(
         ChatEntity::class,
         MessageEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -135,9 +134,8 @@ abstract class AppDatabase : RoomDatabase() {
                     "ewbible.db"
                 )
                     .createFromAsset("ewbible.db")
-                    .fallbackToDestructiveMigration(false)
+                    .fallbackToDestructiveMigration(true)
                     .build()
-                INSTANCE = instance
                 INSTANCE = instance
                 instance
             }
