@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ewbible.app.data.database.*
 import com.ewbible.app.data.preferences.AppPreferences
+import com.ewbible.app.data.sync.SyncManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -54,7 +55,8 @@ data class HomeUiState(
 @OptIn(FlowPreview::class)
 class HomeViewModel(
     private val dao: BibleDao,
-    private val prefs: AppPreferences
+    private val prefs: AppPreferences,
+    private val syncManager: SyncManager? = null
 ) : ViewModel() {
 
     private val selectedBookId = MutableStateFlow(1)
@@ -80,6 +82,7 @@ class HomeViewModel(
     private val linkedVerseRef = MutableStateFlow("")
     private var commentaryJob: Job? = null
     private var restoreDone = false
+    private var cloudSyncDone = false
 
     private val commentaryCache = LruCache<String, String>(30)
     private val summaryCache = LruCache<String, SummaryEntity>(60)
@@ -208,6 +211,60 @@ class HomeViewModel(
                 }
         }
         loadDailyVerse()
+
+        // NEW: pull cloud once on start (after local restore). No-op if not logged in.
+        viewModelScope.launch { syncFromCloud() }
+    }
+
+    // --- SYNC: cloud -> local (pull) ---
+
+    private suspend fun syncFromCloud() {
+        val sm = syncManager ?: return
+        if (cloudSyncDone) return
+        cloudSyncDone = true
+        try {
+            // Notes: only insert if local missing or cloud newer
+            sm.getNotes().getOrNull()?.forEach { cloud ->
+                val local = runCatching { withContext(Dispatchers.IO) { dao.getNoteAtVerse(cloud.bookId, cloud.chapter, cloud.verse) } }.getOrNull()
+                if (local == null || cloud.timestamp > local.timestamp) {
+                    withContext(Dispatchers.IO) {
+                        if (local != null) dao.updateNote(local.copy(text = cloud.noteText, timestamp = cloud.timestamp))
+                        else dao.saveNote(NoteEntity(bookId = cloud.bookId, chapter = cloud.chapter, verse = cloud.verse, text = cloud.noteText, timestamp = cloud.timestamp))
+                    }
+                }
+            }
+            // Highlights: upsert - cloud wins, same key = same verse
+            sm.getHighlights().getOrNull()?.forEach { cloud ->
+                val colorInt = runCatching {
+                    android.graphics.Color.parseColor(cloud.color)
+                }.getOrDefault(0)
+                if (colorInt != 0) {
+                    withContext(Dispatchers.IO) {
+                        dao.saveHighlight(HighlightEntity(bookId = cloud.bookId, chapter = cloud.chapter, verse = cloud.verse, color = colorInt))
+                    }
+                }
+            }
+            // Progress: only if cloud is newer than local prefs - we use cloud if local is still Genesis 1:1 default
+            // or if user just logged in on a new device. Local restore already ran, so only apply if local was default.
+            val cloudProgress = sm.getProgress().getOrNull()
+            if (cloudProgress != null) {
+                val localBook = runCatching { prefs.getLastBookId() }.getOrDefault(1)
+                val localChapter = runCatching { prefs.getLastChapter() }.getOrDefault(1)
+                val isLocalDefault = localBook == 1 && localChapter == 1
+                if (isLocalDefault) {
+                    val bookId = BookCatalog.id(cloudProgress.book)
+                    if (bookId in 1..66) {
+                        selectedBookId.value = bookId
+                        selectedChapter.value = cloudProgress.chapter.coerceIn(1, BookCatalog.chapters(bookId))
+                        selectedVerse.value = cloudProgress.verse
+                        scrollRestoreKey.value += 1
+                        prefs.saveLastReading(bookId = bookId, chapter = cloudProgress.chapter, verse = cloudProgress.verse, scrollIndex = cloudProgress.scrollIndex, scrollOffset = cloudProgress.scrollOffset)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Not logged in / offline - stay local, don't crash
+        }
     }
 
     fun selectBook(bookId: Int) {
@@ -271,11 +328,32 @@ class HomeViewModel(
     fun setSearchFilter(filter: String) { searchFilter.value = filter }
     fun setDarkMode(enabled: Boolean) { viewModelScope.launch { runCatching { prefs.setDarkMode(enabled) } } }
     fun setFontSize(size: Float) { viewModelScope.launch { runCatching { prefs.setFontSize(size.coerceAtLeast(18f)) } } }
-    fun onUserSignedIn(name: String, email: String) { viewModelScope.launch { runCatching { prefs.saveUser(name, email) } } }
+    fun onUserSignedIn(name: String, email: String) {
+        viewModelScope.launch {
+            runCatching { prefs.saveUser(name, email) }
+            // Re-pull on sign-in: new device / re-login needs cloud data
+            cloudSyncDone = false
+            syncFromCloud()
+        }
+    }
     fun onUserSignedOut() { viewModelScope.launch { runCatching { prefs.clearUser() } } }
     fun saveReadingProgress(verse: VerseEntity? = null, scrollIndex: Int = 0, scrollOffset: Int = 0) {
         viewModelScope.launch {
-            runCatching { prefs.saveLastReading(bookId = currentBookId.value, chapter = selectedChapter.value, verse = verse?.verse ?: (selectedVerse.value ?: 1), scrollIndex = scrollIndex, scrollOffset = scrollOffset) }
+            val bookId = currentBookId.value
+            val chapter = selectedChapter.value
+            val verseNum = verse?.verse ?: (selectedVerse.value ?: 1)
+            runCatching { prefs.saveLastReading(bookId = bookId, chapter = chapter, verse = verseNum, scrollIndex = scrollIndex, scrollOffset = scrollOffset) }
+            // SYNC: push progress - no-op if not logged in (NotLoggedInException swallowed by SyncManager Result)
+            runCatching {
+                syncManager?.uploadProgress(
+                    mode = "New King James Version",
+                    book = BookCatalog.name(bookId),
+                    chapter = chapter,
+                    verse = verseNum,
+                    scrollIndex = scrollIndex,
+                    scrollOffset = scrollOffset
+                )
+            }
         }
     }
     private suspend fun restoreSavedReading() {
@@ -371,22 +449,41 @@ class HomeViewModel(
     fun saveNote(noteText: String) {
         val verseNum = selectedVerse.value ?: return
         viewModelScope.launch {
+            val bookId = currentBookId.value
+            val chapter = selectedChapter.value
+            val timestamp = System.currentTimeMillis()
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val existing = dao.getNoteAtVerse(currentBookId.value, selectedChapter.value, verseNum)
-                    if (existing != null) dao.updateNote(existing.copy(text = noteText, timestamp = System.currentTimeMillis()))
-                    else dao.saveNote(NoteEntity(bookId = currentBookId.value, chapter = selectedChapter.value, verse = verseNum, text = noteText, timestamp = System.currentTimeMillis()))
+                    val existing = dao.getNoteAtVerse(bookId, chapter, verseNum)
+                    if (existing != null) dao.updateNote(existing.copy(text = noteText, timestamp = timestamp))
+                    else dao.saveNote(NoteEntity(bookId = bookId, chapter = chapter, verse = verseNum, text = noteText, timestamp = timestamp))
                 }
                 currentNoteText.value = noteText
             }
+            // SYNC: push note - CloudNote.noteText = NoteEntity.text
+            runCatching { syncManager?.uploadNote(bookId, chapter, verseNum, noteText) }
         }
     }
     fun saveHighlight(color: Color) {
         val verseNum = selectedVerse.value ?: return
-        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { dao.saveHighlight(HighlightEntity(bookId = currentBookId.value, chapter = selectedChapter.value, verse = verseNum, color = color.toArgb())) } } }
+        viewModelScope.launch {
+            val bookId = currentBookId.value
+            val chapter = selectedChapter.value
+            val colorInt = color.toArgb()
+            runCatching { withContext(Dispatchers.IO) { dao.saveHighlight(HighlightEntity(bookId = bookId, chapter = chapter, verse = verseNum, color = colorInt)) } }
+            // SYNC: push highlight - CloudHighlight.color is String "#AARRGGBB"
+            val hex = "#%08X".format(colorInt)
+            runCatching { syncManager?.uploadHighlight(bookId, chapter, verseNum, hex) }
+        }
     }
     fun removeHighlight() {
         val verseNum = selectedVerse.value ?: return
-        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { dao.deleteHighlight(currentBookId.value, selectedChapter.value, verseNum) } } }
+        viewModelScope.launch {
+            val bookId = currentBookId.value
+            val chapter = selectedChapter.value
+            runCatching { withContext(Dispatchers.IO) { dao.deleteHighlight(bookId, chapter, verseNum) } }
+            // SYNC: delete highlight from cloud
+            runCatching { syncManager?.deleteHighlight(bookId, chapter, verseNum) }
+        }
     }
 }
