@@ -39,6 +39,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ewbible.app.CrashReportDialog
 
 @Composable
 fun SettingsPanel(
@@ -75,9 +77,25 @@ fun SettingsPanel(
     var resourcesExpanded by rememberSaveable { mutableStateOf(false) }
     var sliderValue by remember(fontSize) { mutableFloatStateOf(fontSize.coerceIn(12f, 24f)) }
 
-    if (!visible) return
+    // NEW: 5-tap hidden debug
+    var geminiTapCount by remember { mutableIntStateOf(0) }
+    var showLogs by remember { mutableStateOf(false) }
+
+    if (!visible && !showLogs) return
 
     val scrollState = rememberScrollState()
+
+    // NEW: Debug dialog - shows even if panel is closed
+    if (showLogs) {
+        CrashReportDialog(
+            crashText = "", // empty = opens on Gemini tab
+            onCopy = {},
+            onClear = {},
+            onDismiss = { showLogs = false }
+        )
+    }
+
+    if (!visible) return
 
     Box(
         modifier = Modifier
@@ -92,7 +110,6 @@ fun SettingsPanel(
         Column(
             modifier = Modifier
                 .fillMaxHeight()
-                // ✅ FIT: 85% on phones, max 400dp on tablets - never 1020dp wide
                 .fillMaxWidth(0.85f)
                 .widthIn(max = 400.dp)
                 .background(background)
@@ -101,7 +118,6 @@ fun SettingsPanel(
                     indication = null
                 ) {}
                 .verticalScroll(scrollState)
-                // ✅ FIT: no overlap with status bar / gesture bar
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .padding(20.dp)
@@ -168,8 +184,15 @@ fun SettingsPanel(
                         .fillMaxWidth()
                         .background(panel, RoundedCornerShape(12.dp))
                         .clickable {
-                            onClose()
-                            onOpenAiChat()
+                            // 5-TAP TRICK: 1-4 = normal, 5th = open logs
+                            geminiTapCount++
+                            if (geminiTapCount >= 5) {
+                                geminiTapCount = 0
+                                showLogs = true
+                            } else {
+                                onClose()
+                                onOpenAiChat()
+                            }
                         }
                         .padding(16.dp)
                 ) {
