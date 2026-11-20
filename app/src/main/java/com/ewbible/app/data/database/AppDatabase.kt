@@ -56,7 +56,7 @@ data class CommentaryEntity(
     }
 }
 
-// FIXED: matches real db - no id, no createdAt, PK is book+chapter+verse
+// FIXED: color is INTEGER in real db, not String
 @Entity(
     tableName = "highlights",
     primaryKeys = ["book_id", "chapter", "verse"]
@@ -65,7 +65,7 @@ data class HighlightEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
     val verse: Int,
-    val color: String
+    val color: Int
 )
 
 // FIXED: text column is really called note_text, no updatedAt
@@ -137,6 +137,7 @@ abstract class AppDatabase : RoomDatabase() {
                     .createFromAsset("ewbible.db")
                     .fallbackToDestructiveMigration(false)
                     .build()
+                INSTANCE = instance
                 INSTANCE = instance
                 instance
             }
