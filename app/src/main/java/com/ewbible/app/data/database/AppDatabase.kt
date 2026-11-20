@@ -134,7 +134,6 @@ abstract class AppDatabase : RoomDatabase() {
                     "ewbible.db"
                 )
                     .createFromAsset("ewbible.db")
-                    .fallbackToDestructiveMigration(true)
                     .build()
                 INSTANCE = instance
                 instance
