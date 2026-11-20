@@ -1,0 +1,236 @@
+package com.ewbible.app.data.ai
+
+import android.graphics.Bitmap
+import android.util.Base64
+import com.ewbible.app.BuildConfig
+import com.ewbible.app.CrashReporter
+import com.ewbible.app.data.database.MessageEntity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.TimeUnit
+
+class AiRepository {
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    private val geminiKey: String
+        get() {
+            val k = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
+            CrashReporter.geminiLog("Key check - Gemini length: ${k.length}")
+            return k
+        }
+
+    private val groqKey: String
+        get() {
+            val k = try { BuildConfig.GROQ_API_KEY } catch (e: Exception) { "" }
+            CrashReporter.geminiLog("Key check - Groq length: ${k.length}")
+            return k
+        }
+
+    private val geminiModels = listOf(
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite"
+    )
+
+    // Groq - free, very fast
+    private val groqModel = "llama-3.3-70b-versatile"
+
+    fun askStreaming(
+        question: String,
+        currentRef: String = "",
+        history: List<MessageEntity> = emptyList(),
+        image: Bitmap? = null,
+        bibleContext: String = "",
+        translation: String = "NKJV"
+    ): Flow<String> = flow {
+        try {
+            val context = buildString {
+                if (bibleContext.isNotBlank()) {
+                    append("Bible context ($translation, reading $currentRef):\n")
+                    append(bibleContext)
+                    append("\n\n")
+                }
+                if (history.isNotEmpty()) {
+                    append("Chat history:\n")
+                    history.takeLast(6).forEach {
+                        append(if (it.isUser) "User: " else "AI: ")
+                        append(it.text)
+                        append("\n")
+                    }
+                    append("\n")
+                }
+            }
+
+            val result = askQuestion(question, context, image)
+
+            if (result.isFailure) {
+                val msg = result.exceptionOrNull()?.message ?: "Unknown AI error"
+                CrashReporter.geminiLog("askStreaming failed: $msg")
+                emit("⚠️ $msg")
+                return@flow
+            }
+
+            val text = result.getOrNull() ?: ""
+            if (text.isBlank()) {
+                emit("⚠️ AI returned an empty response. Try again.")
+                return@flow
+            }
+
+            var i = 0
+            while (i < text.length) {
+                val end = minOf(i + 100, text.length)
+                emit(text.substring(i, end))
+                i = end
+            }
+        } catch (e: Exception) {
+            CrashReporter.geminiLog("askStreaming crashed: ${e.message}")
+            emit("⚠️ Error: ${e.message}")
+        }
+    }
+
+    suspend fun askQuestion(question: String, context: String = "", image: Bitmap? = null): Result<String> =
+        withContext(Dispatchers.IO) {
+
+            val prompt = buildString {
+                if (context.isNotBlank()) {
+                    append(context)
+                    append("\n\n")
+                }
+                append("Answer this Bible question clearly, based on Scripture. Keep it simple and faithful:\n")
+                append(question)
+            }
+
+            // --- 1. Try Gemini ---
+            if (geminiKey.isNotBlank() && geminiKey != "YOUR_API_KEY_HERE") {
+                for (model in geminiModels) {
+                    val r = tryGemini(model, prompt, image)
+                    if (r.isSuccess) return@withContext r
+                    CrashReporter.geminiLog("Gemini $model failed, trying next: ${r.exceptionOrNull()?.message}")
+                }
+            } else {
+                CrashReporter.geminiLog("Gemini skipped - no key")
+            }
+
+            // --- 2. Fallback to Groq ---
+            if (groqKey.isNotBlank() && groqKey != "YOUR_API_KEY_HERE") {
+                val r = tryGroq(prompt)
+                if (r.isSuccess) return@withContext r
+                CrashReporter.geminiLog("Groq failed: ${r.exceptionOrNull()?.message}")
+                return@withContext Result.failure(r.exceptionOrNull() ?: Exception("Groq failed"))
+            } else {
+                CrashReporter.geminiLog("Groq skipped - no key")
+            }
+
+            Result.failure(Exception("Both Gemini and Groq failed or have no key. Check Secrets: GEMINI_API_KEY and GROQ_API_KEY, then re-run workflow."))
+        }
+
+    private fun tryGemini(model: String, prompt: String, image: Bitmap?): Result<String> {
+        return try {
+            val parts = JSONArray().put(JSONObject().put("text", prompt))
+            if (image != null) {
+                val stream = ByteArrayOutputStream()
+                image.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+                val b64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+                parts.put(JSONObject().apply {
+                    put("inline_data", JSONObject().apply {
+                        put("mime_type", "image/jpeg")
+                        put("data", b64)
+                    })
+                })
+            }
+            val bodyJson = JSONObject().apply {
+                put("contents", JSONArray().put(JSONObject().put("parts", parts)))
+                put("generationConfig", JSONObject().apply {
+                    put("temperature", 0.7)
+                    put("maxOutputTokens", 1024)
+                })
+            }
+            val request = Request.Builder()
+                .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$geminiKey")
+                .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string() ?: ""
+                CrashReporter.geminiLog("Model $model -> HTTP ${response.code}")
+                if (!response.isSuccessful) {
+                    val err = runCatching { JSONObject(body).getJSONObject("error").getString("message") }.getOrNull() ?: "HTTP ${response.code}: $body"
+                    Result.failure(Exception("$model failed (${response.code}): $err"))
+                } else {
+                    val text = runCatching {
+                        JSONObject(body).getJSONArray("candidates").getJSONObject(0)
+                            .getJSONObject("content").getJSONArray("parts")
+                            .getJSONObject(0).getString("text")
+                    }.getOrNull()
+                    if (!text.isNullOrBlank()) Result.success(text.trim())
+                    else Result.failure(Exception("Empty response from $model"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun tryGroq(prompt: String): Result<String> {
+        return try {
+            // Groq does NOT support images in this simple version - text only
+            val bodyJson = JSONObject().apply {
+                put("model", groqModel)
+                put("temperature", 0.7)
+                put("max_tokens", 1024)
+                put("messages", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "system")
+                        put("content", "You are a faithful Bible assistant. Answer clearly based on Scripture, keep it simple.")
+                    })
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", prompt)
+                    })
+                })
+            }
+
+            val request = Request.Builder()
+                .url("https://api.groq.com/openai/v1/chat/completions")
+                .addHeader("Authorization", "Bearer $groqKey")
+                .addHeader("Content-Type", "application/json")
+                .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string() ?: ""
+                CrashReporter.geminiLog("Groq $groqModel -> HTTP ${response.code}")
+                if (!response.isSuccessful) {
+                    val err = runCatching {
+                        JSONObject(body).getJSONObject("error").getString("message")
+                    }.getOrNull() ?: "HTTP ${response.code}: $body"
+                    Result.failure(Exception("Groq failed (${response.code}): $err"))
+                } else {
+                    val text = runCatching {
+                        JSONObject(body).getJSONArray("choices").getJSONObject(0)
+                            .getJSONObject("message").getString("content")
+                    }.getOrNull()
+                    if (!text.isNullOrBlank()) {
+                        CrashReporter.geminiLog("Groq success, ${text.length} chars")
+                        Result.success(text.trim())
+                    } else Result.failure(Exception("Empty response from Groq"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+}
