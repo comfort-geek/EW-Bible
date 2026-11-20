@@ -41,10 +41,7 @@ class AppPreferences(context: Context) {
     }
 
     // FIXED: catch IOException - corrupt DataStore file was crashing all Flows
-    private fun <T> Flow<T>.safe(): Flow<T> = catch { e ->
-        if (e is IOException) emit(emptyPreferences() as T) else throw e
-    }
-    // Simpler: apply catch per-flow below via helper
+    // FIXED: Removed dead safe() helper - it had unsafe cast emptyPreferences() as T and was never used
     private val data: Flow<Preferences> = appContext.dataStore.data
         .catch { e ->
             if (e is IOException) emit(emptyPreferences()) else throw e
@@ -84,7 +81,7 @@ class AppPreferences(context: Context) {
             prefs[LAST_CHAPTER] = chapter
             prefs[LAST_VERSE] = verse
             prefs[LAST_SCROLL_INDEX] = scrollIndex.coerceAtLeast(0)
-            prefs[LAST_SCROLL_OFFSET] = scrollOffset.coerceAtLeast(0)
+            prefs[LAST_SCROLL_OFFSET] = offset.coerceAtLeast(0)
         }
     }
 
