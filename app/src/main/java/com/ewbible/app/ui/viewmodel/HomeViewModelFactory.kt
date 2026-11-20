@@ -17,11 +17,13 @@ class HomeViewModelFactory(
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(HomeViewModel::class.java)) {
-            return HomeViewModel(dao, preferences) as T
+            // FIXED: was HomeViewModel(dao, preferences) - no sync
+            // Now passes syncManager so notes + highlights sync
+            return HomeViewModel(dao, preferences, syncManager) as T
         }
         if (modelClass.isAssignableFrom(ChatViewModel::class.java)) {
-            // FIXED: must pass syncManager, else ChatViewModel runs local-only
-            // with syncManager = null and cloud sync never happens
+            // FIXED: was ChatViewModel(dao, geminiRepository) - syncManager = null
+            // Now passes syncManager so chats sync
             return ChatViewModel(dao, geminiRepository, syncManager) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
