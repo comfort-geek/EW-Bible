@@ -22,7 +22,6 @@ class GeminiRepository {
     private val apiKey: String
         get() = BuildConfig.GEMINI_API_KEY
 
-    // FIXED: 1.5 removed - too old. Only 2.5 -> 2.0
     private val models = listOf(
         "gemini-2.5-flash",
         "gemini-2.0-flash"
@@ -107,4 +106,29 @@ class GeminiRepository {
 
             Result.failure(lastError ?: Exception("Gemini failed - all models tried"))
         }
+
+    // FIXED: ChatViewModel calls askStreaming(ref = ...) - this was missing
+    // Simulates streaming by emitting the full answer in chunks
+    suspend fun askStreaming(
+        question: String,
+        context: String = "",
+        ref: String = "",
+        onChunk: (String) -> Unit
+    ): Result<String> {
+        val fullContext = if (ref.isNotBlank()) {
+            "Verse reference: $ref\n$context"
+        } else context
+
+        val result = askQuestion(question, fullContext)
+        result.onSuccess { text ->
+            // Emit in ~100 char chunks so UI types it out
+            var i = 0
+            while (i < text.length) {
+                val end = minOf(i + 100, text.length)
+                onChunk(text.substring(i, end))
+                i = end
+            }
+        }
+        return result
+    }
 }
