@@ -5,24 +5,37 @@ import android.app.Application
 import android.content.Context
 import android.os.Bundle
 
-class CrashActivityTracker(private val context: Context) : Application.ActivityLifecycleCallbacks {
+class CrashActivityTracker(context: Context) : Application.ActivityLifecycleCallbacks {
+
+    // ✅ FIXED: hold Application context only - never an Activity
+    private val appContext: Context = context.applicationContext
+
+    // ✅ FIXED: reporter can never crash the app it's watching
+    private fun safeBreadcrumb(msg: String) {
+        try {
+            CrashReporter.breadcrumb(appContext, msg)
+        } catch (_: Exception) {
+            // Never let crash-reporting cause a crash
+        }
+    }
+
     override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
-        CrashReporter.breadcrumb(context, "Activity CREATED: ${activity.localClassName}")
+        safeBreadcrumb("Activity CREATED: ${activity.localClassName}")
     }
     override fun onActivityStarted(activity: Activity) {
-        CrashReporter.breadcrumb(context, "Activity STARTED: ${activity.localClassName}")
+        safeBreadcrumb("Activity STARTED: ${activity.localClassName}")
     }
     override fun onActivityResumed(activity: Activity) {
-        CrashReporter.breadcrumb(context, "Activity RESUMED: ${activity.localClassName}")
+        safeBreadcrumb("Activity RESUMED: ${activity.localClassName}")
     }
     override fun onActivityPaused(activity: Activity) {
-        CrashReporter.breadcrumb(context, "Activity PAUSED: ${activity.localClassName}")
+        safeBreadcrumb("Activity PAUSED: ${activity.localClassName}")
     }
     override fun onActivityStopped(activity: Activity) {
-        CrashReporter.breadcrumb(context, "Activity STOPPED: ${activity.localClassName}")
+        safeBreadcrumb("Activity STOPPED: ${activity.localClassName}")
     }
     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
     override fun onActivityDestroyed(activity: Activity) {
-        CrashReporter.breadcrumb(context, "Activity DESTROYED: ${activity.localClassName}")
+        safeBreadcrumb("Activity DESTROYED: ${activity.localClassName}")
     }
 }
