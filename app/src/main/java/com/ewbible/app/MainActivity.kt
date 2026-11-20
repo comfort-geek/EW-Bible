@@ -30,7 +30,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        CrashReporter.init(this)
+        // ✅ FIXED: init() already ran in EwBibleApp - don't init twice
         CrashReporter.breadcrumb(this, "MainActivity.onCreate")
 
         // Read crash ONCE before setContent
@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
         val preferences = AppPreferences(applicationContext)
         val geminiRepository = GeminiRepository()
 
-        // ✅ FIXED: Create SyncManager ONCE here
+        // Create SyncManager ONCE here
         val syncManager = SyncManager()
 
         // DO NOT crash here if DB is broken - catch it and show error UI instead
@@ -77,12 +77,12 @@ class MainActivity : ComponentActivity() {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "Database failed to open.\n\n$dbError\n\nUninstall + reinstall, or send this screen via Share.",
+                                // ✅ FIXED: Share -> Copy
+                                text = "Database failed to open.\n\n$dbError\n\nTake a screenshot, or copy this from the crash report.",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
                     } else if (dao != null) {
-                        // ✅ FIXED: Pass syncManager - was missing before
                         val factory = HomeViewModelFactory(
                             dao = dao,
                             preferences = preferences,
@@ -101,7 +101,8 @@ class MainActivity : ComponentActivity() {
                     if (showCrashDialog) {
                         CrashReportDialog(
                             crashText = crashText,
-                            onShare = { shareCrashText(this@MainActivity, crashText) },
+                            // ✅ FIXED: onShare + shareCrashText() -> onCopy (copies full report)
+                            onCopy = { /* CrashReportDialog already copies to clipboard */ },
                             onClear = {
                                 CrashReporter.clear(this@MainActivity)
                                 CrashReporter.clearAll(this@MainActivity)
