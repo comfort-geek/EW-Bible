@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -11,8 +12,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -27,6 +30,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -34,7 +38,6 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,29 +56,24 @@ private fun Modifier.swipeChapter(
     return pointerInput(Unit) {
         var totalDx = 0f
         var totalDy = 0f
+        var fired = false
         detectHorizontalDragGestures(
             onHorizontalDrag = { change, delta ->
+                if (fired) return@detectHorizontalDragGestures
                 totalDx += delta
                 totalDy += abs(change.position.y - change.previousPosition.y)
-                if (abs(totalDx) < abs(totalDy) * 1.5f) {
-                    totalDx = 0f
-                    totalDy = 0f
-                }
-            },
-            onDragEnd = {
-                if (abs(totalDx) > 80 * density) {
+                // ✅ INSTANT: fire as soon as horizontal wins, don't wait for finger lift
+                if (abs(totalDx) > 90 * density && abs(totalDx) > abs(totalDy) * 1.5f) {
+                    fired = true
                     if (totalDx < 0) nextState() else prevState()
                 }
-                totalDx = 0f
-                totalDy = 0f
             },
-            onDragCancel = { totalDx = 0f; totalDy = 0f }
+            onDragEnd = { totalDx = 0f; totalDy = 0f; fired = false },
+            onDragCancel = { totalDx = 0f; totalDy = 0f; fired = false }
         )
     }
 }
 
-// MAX: Extracted VerseRow = Compose can SKIP it when its inputs didn't change.
-// Before: Row was inline in items() lambda = every highlight/font change recomposed ALL visible verses (Ps 119 = 20+ rows)
 @Composable
 private fun VerseRow(
     verse: VerseEntity,
@@ -88,7 +86,6 @@ private fun VerseRow(
     onVerseLongClick: (Int) -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
-    // MAX: background only allocated when highlighted, not Color.Transparent for 176 verses
     val rowModifier = if (highlight != Color.Transparent) {
         Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(8.dp)).background(highlight, RoundedCornerShape(8.dp))
     } else {
@@ -141,8 +138,6 @@ fun BibleContent(
     onPreviousChapter: () -> Unit = {},
     summaryLoading: Boolean = false,
 ) {
-    // MAX: This overload was doing BookCatalog.id(selectedBook) on every recomposition (map lookup + string compare)
-    // HomeScreen now calls the Id overload directly, this stays only for old callers
     val bookId = remember(selectedBook) { BookCatalog.id(selectedBook) }
     BibleContent(
         selectedBookId = bookId,
@@ -190,93 +185,107 @@ fun BibleContent(
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
     val currentKey = safeBookId to safeChapter
 
-    val versesToShow = versesList
-    val summaryToShow = summary?.takeIf { it.bookId == safeBookId && it.chapter == safeChapter }
-    val versesMatchKey = versesToShow.isEmpty() ||
-        (versesToShow.first().bookId == safeBookId && versesToShow.first().chapter == safeChapter)
+    // ✅ INSTANT: Keep last good chapter on screen until new one arrives
+    // Before: versesList = emptyList() on switch -> blank screen
+    // Now: cachedVerses stays until new verses match the new key
+    var cachedVerses by remember { mutableStateOf<List<VerseEntity>>(emptyList()) }
+    var cachedSummary by remember { mutableStateOf<SummaryEntity?>(null) }
+    var cachedKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+
+    val incomingMatchesKey = versesList.isEmpty() ||
+        (versesList.first().bookId == safeBookId && versesList.first().chapter == safeChapter)
+
+    // Only swap cache when incoming data is actually for THIS chapter
+    if (incomingMatchesKey && versesList.isNotEmpty()) {
+        if (cachedKey != currentKey) {
+            cachedVerses = versesList
+            cachedKey = currentKey
+        } else if (cachedVerses != versesList) {
+            cachedVerses = versesList
+        }
+    }
+    if (summary != null && summary.bookId == safeBookId && summary.chapter == safeChapter) {
+        if (cachedSummary != summary) cachedSummary = summary
+    }
+    // When key changes, keep old summary until new one arrives - don't blank it
+    // When key changes and summary is null, we still show cachedSummary (old chapter) - intentional
+
+    val versesToShow = cachedVerses
+    val summaryToShow = if (cachedKey == currentKey) cachedSummary else cachedSummary // keep old until new arrives
 
     var lastKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
-    LaunchedEffect(currentKey, versesMatchKey) {
-        if (versesMatchKey) {
-            if (lastKey != null && lastKey != currentKey) {
-                if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
-                    listState.scrollToItem(0)
-                }
+    LaunchedEffect(currentKey) {
+        // ✅ INSTANT: scroll to top immediately on key change, don't wait for versesMatchKey
+        if (lastKey != null && lastKey != currentKey) {
+            if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
+                listState.scrollToItem(0)
             }
-            lastKey = currentKey
         }
+        lastKey = currentKey
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
+            .navigationBarsPadding()
             .swipeChapter(
                 onNextChapter = onNextChapter,
                 onPreviousChapter = onPreviousChapter
             )
     ) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
-            contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
+        val isWide = maxWidth > 600.dp
+        val horizontalPadding = if (isWide) 32.dp else 18.dp
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .align(Alignment.TopCenter)
+                .widthIn(max = 720.dp)
         ) {
-            if (summaryToShow != null) {
-                item(key = "summary-${currentKey.first}-${currentKey.second}", contentType = "summary") {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                        colors = CardDefaults.cardColors(containerColor = panel),
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(summaryToShow.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(summaryToShow.whatHappened ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(summaryToShow.application ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize().padding(horizontal = horizontalPadding),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp)
+            ) {
+                // Show cached summary - never blank, never "Loading..."
+                if (summaryToShow != null && cachedKey == currentKey) {
+                    item(key = "summary-${currentKey.first}-${currentKey.second}", contentType = "summary") {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                            colors = CardDefaults.cardColors(containerColor = panel),
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(summaryToShow.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(summaryToShow.whatHappened ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(summaryToShow.application ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                            }
                         }
                     }
                 }
-            } else if (summaryLoading) {
-                item(key = "summary-loading-${currentKey.first}-${currentKey.second}", contentType = "summary") {
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-            }
 
-            if (versesToShow.isEmpty()) {
-                item(key = "empty-${currentKey.first}-${currentKey.second}", contentType = "empty") {
-                    Text(
-                        text = "Loading...",
-                        color = textColor.copy(alpha = 0.6f),
-                        fontSize = fontSizeSp,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                        textAlign = TextAlign.Center
+                items(
+                    items = versesToShow,
+                    key = { it.verse },
+                    contentType = { "verse" }
+                ) { verse ->
+                    VerseRow(
+                        verse = verse,
+                        highlight = currentHighlightMap[verse.verse] ?: Color.Transparent,
+                        fontSizeSp = fontSizeSp,
+                        lineHeight = lineHeight,
+                        gold = gold,
+                        textColor = textColor,
+                        onVerseClick = onVerseClick,
+                        onVerseLongClick = onVerseLongClick
                     )
                 }
-            }
-
-            // MAX: items() + key = verse.verse (Int), not String.
-            // Before: itemsIndexed + key = "${book}-${chapter}-${verse}" = new String for every verse on every recomposition
-            // List is always 1 chapter, so verse number alone is unique.
-            // MAX: items() instead of itemsIndexed = no index param, less allocation
-            items(
-                items = versesToShow,
-                key = { it.verse },
-                contentType = { "verse" }
-            ) { verse ->
-                VerseRow(
-                    verse = verse,
-                    highlight = currentHighlightMap[verse.verse] ?: Color.Transparent,
-                    fontSizeSp = fontSizeSp,
-                    lineHeight = lineHeight,
-                    gold = gold,
-                    textColor = textColor,
-                    onVerseClick = onVerseClick,
-                    onVerseLongClick = onVerseLongClick
-                )
             }
         }
     }
