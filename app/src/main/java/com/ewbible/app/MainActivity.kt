@@ -15,8 +15,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.ewbible.app.data.ai.GeminiRepository
 import com.ewbible.app.data.database.AppDatabase
-import com.ewbible.app.data.database.GeminiRepository
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.ui.screens.HomeScreen
 import com.ewbible.app.ui.theme.EWBibleTheme
