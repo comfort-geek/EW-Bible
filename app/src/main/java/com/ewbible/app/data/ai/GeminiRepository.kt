@@ -26,18 +26,11 @@ class GeminiRepository {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    // --- YOUR KEY ---
-    // On GitHub Actions, key comes from GitHub Secret -> BuildConfig.GEMINI_API_KEY
-    // This FALLBACK is ONLY for when you run on your own phone / Android Studio
-    // and you don't have local.properties.
-    // If your repo is PUBLIC, DO NOT commit a real key here. Use "PASTE..." and
-    // rely on GitHub Secret. If your repo is PRIVATE, you can paste it here for testing.
     private val FALLBACK_API_KEY = "PASTE_YOUR_GEMINI_API_KEY_HERE"
 
     private val apiKey: String
         get() {
             val fromBuildConfig = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
-            // Log only length, NEVER log the key itself
             Log.d("Gemini", "Key check - BuildConfig length: ${fromBuildConfig.length}, Fallback length: ${FALLBACK_API_KEY.length}")
             return if (fromBuildConfig.isNotBlank() && fromBuildConfig != "YOUR_API_KEY_HERE") {
                 fromBuildConfig
@@ -113,9 +106,10 @@ class GeminiRepository {
                 )
             }
 
+            // FIXED: Don't add "Bible context:" again - askStreaming already added
+            // "Bible context (NKJV, reading ...):" above. Was sending header twice.
             val prompt = buildString {
                 if (context.isNotBlank()) {
-                    append("Bible context:\n")
                     append(context)
                     append("\n\n")
                 }
@@ -153,7 +147,6 @@ class GeminiRepository {
                         .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
                         .build()
 
-                    // FIXED: response.use { } - closes connection, OkHttp can reuse it
                     val resultForModel: Result<String>? = client.newCall(request).execute().use { response ->
                         val responseBody = response.body?.string() ?: ""
                         Log.d("Gemini", "Model $model -> HTTP ${response.code}")
@@ -164,14 +157,9 @@ class GeminiRepository {
                             }.getOrNull() ?: "HTTP ${response.code}: $responseBody"
                             Log.e("Gemini", "Model $model failed: $errMsg")
 
-                            // FIXED: Try next model on retryable errors, not just 404
-                            // 404 = model not found -> try next
-                            // 429 = quota exceeded -> try next (different quota)
-                            // 503 = overloaded -> try next (different server)
-                            // 400 / 403 = bad key / bad request -> trying next model won't help, fail fast
                             if (response.code == 404 || response.code == 429 || response.code == 503) {
                                 lastError = Exception("Model $model failed (${response.code}), trying next...")
-                                null // signal: continue to next model
+                                null
                             } else {
                                 Result.failure(Exception("Gemini Error ($model): $errMsg"))
                             }
@@ -190,23 +178,19 @@ class GeminiRepository {
                                 Result.success(text.trim())
                             } else {
                                 lastError = Exception("Empty response from $model")
-                                null // signal: continue to next model
+                                                           null
                             }
                         }
                     }
-
-                    // If we got a real Result (success or fatal error), return it
                     if (resultForModel != null) {
                         return@withContext resultForModel
                     }
-                    // Else null = retryable error / empty, loop continues to next model
                 } catch (e: Exception) {
                     Log.e("Gemini", "Model $model exception", e)
                     lastError = e
                     continue
                 }
             }
-
             Result.failure(lastError ?: Exception("Gemini failed - all models tried"))
         }
-}
+}   
