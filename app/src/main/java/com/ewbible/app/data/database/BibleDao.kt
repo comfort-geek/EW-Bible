@@ -57,6 +57,7 @@ interface BibleDao {
 
     // FIX: Added ESCAPE '\' - caller must escape % _ \ before passing query
     // e.g. query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    // FIX: COLLATE on column, not after ESCAPE - always compiles in Room/SQLite
     @Query("""
         SELECT v.book_id AS bookId,
                b.name AS bookName,
@@ -65,7 +66,7 @@ interface BibleDao {
                v.text
         FROM verses v
         INNER JOIN books b ON b.id = v.book_id
-        WHERE v.text LIKE '%' || :query || '%' ESCAPE '\' COLLATE NOCASE
+        WHERE v.text COLLATE NOCASE LIKE '%' || :query || '%' ESCAPE '\'
         LIMIT 100
     """)
     suspend fun searchVerses(query: String): List<VerseSearchResult>
