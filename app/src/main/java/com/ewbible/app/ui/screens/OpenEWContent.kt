@@ -51,14 +51,11 @@ private val TAG_REGEX = Regex("(?i)</?(b|strong|i|em)>")
 private val BOLD_REGEX = Regex("(?i)font-weight\\s*:\\s*(bold|[700-900])\\s*;?")
 private val ITALIC_REGEX = Regex("(?i)font-style\\s*:\\s*italic\\s*;?")
 
-// MAX: Cache parsed Spannable - before: re-parsed 100KB HTML on EVERY recomposition / tab switch
-// Key = book-chapter + hash of html. 10 entries = ~2MB max, avoids re-parse when you go Bible -> Open EW -> Bible -> Open EW
 private val parsedCache = LruCache<String, SpannableString>(10)
 
 private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
     if (html.isBlank()) return ""
     var t = html.trim()
-    // MAX: indexOf, no Regex compile per chapter for book title
     if (t.contains("<body", ignoreCase = true)) {
         val bodyStart = t.indexOf('>', t.indexOf("<body", ignoreCase = true))
         if (bodyStart != -1) t = t.substring(bodyStart + 1)
@@ -66,15 +63,12 @@ private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
         if (bodyEnd != -1) t = t.substring(0, bodyEnd)
     }
     t = H1_REGEX.replaceFirst(t, "")
-    // MAX: No Regex("...${Regex.escape(bookName)}...") compiled per chapter.
-    // Manual: find <p>bookName chapter</p> at start
     val titleTag = "<p"
     val pStart = t.indexOf(titleTag, ignoreCase = true)
     if (pStart != -1 && pStart < 200) {
         val pEnd = t.indexOf("</p>", pStart, ignoreCase = true)
         if (pEnd != -1) {
             val inside = t.substring(pStart, pEnd)
-            // inside = <p>Genesis 1</p> or <p class=..>Genesis 1</p>
             val textOnly = inside.substringAfter('>').trim()
             if (textOnly.equals("$bookName $chapter", ignoreCase = true)) {
                 t = t.substring(pEnd + 4)
@@ -90,8 +84,6 @@ private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
 
 private fun linkifyForHtml(html: String): String {
     if (html.isBlank()) return html
-    // MAX: Don't run VERSE_REGEX over <tags>. Before: it could linkify inside <a href="..."> or <span style="...">
-    // Now: split by tags, only linkify text parts
     if (!html.contains('<')) return VERSE_REGEX.replace(html) { linkifyMatch(it) }
     val out = StringBuilder(html.length + 1024)
     var i = 0
@@ -146,7 +138,6 @@ fun OpenEWContent(
     val density = LocalDensity.current
     val effectiveFontSize = fontSize.coerceAtLeast(18f)
 
-    // MAX: Key = Int hash, NOT whole 100KB string. Before: produceState compared 100KB string on every recomposition
     val htmlHash = commentaryHtml.hashCode()
     val cacheKey = "$bookName-$chapter-$htmlHash"
 
@@ -159,7 +150,6 @@ fun OpenEWContent(
                     linkifyForHtml(cleanForHtml(commentaryHtml, bookName, chapter)),
                     HtmlCompat.FROM_HTML_MODE_LEGACY, null, null
                 )
-                // MAX: No SpannableString(parsed) copy. parsed is already Spannable, set spans in place
                 val spannable = parsed as? Spannable ?: SpannableString(parsed)
                 spannable.getSpans(0, spannable.length, URLSpan::class.java).forEach { span ->
                     spannable.setSpan(
@@ -175,7 +165,8 @@ fun OpenEWContent(
         }
     }
 
-    if (hasError && goldSpanned == null) {
+    // FIXED: was if (hasError && goldSpanned == null) - error HTML parses, so Retry never showed
+    if (hasError) {
         Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
             Text(
                 "Could not load commentary. Please try again.",
