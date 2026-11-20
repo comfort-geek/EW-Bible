@@ -23,6 +23,8 @@ data class VerseSearchResult(
 @Dao
 interface BibleDao {
 
+    // --- BOOKS / VERSES ---
+
     @Query("SELECT * FROM books ORDER BY id")
     fun getAllBooks(): Flow<List<BookEntity>>
 
@@ -98,11 +100,16 @@ interface BibleDao {
         endVerse: Int
     ): List<VerseEntity>
 
+    // --- HIGHLIGHTS ---
+
     @Query("SELECT * FROM highlights WHERE book_id = :bookId AND chapter = :chapter")
     fun getHighlights(bookId: Int, chapter: Int): Flow<List<HighlightEntity>>
 
     @Query("SELECT * FROM highlights ORDER BY book_id, chapter, verse")
     fun getAllHighlights(): Flow<List<HighlightEntity>>
+
+    @Query("SELECT * FROM highlights ORDER BY book_id, chapter, verse")
+    suspend fun getAllHighlightsSync(): List<HighlightEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveHighlight(highlight: HighlightEntity)
@@ -114,6 +121,8 @@ interface BibleDao {
           AND verse = :verse
     """)
     suspend fun deleteHighlight(bookId: Int, chapter: Int, verse: Int)
+
+    // --- NOTES ---
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveNote(note: NoteEntity)
@@ -140,6 +149,20 @@ interface BibleDao {
     @Query("SELECT * FROM notes ORDER BY timestamp DESC")
     fun getAllNotes(): Flow<List<NoteEntity>>
 
+    @Query("SELECT * FROM notes ORDER BY timestamp DESC")
+    suspend fun getAllNotesSync(): List<NoteEntity>
+
+    @Query("DELETE FROM notes WHERE id = :noteId")
+    suspend fun deleteNote(noteId: Int)
+
+    @Query("""
+        DELETE FROM notes
+        WHERE book_id = :bookId
+          AND chapter = :chapter
+          AND verse = :verse
+    """)
+    suspend fun deleteAllNotesForVerse(bookId: Int, chapter: Int, verse: Int)
+
     // --- CHAT - FIXED: was missing, AppDatabase has chats/messages tables but no DAO methods ---
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -150,6 +173,12 @@ interface BibleDao {
 
     @Query("SELECT * FROM chats ORDER BY createdAt DESC")
     suspend fun getAllChatsSync(): List<ChatEntity>
+
+    @Query("SELECT * FROM chats WHERE id = :chatId LIMIT 1")
+    suspend fun getChatById(chatId: Long): ChatEntity?
+
+    @Update
+    suspend fun updateChat(chat: ChatEntity)
 
     @Query("DELETE FROM chats WHERE id = :chatId")
     suspend fun deleteChat(chatId: Long)
@@ -168,4 +197,9 @@ interface BibleDao {
 
     @Query("SELECT COUNT(*) FROM messages WHERE chatId = :chatId AND isUser = 1 AND date(timestamp / 1000, 'unixepoch') = date('now')")
     suspend fun getTodayUserMessageCount(chatId: Long): Int
+
+    // NEW: Global daily count - 1 query, no N+1 sum across chats.
+    // timestamp is in ms (System.currentTimeMillis()), so timestamp / 1000 = unix seconds.
+    @Query("SELECT COUNT(*) FROM messages WHERE isUser = 1 AND date(timestamp / 1000, 'unixepoch') = date('now')")
+    suspend fun getTodayUserMessageCountGlobal(): Int
 }
