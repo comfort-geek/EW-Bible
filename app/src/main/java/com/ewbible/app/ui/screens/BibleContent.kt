@@ -233,10 +233,10 @@ fun BibleContent(
                             Text(summaryToShow.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(summaryToShow.whatHappened, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                            Text(summaryToShow.whatHappened ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(summaryToShow.application, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                            Text(summaryToShow.application ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
                         }
                     }
                 }
