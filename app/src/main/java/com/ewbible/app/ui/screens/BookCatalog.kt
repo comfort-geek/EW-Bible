@@ -132,33 +132,23 @@ object BookCatalog {
             put(n, id)
             put(n.replace('-', ' '), id)
             put(n.replace(' ', '-'), id)
+            // no-space: "1Samuel" -> 9, "1Sam" -> 9, "1Cor" -> 46, "1Jn" -> 62
+            if (n.isNotEmpty() && n[0].isDigit()) {
+                put(n.replace(" ", ""), id)
+                put(n.replace("-", ""), id)
+            }
         }
         for (info in all) {
             putNormalized(info.name, info.id)
             putNormalized(info.key, info.id)
         }
         for ((k, v) in aliases) putNormalized(k, v)
-        // ✅ FIXED: no-space for BOTH full names AND aliases
-        // "1Samuel" -> 9, "1Sam" -> 9, "1Cor" -> 46, "1Jn" -> 62, "2Thess" -> 53
-        for (info in all) {
-            if (info.name[0].isDigit()) {
-                putNormalized(info.name.replace(" ", ""), info.id)
-            }
-        }
-        for ((k, v) in aliases) {
-            if (k[0].isDigit()) {
-                putNormalized(k.replace(" ", ""), v)
-                putNormalized(k.replace("-", ""), v)
-            }
-        }
-        // ✅ FIXED: no-space for display aliases too - "1Chron" / "1Thess" from aliasDisplayNames
+        // display aliases: "1 Chron", "1 Thess", "Psalm" etc.
         for (name in aliasDisplayNames) {
-            val idForAlias = aliases.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
+            val id = aliases[normalize(name)]
                 ?: all.firstOrNull { it.name.equals(name, ignoreCase = true) }?.id
                 ?: continue
-            if (name[0].isDigit()) {
-                putNormalized(name.replace(" ", ""), idForAlias)
-            }
+            putNormalized(name, id)
         }
     }
 
