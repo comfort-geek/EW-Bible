@@ -153,38 +153,53 @@ class GeminiRepository {
                         .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
                         .build()
 
-                    val response = client.newCall(request).execute()
-                    val responseBody = response.body?.string() ?: ""
-                    Log.d("Gemini", "Model $model -> HTTP ${response.code}")
+                    // FIXED: response.use { } - closes connection, OkHttp can reuse it
+                    val resultForModel: Result<String>? = client.newCall(request).execute().use { response ->
+                        val responseBody = response.body?.string() ?: ""
+                        Log.d("Gemini", "Model $model -> HTTP ${response.code}")
 
-                    if (!response.isSuccessful) {
-                        val errMsg = runCatching {
-                            JSONObject(responseBody).getJSONObject("error").getString("message")
-                        }.getOrNull() ?: "HTTP ${response.code}: $responseBody"
-                        Log.e("Gemini", "Model $model failed: $errMsg")
-                        if (response.code == 404) {
-                            lastError = Exception("Model $model not found (404), trying next...")
-                            continue
+                        if (!response.isSuccessful) {
+                            val errMsg = runCatching {
+                                JSONObject(responseBody).getJSONObject("error").getString("message")
+                            }.getOrNull() ?: "HTTP ${response.code}: $responseBody"
+                            Log.e("Gemini", "Model $model failed: $errMsg")
+
+                            // FIXED: Try next model on retryable errors, not just 404
+                            // 404 = model not found -> try next
+                            // 429 = quota exceeded -> try next (different quota)
+                            // 503 = overloaded -> try next (different server)
+                            // 400 / 403 = bad key / bad request -> trying next model won't help, fail fast
+                            if (response.code == 404 || response.code == 429 || response.code == 503) {
+                                lastError = Exception("Model $model failed (${response.code}), trying next...")
+                                null // signal: continue to next model
+                            } else {
+                                Result.failure(Exception("Gemini Error ($model): $errMsg"))
+                            }
+                        } else {
+                            val text = runCatching {
+                                JSONObject(responseBody)
+                                    .getJSONArray("candidates")
+                                    .getJSONObject(0)
+                                    .getJSONObject("content")
+                                    .getJSONArray("parts")
+                                    .getJSONObject(0)
+                                    .getString("text")
+                            }.getOrNull()
+
+                            if (!text.isNullOrBlank()) {
+                                Result.success(text.trim())
+                            } else {
+                                lastError = Exception("Empty response from $model")
+                                null // signal: continue to next model
+                            }
                         }
-                        return@withContext Result.failure(Exception("Gemini Error ($model): $errMsg"))
                     }
 
-                    val text = runCatching {
-                        JSONObject(responseBody)
-                            .getJSONArray("candidates")
-                            .getJSONObject(0)
-                            .getJSONObject("content")
-                            .getJSONArray("parts")
-                            .getJSONObject(0)
-                            .getString("text")
-                    }.getOrNull()
-
-                    if (!text.isNullOrBlank()) {
-                        return@withContext Result.success(text.trim())
-                    } else {
-                        lastError = Exception("Empty response from $model")
-                        continue
+                    // If we got a real Result (success or fatal error), return it
+                    if (resultForModel != null) {
+                        return@withContext resultForModel
                     }
+                    // Else null = retryable error / empty, loop continues to next model
                 } catch (e: Exception) {
                     Log.e("Gemini", "Model $model exception", e)
                     lastError = e
