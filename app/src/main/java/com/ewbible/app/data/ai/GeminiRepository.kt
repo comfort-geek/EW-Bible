@@ -1,10 +1,13 @@
 package com.ewbible.app.data.ai
 
 import android.graphics.Bitmap
+import android.util.Base64
+import android.util.Log
 import com.ewbible.app.BuildConfig
 import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -15,7 +18,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
-import android.util.Base64
 
 class GeminiRepository {
 
@@ -58,23 +60,43 @@ class GeminiRepository {
                 append("\n")
             }
         }
-        // Reuse askQuestion, then emit in chunks so ChatViewModel streaming works
+
+        // FIX: Don't use getOrThrow() here - it killed the Flow silently
+        // and UI showed blank + Daily stayed 0/50
         val result = askQuestion(question, context, image)
+
+        if (result.isFailure) {
+            val msg = result.exceptionOrNull()?.message ?: "Gemini failed - unknown error"
+            Log.e("GeminiRepository", "askStreaming failed: $msg")
+            // Emit error as text so UI shows it instead of blank
+            emit("⚠️ $msg")
+            return@flow
+        }
+
         val text = result.getOrThrow()
-        // Emit in ~100 char chunks
+        if (text.isBlank()) {
+            emit("⚠️ Gemini returned an empty response. Try again.")
+            return@flow
+        }
+
+        // Emit in ~100 char chunks so ChatViewModel streaming works
         var i = 0
         while (i < text.length) {
             val end = minOf(i + 100, text.length)
             emit(text.substring(i, end))
             i = end
         }
+    }.catch { e ->
+        // Last safety net - never let Flow die silently
+        Log.e("GeminiRepository", "Flow crashed", e)
+        emit("⚠️ Error: ${e.message ?: "Unknown error"}")
     }
 
     suspend fun askQuestion(question: String, context: String = "", image: Bitmap? = null): Result<String> =
         withContext(Dispatchers.IO) {
-            if (apiKey.isBlank()) {
+            if (apiKey.isBlank() || apiKey == "YOUR_API_KEY_HERE" || apiKey == "null") {
                 return@withContext Result.failure(
-                    Exception("Gemini API key is missing. Add GEMINI_API_KEY in local.properties")
+                    Exception("Gemini API key is missing. Add GEMINI_API_KEY in local.properties and rebuild. See README on GitHub.")
                 )
             }
 
@@ -122,6 +144,7 @@ class GeminiRepository {
                     val responseBody = response.body?.string() ?: ""
 
                     if (!response.isSuccessful) {
+                        Log.e("GeminiRepository", "Model $model HTTP ${response.code}: $responseBody")
                         if (response.code == 404) {
                             lastError = Exception("Model $model not found (404), trying next...")
                             continue
@@ -129,7 +152,13 @@ class GeminiRepository {
                         val errMsg = runCatching {
                             JSONObject(responseBody).getJSONObject("error").getString("message")
                         }.getOrNull() ?: "HTTP ${response.code}: $responseBody"
-                        return@withContext Result.failure(Exception(errMsg))
+                        // Don't return immediately on 400/403 for first model if we have fallback,
+                        // but for API key errors, fail fast - trying 2nd model won't help
+                        if (response.code == 400 || response.code == 403) {
+                            return@withContext Result.failure(Exception("Gemini error (${response.code}): $errMsg"))
+                        }
+                        lastError = Exception(errMsg)
+                        continue
                     }
 
                     val text = runCatching {
@@ -145,10 +174,11 @@ class GeminiRepository {
                     if (!text.isNullOrBlank()) {
                         return@withContext Result.success(text.trim())
                     } else {
-                        lastError = Exception("Empty response from $model")
+                        lastError = Exception("Empty response from $model - it may have been blocked. Try rephrasing.")
                         continue
                     }
                 } catch (e: Exception) {
+                    Log.e("GeminiRepository", "Model $model exception", e)
                     lastError = e
                     continue
                 }
