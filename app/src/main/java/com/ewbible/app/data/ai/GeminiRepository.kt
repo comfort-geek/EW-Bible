@@ -26,17 +26,19 @@ class GeminiRepository {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    // --- PUT YOUR KEY HERE ---
-    // Because you are on GitHub, local.properties is NOT on GitHub.
-    // So BuildConfig.GEMINI_API_KEY will be EMPTY.
-    // Paste your key from Google AI Studio here for testing.
-    // WARNING: If your GitHub repo is PUBLIC, do NOT commit the real key.
-    // Use a private repo or GitHub Secrets for release.
+    // --- YOUR KEY ---
+    // On GitHub Actions, key comes from GitHub Secret -> BuildConfig.GEMINI_API_KEY
+    // This FALLBACK is ONLY for when you run on your own phone / Android Studio
+    // and you don't have local.properties.
+    // If your repo is PUBLIC, DO NOT commit a real key here. Use "PASTE..." and
+    // rely on GitHub Secret. If your repo is PRIVATE, you can paste it here for testing.
     private val FALLBACK_API_KEY = "PASTE_YOUR_GEMINI_API_KEY_HERE"
 
     private val apiKey: String
         get() {
             val fromBuildConfig = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
+            // Log only length, NEVER log the key itself
+            Log.d("Gemini", "Key check - BuildConfig length: ${fromBuildConfig.length}, Fallback length: ${FALLBACK_API_KEY.length}")
             return if (fromBuildConfig.isNotBlank() && fromBuildConfig != "YOUR_API_KEY_HERE") {
                 fromBuildConfig
             } else {
@@ -46,7 +48,8 @@ class GeminiRepository {
 
     private val models = listOf(
         "gemini-2.5-flash",
-        "gemini-2.0-flash"
+        "gemini-2.0-flash",
+        "gemini-1.5-flash"
     )
 
     fun askStreaming(
@@ -77,8 +80,6 @@ class GeminiRepository {
 
             val result = askQuestion(question, context, image)
 
-            // FIX: Don't use getOrThrow() here - it crashes the Flow and UI shows blank.
-            // Emit the error as text so you can SEE it.
             if (result.isFailure) {
                 val msg = result.exceptionOrNull()?.message ?: "Unknown Gemini error"
                 Log.e("Gemini", "askStreaming failed: $msg")
@@ -108,7 +109,7 @@ class GeminiRepository {
         withContext(Dispatchers.IO) {
             if (apiKey.isBlank() || apiKey == "PASTE_YOUR_GEMINI_API_KEY_HERE") {
                 return@withContext Result.failure(
-                    Exception("Gemini API key is missing. You are on GitHub, so local.properties is not there. Paste your key in FALLBACK_API_KEY in GeminiRepository.kt")
+                    Exception("Gemini API key is missing. GitHub Secret did not reach BuildConfig AND FALLBACK is still placeholder. Check: 1) Secret name = GEMINI_API_KEY 2) Re-run workflow 3) Or paste real key in FALLBACK_API_KEY for testing")
                 )
             }
 
