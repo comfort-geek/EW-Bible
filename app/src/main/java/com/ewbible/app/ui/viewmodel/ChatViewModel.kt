@@ -9,6 +9,8 @@ import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.database.ChatEntity
 import com.ewbible.app.data.database.CommentaryHelper
 import com.ewbible.app.data.database.MessageEntity
+import com.ewbible.app.data.sync.CloudMessage
+import com.ewbible.app.data.sync.SyncManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +22,7 @@ data class ChatState(
     val chats: List<ChatEntity> = emptyList(),
     val messages: List<MessageEntity> = emptyList(),
     val currentChatId: Long? = null,
+    val currentChatType: String = "general",
     val isLoading: Boolean = false,
     val streamingText: String = "",
     val dailyCount: Int = 0,
@@ -28,47 +31,115 @@ data class ChatState(
 
 class ChatViewModel(
     private val bibleDao: BibleDao,
-    private val geminiRepository: GeminiRepository
+    private val geminiRepository: GeminiRepository,
+    private val syncManager: SyncManager? = null
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(ChatState())
-    val state: StateFlow<ChatState> = _state.asStateFlow()
-
-    // MAX: Pre-compile once. Before: Regex compiled on EVERY question.
     private val VERSE_REGEX = Regex("""([1-3]?\s?[A-Za-z]+)\s+(\d+):(\d+)""")
 
-    // MAX: Cache bible context. Same chapter asked twice = 0 DB calls.
-    // Key = question-verse OR currentRef
     private val contextCache = object : LinkedHashMap<String, String>(20, 0.75f, true) {
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 20
     }
 
+    // Full type (general/bible/prayer/study/life...) lives in cloud + here.
+    // Local ChatEntity only has ref, so we keep type in memory and refill from cloud on load.
+    private val chatTypes = mutableMapOf<Long, String>()
+    private val chatContexts = mutableMapOf<Long, String>()
+
     private var sendJob: Job? = null
     private var lastStreamEmit = 0L
+
+    private val _state = MutableStateFlow(ChatState())
+    val state: StateFlow<ChatState> = _state.asStateFlow()
+
+    private suspend fun getGlobalTodayCount(): Int {
+        // FIX: sum across ALL chats - old code counted only current chat,
+        // so user could bypass 50/day by creating a new chat.
+        val chats = runCatching { bibleDao.getAllChatsSync() }.getOrDefault(emptyList())
+        var total = 0
+        for (c in chats) {
+            total += runCatching { bibleDao.getTodayUserMessageCount(c.id) }.getOrDefault(0)
+        }
+        return total
+    }
 
     fun loadChats() {
         viewModelScope.launch {
             val chats = bibleDao.getAllChatsSync()
             _state.update { it.copy(chats = chats) }
+            // FIX: refill type map from cloud so type survives restart
+            // (local DB has no type column, cloud does)
+            val cloud = syncManager?.getChatList()?.getOrNull() ?: return@launch
+            for (c in cloud) {
+                val localId = c.chatId.toLongOrNull() ?: continue
+                chatTypes[localId] = c.type.ifBlank { "general" }
+                chatContexts[localId] = c.context.ifBlank { c.bibleRef }
+            }
+            // Refresh current chat type if we're inside a chat
+            _state.value.currentChatId?.let { id ->
+                _state.update { it.copy(currentChatType = chatTypes[id] ?: it.currentChatType) }
+            }
         }
     }
 
-    fun startNewChat(currentRef: String) {
+    // type: "general", "bible", "prayer", "study", "life", "devotional", etc.
+    // context: e.g. "John 3:16", "Prayer for family", "" if none
+    fun startNewChat(title: String = "New Chat", type: String = "general", context: String = "", currentRef: String = "") {
         viewModelScope.launch {
-            val chat = ChatEntity(title = "New Chat", ref = currentRef)
+            // Local: only title + ref exist. Bible chats store ref, general chats store "".
+            val ref = if (type == "bible") context.ifBlank { currentRef } else ""
+            val chat = ChatEntity(title = title, ref = ref)
             val id = bibleDao.insertChat(chat)
+            chatTypes[id] = type
+            chatContexts[id] = context.ifBlank { ref }
             _state.update {
-                it.copy(currentChatId = id, messages = emptyList(), streamingText = "", isLoading = false)
+                it.copy(currentChatId = id, currentChatType = type, messages = emptyList(), streamingText = "", isLoading = false)
             }
             _state.update { it.copy(chats = listOf(chat.copy(id = id)) + it.chats) }
+            // Cloud: full type + context - uses YOUR exact signature
+            syncManager?.createChat(
+                chatId = id.toString(),
+                title = title,
+                type = type,
+                context = context.ifBlank { ref },
+                bibleRef = if (type == "bible") ref else "",
+                translation = ""
+            )
         }
+    }
+
+    // Backwards compat: old call startNewChat("Genesis 1") = bible chat
+    fun startNewChat(currentRef: String) {
+        val type = if (currentRef.isBlank()) "general" else "bible"
+        startNewChat(title = "New Chat", type = type, context = currentRef, currentRef = currentRef)
     }
 
     fun openChat(chatId: Long) {
         viewModelScope.launch {
             val messages = bibleDao.getMessagesForChatSync(chatId)
-            val todayCount = runCatching { bibleDao.getTodayUserMessageCount(chatId) }.getOrDefault(0)
-            _state.update { it.copy(currentChatId = chatId, messages = messages, streamingText = "", dailyCount = todayCount) }
+            val todayCount = getGlobalTodayCount()
+            // Type: memory/cloud first, fallback to ref ("" = general, else bible)
+            val local = _state.value.chats.find { it.id == chatId }
+            val type = chatTypes[chatId]
+                ?: local?.let { if (it.ref.isBlank()) "general" else "bible" }
+                ?: "general"
+            _state.update {
+                it.copy(currentChatId = chatId, currentChatType = type, messages = messages, streamingText = "", dailyCount = todayCount)
+            }
+            // If local has no messages but cloud does (new device), pull from cloud
+            if (messages.isEmpty()) {
+                val cloudMsgs = syncManager?.getMessages(chatId.toString())?.getOrNull() ?: return@launch
+                if (cloudMsgs.isNotEmpty()) {
+                    val restored = cloudMsgs.map { cm ->
+                        MessageEntity(chatId = chatId, text = cm.text, isUser = cm.role == "user", timestamp = cm.timestamp)
+                    }
+                    // Save to local so next open is instant
+                    for (m in restored) {
+                        val newId = bibleDao.insertMessage(m)
+                        _state.update { it.copy(messages = it.messages + m.copy(id = newId)) }
+                    }
+                }
+            }
         }
     }
 
@@ -76,19 +147,22 @@ class ChatViewModel(
         viewModelScope.launch {
             bibleDao.deleteMessagesForChat(chatId)
             bibleDao.deleteChat(chatId)
+            chatTypes.remove(chatId)
+            chatContexts.remove(chatId)
             _state.update {
                 if (it.currentChatId == chatId) it.copy(currentChatId = null, messages = emptyList(), chats = it.chats.filterNot { c -> c.id == chatId })
                 else it.copy(chats = it.chats.filterNot { c -> c.id == chatId })
             }
+            // Cloud: uses YOUR exact signature
+            syncManager?.deleteChat(chatId.toString())
         }
     }
 
     fun send(question: String, currentRef: String, image: Bitmap?, translation: String = "NKJV") {
         val chatId = _state.value.currentChatId ?: return
         if (_state.value.isLoading) return
-
         viewModelScope.launch {
-            val todayCount = runCatching { bibleDao.getTodayUserMessageCount(chatId) }.getOrDefault(_state.value.dailyCount)
+            val todayCount = getGlobalTodayCount()
             if (todayCount >= 50) {
                 _state.update { it.copy(error = "Daily limit reached (50/50)", dailyCount = todayCount) }
                 return@launch
@@ -100,18 +174,43 @@ class ChatViewModel(
     private fun doSend(chatId: Long, question: String, currentRef: String, image: Bitmap?, translation: String, todayCount: Int) {
         sendJob?.cancel()
         sendJob = viewModelScope.launch {
+            // FIX: history BEFORE adding userMsg - avoids sending question twice
+            val historySnapshot = _state.value.messages
+            val chatType = _state.value.currentChatType
+            val chatContext = chatContexts[chatId] ?: currentRef
+
+            // Local: only chatId/text/isUser/timestamp. Image NOT stored - MessageEntity has no image field.
             val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
             val userId = bibleDao.insertMessage(userMsg)
             _state.update {
                 it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
             }
+            // Cloud: uses YOUR exact CloudMessage fields
+            syncManager?.uploadMessage(
+                chatId.toString(),
+                CloudMessage(
+                    messageId = userId.toString(),
+                    chatId = chatId.toString(),
+                    role = "user",
+                    type = if (image != null) "image" else "text",
+                    text = question,
+                    context = chatContext,
+                    bibleRef = if (chatType == "bible") chatContext else "",
+                    imageUrl = "",
+                    timestamp = userMsg.timestamp
+                )
+            )
 
-            val bibleContext = buildBibleContext(question, currentRef)
+            // FIX: general chat = NO bible context. Only bible/study/prayer get it.
+            val bibleContext = if (chatType == "bible" || chatType == "study" || chatType == "prayer") {
+                buildBibleContext(question, currentRef)
+            } else {
+                ""
+            }
 
             val fullAnswer = StringBuilder(2000)
             lastStreamEmit = System.currentTimeMillis()
             try {
-                val historySnapshot = _state.value.messages
                 geminiRepository.askStreaming(
                     question = question,
                     currentRef = currentRef,
@@ -128,14 +227,13 @@ class ChatViewModel(
                     }
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(isLoading = false, error = "Failed: ${e.message}") }
+                _state.update { it.copy(isLoading = false, streamingText = "", error = "Failed: ${e.message}") }
                 return@launch
             }
 
             val answerText = fullAnswer.toString().ifBlank { "Sorry, I couldn't answer that." }
             val aiMsg = MessageEntity(chatId = chatId, text = answerText, isUser = false)
             val aiId = bibleDao.insertMessage(aiMsg)
-
             _state.update {
                 it.copy(
                     messages = it.messages + aiMsg.copy(id = aiId),
@@ -144,6 +242,21 @@ class ChatViewModel(
                     dailyCount = todayCount + 1
                 )
             }
+            // Cloud: AI message
+            syncManager?.uploadMessage(
+                chatId.toString(),
+                CloudMessage(
+                    messageId = aiId.toString(),
+                    chatId = chatId.toString(),
+                    role = "ai",
+                    type = "text",
+                    text = answerText,
+                    context = chatContext,
+                    bibleRef = if (chatType == "bible") chatContext else "",
+                    imageUrl = "",
+                    timestamp = aiMsg.timestamp
+                )
+            )
         }
     }
 
@@ -156,7 +269,6 @@ class ChatViewModel(
                 val verse = match.groupValues[3].toIntOrNull() ?: 1
                 val cacheKey = "v:$bookName-$chapter:$verse"
                 contextCache[cacheKey]?.let { return it }
-
                 val bookId = BookCatalog.id(bookName)
                 val text = bibleDao.getVerse(bookId, chapter, verse)?.text ?: ""
                 val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
@@ -164,22 +276,17 @@ class ChatViewModel(
                 contextCache[cacheKey] = result
                 return result
             }
-
             val cacheKey = "c:$currentRef"
             contextCache[cacheKey]?.let { return it }
-
             val parts = currentRef.trim().split(" ")
             val chapter = parts.lastOrNull()?.toIntOrNull() ?: 1
             val bookName = parts.dropLast(1).joinToString(" ")
             val bookId = BookCatalog.id(bookName)
-
             val chapterText = bibleDao.getVerseRange(bookId, chapter, 1, 30)
                 .joinToString("\n") { "${it.verse}. ${it.text}" }
-
             val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
             val compressed = bibleDao.getCommentaryCompressed(bookId, chapter)
             val commentary = CommentaryHelper.cleanCached(bookId, chapter, compressed).take(3000)
-
             val result = "USER IS READING $bookName $chapter (NKJV):\n$chapterText\n\nSUMMARY: $summary\nCOMMENTARY: $commentary\n"
             contextCache[cacheKey] = result
             result
