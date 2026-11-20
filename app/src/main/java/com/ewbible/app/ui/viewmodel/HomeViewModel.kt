@@ -361,8 +361,9 @@ class HomeViewModel(
                 commentaryError.value = false
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) {
-                commentary.value = "<html><body><p><i>Commentary for ${BookCatalog.name(bookId)} $chapter is not available yet.</i></p></body></html>"
-                commentaryError.value = false
+    commentary.value = "<html><body><p>Commentary error: ${e.message}</p></body></html>"
+    commentaryError.value = true
+}
             }
         }
     }
