@@ -12,9 +12,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -69,9 +72,7 @@ fun SettingsPanel(
     onSignOut: () -> Unit,
     onOpenAiChat: () -> Unit = {},
 ) {
-    // FIXED: Moved above early-return + Saveable, so it survives open/close + rotation
     var resourcesExpanded by rememberSaveable { mutableStateOf(false) }
-    // FIXED: Local slider state - only commit once on release, not 50x per drag
     var sliderValue by remember(fontSize) { mutableFloatStateOf(fontSize.coerceIn(12f, 24f)) }
 
     if (!visible) return
@@ -82,7 +83,6 @@ fun SettingsPanel(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.4f))
-            // FIXED: No ripple on scrim, no indication
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
@@ -92,14 +92,18 @@ fun SettingsPanel(
         Column(
             modifier = Modifier
                 .fillMaxHeight()
+                // ✅ FIT: 85% on phones, max 400dp on tablets - never 1020dp wide
                 .fillMaxWidth(0.85f)
+                .widthIn(max = 400.dp)
                 .background(background)
-                // FIXED: Actually consume clicks, don't let them fall through to scrim
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {}
                 .verticalScroll(scrollState)
+                // ✅ FIT: no overlap with status bar / gesture bar
+                .statusBarsPadding()
+                .navigationBarsPadding()
                 .padding(20.dp)
         ) {
             Row(
@@ -192,8 +196,8 @@ fun SettingsPanel(
             Text("Font Size", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = textColor)
             Slider(
                 value = sliderValue,
-                onValueChange = { sliderValue = it }, // local only - instant UI, no DataStore spam
-                onValueChangeFinished = { onFontSizeChange(sliderValue) }, // 1 write on release
+                onValueChange = { sliderValue = it },
+                onValueChangeFinished = { onFontSizeChange(sliderValue) },
                 valueRange = 12f..24f
             )
             Spacer(modifier = Modifier.height(16.dp))
