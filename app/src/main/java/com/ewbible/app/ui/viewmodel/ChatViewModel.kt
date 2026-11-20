@@ -52,22 +52,15 @@ class ChatViewModel(
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
-    private suspend fun getGlobalTodayCount(): Int {
-        // FIX: sum across ALL chats - old code counted only current chat,
-        // so user could bypass 50/day by creating a new chat.
-        val chats = runCatching { bibleDao.getAllChatsSync() }.getOrDefault(emptyList())
-        var total = 0
-        for (c in chats) {
-            total += runCatching { bibleDao.getTodayUserMessageCount(c.id) }.getOrDefault(0)
-        }
-        return total
-    }
+    // NEW DAO: 1 query, global across all chats. No N+1, no new-chat bypass.
+    private suspend fun getGlobalTodayCount(): Int =
+        runCatching { bibleDao.getTodayUserMessageCountGlobal() }.getOrDefault(0)
 
     fun loadChats() {
         viewModelScope.launch {
             val chats = bibleDao.getAllChatsSync()
             _state.update { it.copy(chats = chats) }
-            // FIX: refill type map from cloud so type survives restart
+            // Refill type map from cloud so type survives restart
             // (local DB has no type column, cloud does)
             val cloud = syncManager?.getChatList()?.getOrNull() ?: return@launch
             for (c in cloud) {
@@ -75,7 +68,6 @@ class ChatViewModel(
                 chatTypes[localId] = c.type.ifBlank { "general" }
                 chatContexts[localId] = c.context.ifBlank { c.bibleRef }
             }
-            // Refresh current chat type if we're inside a chat
             _state.value.currentChatId?.let { id ->
                 _state.update { it.copy(currentChatType = chatTypes[id] ?: it.currentChatType) }
             }
@@ -119,7 +111,7 @@ class ChatViewModel(
             val messages = bibleDao.getMessagesForChatSync(chatId)
             val todayCount = getGlobalTodayCount()
             // Type: memory/cloud first, fallback to ref ("" = general, else bible)
-            val local = _state.value.chats.find { it.id == chatId }
+            val local = _state.value.chats.find { it.id == chatId } ?: bibleDao.getChatById(chatId)
             val type = chatTypes[chatId]
                 ?: local?.let { if (it.ref.isBlank()) "general" else "bible" }
                 ?: "general"
@@ -133,7 +125,6 @@ class ChatViewModel(
                     val restored = cloudMsgs.map { cm ->
                         MessageEntity(chatId = chatId, text = cm.text, isUser = cm.role == "user", timestamp = cm.timestamp)
                     }
-                    // Save to local so next open is instant
                     for (m in restored) {
                         val newId = bibleDao.insertMessage(m)
                         _state.update { it.copy(messages = it.messages + m.copy(id = newId)) }
@@ -153,8 +144,25 @@ class ChatViewModel(
                 if (it.currentChatId == chatId) it.copy(currentChatId = null, messages = emptyList(), chats = it.chats.filterNot { c -> c.id == chatId })
                 else it.copy(chats = it.chats.filterNot { c -> c.id == chatId })
             }
-            // Cloud: uses YOUR exact signature
             syncManager?.deleteChat(chatId.toString())
+        }
+    }
+
+    fun renameChat(chatId: Long, newTitle: String) {
+        viewModelScope.launch {
+            val chat = _state.value.chats.find { it.id == chatId } ?: bibleDao.getChatById(chatId) ?: return@launch
+            val updated = chat.copy(title = newTitle)
+            bibleDao.updateChat(updated)
+            _state.update { it.copy(chats = it.chats.map { c -> if (c.id == chatId) updated else c }) }
+            // Keep cloud title in sync
+            syncManager?.createChat(
+                chatId = chatId.toString(),
+                title = newTitle,
+                type = chatTypes[chatId] ?: "general",
+                context = chatContexts[chatId] ?: chat.ref,
+                bibleRef = if ((chatTypes[chatId] ?: "general") == "bible") chat.ref else "",
+                translation = ""
+            )
         }
     }
 
