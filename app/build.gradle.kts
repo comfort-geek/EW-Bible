@@ -72,4 +72,7 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth)
     implementation(libs.firebase.firestore)
+
+    // FIX: GeminiRepository uses okhttp3 - this was missing, broke the whole build
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
