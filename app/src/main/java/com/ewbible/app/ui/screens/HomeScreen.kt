@@ -61,8 +61,6 @@ import com.ewbible.app.ui.viewmodel.ChatViewModel
 import com.ewbible.app.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
 
-// MAX: Extracted - Compose can SKIP these when HomeScreen recomposes on verse/highlight change.
-// Before: everything was inline in HomeScreen = 1 highlight change recomposed TopBar + Tabs + Drawer + Dialogs.
 @Composable
 private fun TopBar(
     selectedTab: String,
@@ -99,7 +97,6 @@ private fun NoteRow(
     textColor: Color,
     onClick: (NoteEntity) -> Unit,
 ) {
-    // MAX: BookCatalog.name() once per row, remembered. Before: called on every recomposition of dialog.
     val bookName = remember(note.bookId) { BookCatalog.name(note.bookId) }
     Column(modifier = Modifier.fillMaxWidth().clickable { onClick(note) }.padding(vertical = 8.dp)) {
         Text(text = "$bookName ${note.chapter}:${note.verse}", color = gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -153,10 +150,8 @@ fun HomeScreen(
     val ntBooks = remember(state.books) { state.books.filter { it.id >= 40 }.sortedBy { it.id } }
     val tabs = remember { listOf("Bible", "Open EW", "Search") }
 
-    // MAX: Merged 2x LaunchedEffect(state.isReadingRestored) into 1.
-    // Before: 2 separate effects on same key = 2x work on restore.
-    // Also: lastBookChapter now actually updated here (was set but never read - kept for compat)
-    LaunchedEffect(state.isReadingRestored) {
+    // FIXED: added savedScrollIndex / savedScrollOffset to keys - restore won't miss if prefs emit late
+    LaunchedEffect(state.isReadingRestored, savedScrollIndex, savedScrollOffset) {
         if (state.isReadingRestored) initialLoadDone = true
         if (hasRestoredScroll) return@LaunchedEffect
         if (!state.isReadingRestored) return@LaunchedEffect
@@ -171,16 +166,18 @@ fun HomeScreen(
         lastBookChapter = state.currentBookId to state.selectedChapter
     }
 
-    // MAX: Stable lambdas via rememberUpdatedState. Before: local fun openBook() recreated
-    // on every recomposition -> new lambda passed to BookDrawer / SearchContent / Notes dialog
-    // -> those recomposed even when nothing changed.
     val viewModelState by rememberUpdatedState(viewModel)
     val drawerStateRef by rememberUpdatedState(drawerState)
     val listStateRef by rememberUpdatedState(listState)
+    // FIXED: setters via rememberUpdatedState so openBookStable never goes stale
+    val setHasRestoredScroll: (Boolean) -> Unit = { hasRestoredScroll = it }
+    val setExpandedBook: (Int?) -> Unit = { expandedBook = it }
+    val setHasRestoredScrollRef by rememberUpdatedState(setHasRestoredScroll)
+    val setExpandedBookRef by rememberUpdatedState(setExpandedBook)
     val openBookStable: (Int, Int) -> Unit = remember {
         { bookId: Int, chapter: Int ->
-            hasRestoredScroll = true
-            expandedBook = null
+            setHasRestoredScrollRef(true)
+            setExpandedBookRef(null)
             viewModelState.openBook(bookId, chapter)
             scope.launch {
                 runCatching { listStateRef.scrollToItem(0) }
@@ -356,7 +353,6 @@ fun HomeScreen(
                     Text("No notes yet.\nHold a verse in Bible tab to add a note.", color = textColor, fontSize = 14.sp)
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxWidth().height(400.dp)) {
-                        // FIXED: Key = id (PK), not timestamp - timestamp can collide if 2 notes saved in same ms
                         items(state.notes, key = { it.id }, contentType = { "note" }) { note ->
                             NoteRow(
                                 note = note,
@@ -373,7 +369,8 @@ fun HomeScreen(
     }
 
     if (state.showNoteDialog) {
-        var noteText by remember(state.selectedVerse) { mutableStateOf(state.currentNoteText) }
+        // FIXED: key includes currentNoteText - dialog shows saved note once it loads from DB
+        var noteText by remember(state.selectedVerse, state.currentNoteText) { mutableStateOf(state.currentNoteText) }
         AlertDialog(
             onDismissRequest = { viewModel.dismissNoteDialog() }, containerColor = background,
             title = { Text("Note", color = textColor) },
@@ -390,8 +387,15 @@ fun HomeScreen(
             title = { Text("Highlight", color = textColor) },
             text = {
                 HighlightCard(selectedVerse = state.selectedVerse, panel = panel, gold = gold, textColor = textColor,
-                    onHighlightPicked = { color -> viewModel.saveHighlight(color) },
-                    onRemoveHighlight = { viewModel.removeHighlight() },
+                    // FIXED: picker closes after pick / remove
+                    onHighlightPicked = { color ->
+                        viewModel.saveHighlight(color)
+                        showHighlightPicker = false
+                    },
+                    onRemoveHighlight = {
+                        viewModel.removeHighlight()
+                        showHighlightPicker = false
+                    },
                     onDismiss = { showHighlightPicker = false })
             },
             confirmButton = {}, dismissButton = { TextButton(onClick = { showHighlightPicker = false }) { Text("Cancel", color = textColor) } }
