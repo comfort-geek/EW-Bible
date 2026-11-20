@@ -2,9 +2,13 @@ package com.ewbible.app.ui.screens
 
 import android.text.Spannable
 import android.text.SpannableString
+import android.text.Spanned
 import android.text.method.LinkMovementMethod
 import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
 import android.text.style.URLSpan
+import android.graphics.Typeface
 import android.util.LruCache
 import android.util.TypedValue
 import android.view.GestureDetector
@@ -17,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
@@ -51,10 +56,6 @@ private val BOOK_PATTERN = DISPLAY_NAMES
 private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?(?!\\d)")
 
 private val H1_REGEX = Regex("(?is)<h1[^>]*>.*?</h1>")
-private val H2_6_REGEX = Regex("(?is)<h[2-6][^>]*>(.*?)</h[2-6]>")
-private val TAG_REGEX = Regex("(?i)</?(b|strong|i|em)>")
-private val BOLD_REGEX = Regex("(?i)font-weight\\s*:\\s*(bold|[700-900])\\s*;?")
-private val ITALIC_REGEX = Regex("(?i)font-style\\s*:\\s*italic\\s*;?")
 
 private val parsedCache = LruCache<String, SpannableString>(10)
 
@@ -80,10 +81,6 @@ private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
             }
         }
     }
-    t = H2_6_REGEX.replace(t, "<p><b>$1</b></p>")
-    t = TAG_REGEX.replace(t, "")
-    t = BOLD_REGEX.replace(t, "")
-    t = ITALIC_REGEX.replace(t, "")
     return t
 }
 
@@ -119,6 +116,22 @@ private fun linkifyMatch(m: MatchResult): String {
     if (ch !in 1..BookCatalog.chapters(bookId)) return m.value
     val encoded = URLEncoder.encode(canonical, "UTF-8")
     return """<a href="ew://verse?book=$encoded&chapter=$ch&verse=$vs&endVerse=$end">${m.value}</a>"""
+}
+
+private val HEADING_LINE = Regex("""^(?:[A-Z]\.|[0-9]+\.|[a-z]\.)\s+[A-Z].{0,90}$""")
+private fun styleHeadingLines(spannable: SpannableString) {
+    val text = spannable.toString()
+    var start = 0
+    while (start < text.length) {
+        val end = text.indexOf('\n', start).let { if (it == -1) text.length else it }
+        val line = text.substring(start, end).trim()
+        if (line.length in 5..110 && HEADING_LINE.matches(line)) {
+            val realStart = start + (text.substring(start, end).indexOfFirst { !it.isWhitespace() }.takeIf { it >= 0 } ?: 0)
+            spannable.setSpan(StyleSpan(Typeface.BOLD), realStart, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            spannable.setSpan(RelativeSizeSpan(1.12f), realStart, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        start = end + 1
+    }
 }
 
 @Composable
@@ -164,13 +177,13 @@ fun OpenEWContent(
                     )
                 }
                 val result = if (spannable is SpannableString) spannable else SpannableString(spannable)
+                styleHeadingLines(result)
                 parsedCache.put(cacheKey, result)
                 result
             }.getOrNull()
         }
     }
 
-    // ✅ INSTANT: keep last good commentary until new one parses - never blank / never "No commentary" flash
     var cachedSpanned by remember { mutableStateOf<SpannableString?>(null) }
     var cachedKey by remember { mutableStateOf<String?>(null) }
     if (parsed != null) {
@@ -196,10 +209,19 @@ fun OpenEWContent(
         return
     }
 
-    Column(modifier = Modifier.fillMaxSize().navigationBarsPadding()) {
+    Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+        // Header exactly like Bible: "1 Samuel 1" - nothing else
+        Text(
+            text = if (bookName.isNotBlank()) "$bookName $chapter" else "",
+            color = textColor,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp)
+        )
+
         if (goldSpanned == null) {
-            // ✅ REMOVED flash: only show "No commentary" when truly empty + NOT loading + no cached
-            // While switching chapters, this branch is skipped because cachedSpanned is still old chapter
             if (!isLoading && commentaryHtml.isBlank()) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
                     Text(
@@ -210,7 +232,6 @@ fun OpenEWContent(
                     )
                 }
             } else {
-                // Parsing new chapter - show nothing, keep layout stable (no blank jump)
                 Box(modifier = Modifier.weight(1f).fillMaxWidth())
             }
         } else {
@@ -218,7 +239,7 @@ fun OpenEWContent(
                 modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds(),
                 factory = { ctx ->
                     val padPx = with(density) { 16.dp.roundToPx() }
-                    // ✅ FIT: 120dp bottom = FAB + bottom bar + nav bar, last line never hidden
+                    val topPx = with(density) { 16.dp.roundToPx() }
                     val bottomPx = with(density) { 120.dp.roundToPx() }
                     val swipePx = with(density) { 80.dp.toPx() }
                     var swipeFired = false
@@ -234,7 +255,6 @@ fun OpenEWContent(
                                     startY = event.y
                                 }
                                 MotionEvent.ACTION_MOVE -> {
-                                    // ✅ INSTANT: fire mid-drag at 80dp, don't wait for fling / lift
                                     if (!swipeFired) {
                                         val dx = event.x - startX
                                         val dy = event.y - startY
@@ -254,9 +274,11 @@ fun OpenEWContent(
                         setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
                         setLineSpacing(0f, 1.45f)
                         setTextColor(textColor.toArgb())
-                        setPadding(padPx, 0, padPx, bottomPx)
+                        setPadding(padPx, topPx, padPx, bottomPx)
                         isVerticalScrollBarEnabled = true
                         scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
+                        breakStrategy = android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY
+                        hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NORMAL
                         movementMethod = object : LinkMovementMethod() {
                             override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
                                 if (event.action == MotionEvent.ACTION_UP) {
