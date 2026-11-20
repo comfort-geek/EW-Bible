@@ -44,14 +44,14 @@ class MainActivity : ComponentActivity() {
         val geminiRepository = GeminiRepository()
 
         // DO NOT crash here if DB is broken - catch it and show error UI instead
-        var database: AppDatabase? = null
         var dbError: String? = null
-        try {
-            database = AppDatabase.getInstance(applicationContext)
+        val dao = try {
+            AppDatabase.getInstance(applicationContext).bibleDao()
         } catch (e: Throwable) {
             dbError = e.toString() + "\n" + (e.cause?.toString() ?: "")
             CrashReporter.recordNonFatal(this, "MainActivity-DB-Init", e)
             CrashReporter.breadcrumb(this, "DB INIT FAILED: ${e.message}")
+            null
         }
 
         setContent {
@@ -77,13 +77,11 @@ class MainActivity : ComponentActivity() {
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
-                    } else if (database != null) {
-                        val dao = database!!.bibleDao()
+                    } else if (dao != null) {
                         val factory = HomeViewModelFactory(
                             dao = dao,
                             preferences = preferences,
-                            geminiRepository = geminiRepository,
-                            bibleDao = dao
+                            geminiRepository = geminiRepository
                         )
                         val homeViewModel: HomeViewModel = viewModel(factory = factory)
                         val chatViewModel: ChatViewModel = viewModel(factory = factory)
