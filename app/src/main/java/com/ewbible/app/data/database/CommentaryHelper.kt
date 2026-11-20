@@ -1,53 +1,42 @@
 package com.ewbible.app.data.database
 
 import android.util.LruCache
-import java.util.zip.Inflater
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.util.zip.InflaterInputStream
 
 object CommentaryHelper {
 
-    // MAX: No Regex anymore. Regex was doing 13 full passes over the string.
-    // This does 1 pass, char by char, and stops at 4000 chars.
     private val cacheByHash = LruCache<Int, String>(40)
     private val cacheByRef = LruCache<Int, String>(40)
 
-    // MAX: Reuse buffers per-thread, no new ByteArray(8192) on every call.
-    // Inflater is faster than InflaterInputStream - no stream wrapper.
-    private val inflaterBuffer = ThreadLocal.withInitial { ByteArray(8192) }
-    private val outBuffer = ThreadLocal.withInitial { ByteArray(131072) }
-
+    // FIXED: No 128KB cap. Uses stream + growing output, so Psalm 119 etc. won't truncate.
+    // Still zlib (Inflater), NOT gzip - matches your db (starts with x9c)
     fun decompress(compressed: ByteArray?): String {
         if (compressed == null || compressed.isEmpty()) return ""
         return try {
-            val inflater = Inflater()
-            inflater.setInput(compressed)
-            val out = outBuffer.get()!!
-            val buf = inflaterBuffer.get()!!
-            var total = 0
-            while (!inflater.finished() && total < 131072) {
-                val n = inflater.inflate(buf)
-                if (n <= 0) break
-                val copy = minOf(n, 131072 - total)
-                System.arraycopy(buf, 0, out, total, copy)
-                total += copy
-                if (inflater.needsInput()) break
+            InflaterInputStream(ByteArrayInputStream(compressed)).use { input ->
+                ByteArrayOutputStream().use { out ->
+                    val buf = ByteArray(8192)
+                    var n: Int
+                    while (input.read(buf).also { n = it } != -1) {
+                        out.write(buf, 0, n)
+                    }
+                    out.toString(Charsets.UTF_8.name())
+                }
             }
-            inflater.end()
-            // Decode once
-            String(out, 0, total, Charsets.UTF_8)
         } catch (e: Exception) {
             ""
         }
     }
 
     // MAX: 1 pass, no Regex, no 13 intermediate Strings.
-    // Old: html.replace().replace().replace() x13 = 13 new Strings.
-    // New: 1 StringBuilder, stops as soon as we have 4000 clean chars.
     fun htmlToPlainText(html: String): String {
         if (html.isEmpty()) return ""
         val out = StringBuilder(4000)
         var i = 0
         val len = html.length
-        var lastWasSpace = true // start trimmed
+        var lastWasSpace = true
 
         fun appendSpace() {
             if (!lastWasSpace && out.length < 4000) {
@@ -56,7 +45,6 @@ object CommentaryHelper {
             }
         }
         fun appendNewline(count: Int) {
-            // Collapse to max 2 newlines, no leading newlines
             if (out.isEmpty()) return
             var existing = 0
             var j = out.length - 1
@@ -70,7 +58,6 @@ object CommentaryHelper {
             val c = html[i]
             when {
                 c == '<' -> {
-                    // Find end of tag
                     val end = html.indexOf('>', i)
                     if (end == -1) break
                     val tag = html.substring(i + 1, end).trim().lowercase()
@@ -86,7 +73,7 @@ object CommentaryHelper {
                             if (out.length < 3998) { out.append("- "); lastWasSpace = true }
                         }
                         tag.startsWith("br") -> appendNewline(1)
-                        else -> appendSpace() // any other tag = space
+                        else -> appendSpace()
                     }
                     i = end + 1
                 }
@@ -113,7 +100,6 @@ object CommentaryHelper {
                             i = end + 1
                             continue
                         }
-                        // Unknown numeric entity &#123;
                         if (ent.startsWith("&#")) {
                             val num = ent.substring(2, ent.length - 1).toIntOrNull()
                             if (num != null && num in 32..10000) {
@@ -124,7 +110,6 @@ object CommentaryHelper {
                             }
                         }
                     }
-                    // Not an entity, keep &
                     if (out.length < 4000) out.append(c)
                     lastWasSpace = false
                     i++
@@ -144,7 +129,6 @@ object CommentaryHelper {
                 }
             }
         }
-        // Trim trailing spaces/newlines without new String copy if possible
         var endLen = out.length
         while (endLen > 0 && (out[endLen - 1] == ' ' || out[endLen - 1] == '\n')) endLen--
         return out.substring(0, endLen)
