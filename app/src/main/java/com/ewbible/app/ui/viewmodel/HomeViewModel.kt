@@ -18,7 +18,6 @@ import java.util.Collections
 data class HomeUiState(
     val books: List<BookEntity> = emptyList(),
     val verses: List<VerseEntity> = emptyList(),
-    // FIX: was emptyList().let { emptyMap() } -> Cannot infer type for T (build error line 20)
     val highlights: Map<Int, Color> = emptyMap(),
     val notes: List<NoteEntity> = emptyList(),
     val summary: SummaryEntity? = null,
@@ -85,12 +84,10 @@ class HomeViewModel(
 
     private val commentaryCache = LruCache<String, String>(30)
     private val summaryCache = LruCache<String, SummaryEntity>(60)
-    // FIX: added import java.util.Collections - was Unresolved reference 'Collections'
     private val summaryMissing = Collections.synchronizedSet(mutableSetOf<String>())
     private val summaryLoadingKeys = Collections.synchronizedSet(mutableSetOf<String>())
     private val versesCache = LruCache<String, List<VerseEntity>>(30)
 
-    // Prophecy set allocated ONCE, not on every search keystroke
     private val prophecyBooks = setOf(23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,66)
 
     val books: Flow<List<BookEntity>> = flowOf(BookCatalog.all.map { BookCatalog.toEntity(it) })
@@ -132,15 +129,12 @@ class HomeViewModel(
     val searchResultsFlow: StateFlow<List<VerseSearchResult>> = searchResults.asStateFlow()
     val searchFilterFlow: StateFlow<String> = searchFilter.asStateFlow()
 
-    // Replaced combine(listOf(27 flows)) + UNCHECKED_CAST.
-    // Now _uiState updates field-by-field with update { copy(...) }.
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     init {
         viewModelScope.launch { restoreSavedReading() }
 
-        // Each flow updates ONLY its own field - no 27-way combine
         viewModelScope.launch { books.collect { _uiState.update { s -> s.copy(books = it) } } }
         viewModelScope.launch { verses.collect { _uiState.update { s -> s.copy(verses = it) } } }
         viewModelScope.launch { highlights.collect { _uiState.update { s -> s.copy(highlights = it) } } }
@@ -183,7 +177,6 @@ class HomeViewModel(
             }
         }
         viewModelScope.launch {
-            // FIX: was selectedTab.distinctUntilChanged() - deprecated on StateFlow, StateFlow already distincts
             selectedTab.collectLatest { tab ->
                 if (tab == "Open EW") loadCommentary(selectedBookId.value, selectedChapter.value)
             }
@@ -337,6 +330,7 @@ class HomeViewModel(
         }
     }
 
+    // FIXED: removed 1 extra } here - it was closing the class early
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
         synchronized(commentaryCache) { commentaryCache.get(key) }?.let {
@@ -350,7 +344,6 @@ class HomeViewModel(
             try {
                 val html = withContext(Dispatchers.IO) {
                     val compressed = runCatching { dao.getCommentaryCompressed(bookId, chapter) }.getOrNull()
-                    // FIX: was compressed.isNullOrEmpty() - doesn't exist for ByteArray?
                     if (compressed == null || compressed.isEmpty()) null else CommentaryHelper.decompress(compressed)
                 }
                 val finalHtml = if (html.isNullOrBlank()) {
@@ -361,9 +354,8 @@ class HomeViewModel(
                 commentaryError.value = false
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) {
-    commentary.value = "<html><body><p>Commentary error: ${e.message}</p></body></html>"
-    commentaryError.value = true
-}
+                commentary.value = "<html><body><p>Commentary error: ${e.message}</p></body></html>"
+                commentaryError.value = true
             }
         }
     }
