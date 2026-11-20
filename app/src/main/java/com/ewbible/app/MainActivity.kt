@@ -18,6 +18,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ewbible.app.data.ai.GeminiRepository
 import com.ewbible.app.data.database.AppDatabase
 import com.ewbible.app.data.preferences.AppPreferences
+import com.ewbible.app.data.sync.SyncManager
 import com.ewbible.app.ui.screens.HomeScreen
 import com.ewbible.app.ui.theme.EWBibleTheme
 import com.ewbible.app.ui.viewmodel.ChatViewModel
@@ -42,6 +43,9 @@ class MainActivity : ComponentActivity() {
 
         val preferences = AppPreferences(applicationContext)
         val geminiRepository = GeminiRepository()
+
+        // ✅ FIXED: Create SyncManager ONCE here
+        val syncManager = SyncManager()
 
         // DO NOT crash here if DB is broken - catch it and show error UI instead
         var dbError: String? = null
@@ -78,10 +82,12 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     } else if (dao != null) {
+                        // ✅ FIXED: Pass syncManager - was missing before
                         val factory = HomeViewModelFactory(
                             dao = dao,
                             preferences = preferences,
-                            geminiRepository = geminiRepository
+                            geminiRepository = geminiRepository,
+                            syncManager = syncManager
                         )
                         val homeViewModel: HomeViewModel = viewModel(factory = factory)
                         val chatViewModel: ChatViewModel = viewModel(factory = factory)
