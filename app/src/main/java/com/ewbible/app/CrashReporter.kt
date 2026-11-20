@@ -11,8 +11,10 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.text.SimpleDateFormat
+import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 
 object CrashReporter {
     private const val FILE_NAME = "last_crash.txt"
@@ -28,9 +30,7 @@ object CrashReporter {
     @Volatile var lastTab: String = ""
     @Volatile var lastVerse: Int = -1
 
-    // Use this as your global coroutine handler everywhere
     val coroutineHandler = CoroutineExceptionHandler { _, throwable ->
-        // We don't have Context here, so store it
         appContext?.let { recordNonFatal(it, "Coroutine", throwable) }
     }
 
@@ -38,14 +38,34 @@ object CrashReporter {
     @Volatile internal var appContext: Context? = null
     @Volatile private var isInstalled = false
 
+    // ✅ FIXED: single background thread for ALL file writes - never main thread
+    private val ioExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "CrashReporter-IO").apply { isDaemon = true }
+    }
+
+    // ✅ FIXED: breadcrumbs in memory - no disk read per call
+    private val breadcrumbLock = Any()
+    private val breadcrumbDeque = ArrayDeque<String>(MAX_BREADCRUMBS)
+
+    private fun snapshotBreadcrumbs(): List<String> = synchronized(breadcrumbLock) {
+        breadcrumbDeque.toList()
+    }
+
     fun breadcrumb(context: Context, message: String) {
         try {
             val time = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
             val line = "[$time] $message"
-            val file = context.filesDir.resolve(BREADCRUMB_FILE)
-            val old = if (file.exists()) file.readLines() else emptyList()
-            val updated = (old + line).takeLast(MAX_BREADCRUMBS)
-            file.writeText(updated.joinToString("\n"))
+            synchronized(breadcrumbLock) {
+                breadcrumbDeque.addLast(line)
+                while (breadcrumbDeque.size > MAX_BREADCRUMBS) breadcrumbDeque.removeFirst()
+            }
+            // ✅ Async persist - main thread returns instantly
+            val ctx = context.applicationContext
+            ioExecutor.execute {
+                try {
+                    ctx.filesDir.resolve(BREADCRUMB_FILE).writeText(snapshotBreadcrumbs().joinToString("\n"))
+                } catch (_: Exception) { }
+            }
         } catch (_: Exception) { }
     }
 
@@ -59,69 +79,77 @@ object CrashReporter {
         lastTab = tab
         lastVerse = verse
         lastState = "book=$book chapter=$chapter tab=$tab verse=$verse"
-        try {
-            context.filesDir.resolve(STATE_FILE).writeText(lastState)
-        } catch (_: Exception) { }
+        val ctx = context.applicationContext
+        ioExecutor.execute {
+            try { ctx.filesDir.resolve(STATE_FILE).writeText(lastState) } catch (_: Exception) { }
+        }
     }
 
     fun setState(book: String, chapter: Int, tab: String, verse: Int = -1) {
         appContext?.let { setState(it, book, chapter, tab, verse) }
     }
 
-    // Call ONCE from Application.onCreate, before anything else
     fun init(context: Context) {
-        if (isInstalled) return
-        isInstalled = true
-        appContext = context.applicationContext
+        synchronized(this) {
+            if (isInstalled) return
+            isInstalled = true
+        }
+        val appCtx = context.applicationContext
+        appContext = appCtx
 
-        try {
-            val stateFile = context.filesDir.resolve(STATE_FILE)
-            if (stateFile.exists()) lastState = stateFile.readText()
-        } catch (_: Exception) { }
+        // Restore in-memory breadcrumbs + state off main thread
+        ioExecutor.execute {
+            try {
+                val f = appCtx.filesDir.resolve(BREADCRUMB_FILE)
+                if (f.exists()) {
+                    val lines = f.readLines().takeLast(MAX_BREADCRUMBS)
+                    synchronized(breadcrumbLock) {
+                        breadcrumbDeque.clear()
+                        breadcrumbDeque.addAll(lines)
+                    }
+                }
+                val stateFile = appCtx.filesDir.resolve(STATE_FILE)
+                if (stateFile.exists()) lastState = stateFile.readText()
+            } catch (_: Exception) { }
+        }
 
-        breadcrumb(context, "CrashReporter.init - app started")
+        breadcrumb(appCtx, "CrashReporter.init - app started")
 
-        // 1. Catch ALL uncaught exceptions, any thread, including main
         val oldHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
-                val report = buildReport(context, thread, throwable, isFatal = true)
-                context.filesDir.resolve(FILE_NAME).writeText(report)
-                appendHistory(context, report)
+                // ✅ Do file write synchronously here - app is dying anyway, must flush
+                val report = buildReport(appCtx, thread, throwable, isFatal = true)
+                appCtx.filesDir.resolve(FILE_NAME).writeText(report)
+                appendHistory(appCtx, report)
             } catch (_: Exception) { }
-            // Must call old handler or app will hang instead of crashing
             oldHandler?.uncaughtException(thread, throwable)
-            // If no old handler, kill so system shows crash dialog
             if (oldHandler == null) {
                 Process.killProcess(Process.myPid())
             }
         }
 
-        // 2. Catch exceptions in Application lifecycle
         if (context is Application) {
-            context.registerActivityLifecycleCallbacks(
-                CrashActivityTracker(context)
-            )
+            context.registerActivityLifecycleCallbacks(CrashActivityTracker(context))
         }
 
-        // 3. Logcat watcher - so even if stack trace is empty we have logs
-        Thread {
+        // ✅ FIXED: continuous logcat watcher - keeps last 500 lines live, not one dump at startup
+        ioExecutor.execute {
             try {
-                val process = Runtime.getRuntime().exec("logcat -v time -d")
+                val process = Runtime.getRuntime().exec("logcat -v time")
                 val reader = BufferedReader(InputStreamReader(process.inputStream))
-                val lines = mutableListOf<String>()
+                val lines = ArrayDeque<String>(500)
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
-                    lines.add(line!!)
-                    if (lines.size > 500) lines.removeAt(0)
+                    synchronized(lines) {
+                        lines.addLast(line!!)
+                        while (lines.size > 500) lines.removeFirst()
+                    }
                 }
-                context.filesDir.resolve("last_logcat.txt").writeText(lines.joinToString("\n"))
             } catch (_: Exception) { }
-        }.start()
+        }
     }
 
-    // Wrap ANY risky block: DB open, asset copy, parsing, etc.
-    // Usage: CrashReporter.safe("openDb") { Room.databaseBuilder(...) }
     inline fun <T> safe(tag: String, block: () -> T): T? {
         return try {
             block()
@@ -145,13 +173,16 @@ object CrashReporter {
     }
 
     fun recordNonFatal(context: Context, tag: String, throwable: Throwable) {
-        try {
-            breadcrumb(context, "NON-FATAL: $tag - ${throwable.message}")
-            val report = buildReport(context, Thread.currentThread(), throwable, isFatal = false, tag = tag)
-            context.filesDir.resolve("last_nonfatal.txt").writeText(report)
-            appendHistory(context, report)
-            Log.e("CrashReporter", "nonfatal[$tag]", throwable)
-        } catch (_: Exception) { }
+        val ctx = context.applicationContext
+        ioExecutor.execute {
+            try {
+                breadcrumb(ctx, "NON-FATAL: $tag - ${throwable.message}")
+                val report = buildReport(ctx, Thread.currentThread(), throwable, isFatal = false, tag = tag)
+                ctx.filesDir.resolve("last_nonfatal.txt").writeText(report)
+                appendHistory(ctx, report)
+                Log.e("CrashReporter", "nonfatal[$tag]", throwable)
+            } catch (_: Exception) { }
+        }
     }
 
     fun recordNonFatal(tag: String, throwable: Throwable) {
@@ -186,6 +217,7 @@ object CrashReporter {
         listOf(FILE_NAME, HISTORY_FILE, "last_nonfatal.txt", BREADCRUMB_FILE, STATE_FILE, "last_logcat.txt").forEach {
             try { context.filesDir.resolve(it).delete() } catch (_: Exception) { }
         }
+        synchronized(breadcrumbLock) { breadcrumbDeque.clear() }
         lastState = "unknown"
     }
 
@@ -238,11 +270,9 @@ object CrashReporter {
         sb.append("Book: $lastBook | Chapter: $lastChapter | Tab: $lastTab | Verse: $lastVerse\n\n")
 
         sb.append("=== BREADCRUMBS (oldest -> newest) ===\n")
-        try {
-            val file = context.filesDir.resolve(BREADCRUMB_FILE)
-            if (file.exists() && file.readText().isNotBlank()) sb.append(file.readText()).append("\n")
-            else sb.append("(none)\n")
-        } catch (_: Exception) { sb.append("(could not read breadcrumbs)\n") }
+        val crumbs = snapshotBreadcrumbs()
+        if (crumbs.isNotEmpty()) sb.append(crumbs.joinToString("\n")).append("\n")
+        else sb.append("(none)\n")
         sb.append("\n")
 
         sb.append("=== STACK TRACE ===\n")
@@ -260,9 +290,15 @@ object CrashReporter {
 
         sb.append("=== LAST LOGCAT (last 200 lines) ===\n")
         try {
+            // ✅ Timeout: never let logcat block the crash handler
             val process = Runtime.getRuntime().exec("logcat -v time -d -t 200")
-            val reader = BufferedReader(InputStreamReader(process.inputStream))
-            reader.readLines().forEach { sb.append(it).append("\n") }
+            val finished = process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+            if (finished) {
+                BufferedReader(InputStreamReader(process.inputStream)).readLines().forEach { sb.append(it).append("\n") }
+            } else {
+                process.destroyForcibly()
+                sb.append("Logcat timed out\n")
+            }
         } catch (e: Exception) { sb.append("Logcat unavailable: ${e.message}\n") }
 
         return sb.toString()
