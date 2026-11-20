@@ -72,8 +72,6 @@ fun AiChatScreen(
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    // FIX: OnHeaderDecodedListener is (decoder, info, source) -> 3 params, not 2.
-    // Your version had { decoder, info -> } = "Argument type mismatch" at :84
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
             scope.launch(Dispatchers.IO) {
@@ -163,7 +161,7 @@ fun AiChatScreen(
         }
 
         LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(state.messages, key = { it.id ?: it.text.hashCode() }, contentType = { if (it.isUser) "user" else "ai" }) { msg ->
+            items(state.messages, key = { it.id }, contentType = { if (it.isUser) "user" else "ai" }) { msg ->
                 MessageBubble(text = msg.text, isUser = msg.isUser, textColor = textColor, gold = gold, panel = panel)
             }
             if (state.isLoading) {
