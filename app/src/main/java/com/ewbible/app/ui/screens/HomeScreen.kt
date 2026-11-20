@@ -356,9 +356,8 @@ fun HomeScreen(
                     Text("No notes yet.\nHold a verse in Bible tab to add a note.", color = textColor, fontSize = 14.sp)
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxWidth().height(400.dp)) {
-                        // MAX: Key = timestamp (Long), not String. Before: "${book}-${chapter}-${verse}-${timestamp}" = new String per note per recomposition.
-                        // timestamp is unique per note (System.currentTimeMillis() on save).
-                        items(state.notes, key = { it.timestamp }, contentType = { "note" }) { note ->
+                        // FIXED: Key = id (PK), not timestamp - timestamp can collide if 2 notes saved in same ms
+                        items(state.notes, key = { it.id }, contentType = { "note" }) { note ->
                             NoteRow(
                                 note = note,
                                 gold = gold,
