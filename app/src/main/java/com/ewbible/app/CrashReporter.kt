@@ -8,6 +8,8 @@ import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.text.SimpleDateFormat
@@ -21,8 +23,10 @@ object CrashReporter {
     private const val HISTORY_FILE = "crash_history.txt"
     private const val BREADCRUMB_FILE = "breadcrumbs.txt"
     private const val STATE_FILE = "last_state.txt"
+    private const val GEMINI_FILE = "gemini_logs.txt"
     private const val MAX_BREADCRUMBS = 100
     private const val MAX_HISTORY = 10
+    private const val MAX_GEMINI_LOGS = 200
 
     @Volatile var lastState: String = "unknown"
     @Volatile var lastBook: String = ""
@@ -38,17 +42,25 @@ object CrashReporter {
     @Volatile internal var appContext: Context? = null
     @Volatile private var isInstalled = false
 
-    // ✅ FIXED: single background thread for ALL file writes - never main thread
     private val ioExecutor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "CrashReporter-IO").apply { isDaemon = true }
     }
 
-    // ✅ FIXED: breadcrumbs in memory - no disk read per call
     private val breadcrumbLock = Any()
     private val breadcrumbDeque = ArrayDeque<String>(MAX_BREADCRUMBS)
 
+    // --- NEW: Gemini logs, same pattern as breadcrumbs ---
+    private val geminiLock = Any()
+    private val geminiDeque = ArrayDeque<String>(MAX_GEMINI_LOGS)
+    private val _geminiLogsFlow = MutableStateFlow<List<String>>(emptyList())
+    val geminiLogsFlow: StateFlow<List<String>> = _geminiLogsFlow
+
     private fun snapshotBreadcrumbs(): List<String> = synchronized(breadcrumbLock) {
         breadcrumbDeque.toList()
+    }
+
+    private fun snapshotGeminiLogs(): List<String> = synchronized(geminiLock) {
+        geminiDeque.toList()
     }
 
     fun breadcrumb(context: Context, message: String) {
@@ -59,7 +71,6 @@ object CrashReporter {
                 breadcrumbDeque.addLast(line)
                 while (breadcrumbDeque.size > MAX_BREADCRUMBS) breadcrumbDeque.removeFirst()
             }
-            // ✅ Async persist - main thread returns instantly
             val ctx = context.applicationContext
             ioExecutor.execute {
                 try {
@@ -71,6 +82,53 @@ object CrashReporter {
 
     fun breadcrumb(message: String) {
         appContext?.let { breadcrumb(it, message) }
+    }
+
+    // --- NEW: Use this from GeminiRepository instead of Log.d ---
+    fun geminiLog(message: String) {
+        try {
+            val time = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+            val line = "[$time] $message"
+            Log.d("Gemini", message) // still goes to Android Studio Logcat
+            synchronized(geminiLock) {
+                geminiDeque.addLast(line)
+                while (geminiDeque.size > MAX_GEMINI_LOGS) geminiDeque.removeFirst()
+                _geminiLogsFlow.value = geminiDeque.toList()
+            }
+            // Also add to breadcrumbs so it appears in crash reports
+            breadcrumb("GEMINI: $message")
+            val ctx = appContext
+            if (ctx != null) {
+                ioExecutor.execute {
+                    try {
+                        ctx.filesDir.resolve(GEMINI_FILE).writeText(snapshotGeminiLogs().joinToString("\n"))
+                    } catch (_: Exception) { }
+                }
+            }
+        } catch (_: Exception) { }
+    }
+
+    fun geminiLog(context: Context, message: String) {
+        appContext = context.applicationContext
+        geminiLog(message)
+    }
+
+    fun getGeminiLogs(context: Context): String? {
+        // Prefer in-memory first
+        val mem = snapshotGeminiLogs()
+        if (mem.isNotEmpty()) return mem.joinToString("\n")
+        val file = context.filesDir.resolve(GEMINI_FILE)
+        return if (file.exists()) file.readText() else null
+    }
+
+    fun clearGeminiLogs(context: Context) {
+        synchronized(geminiLock) {
+            geminiDeque.clear()
+            _geminiLogsFlow.value = emptyList()
+        }
+        ioExecutor.execute {
+            try { context.filesDir.resolve(GEMINI_FILE).delete() } catch (_: Exception) { }
+        }
     }
 
     fun setState(context: Context, book: String, chapter: Int, tab: String, verse: Int = -1) {
@@ -97,7 +155,6 @@ object CrashReporter {
         val appCtx = context.applicationContext
         appContext = appCtx
 
-        // Restore in-memory breadcrumbs + state off main thread
         ioExecutor.execute {
             try {
                 val f = appCtx.filesDir.resolve(BREADCRUMB_FILE)
@@ -106,6 +163,16 @@ object CrashReporter {
                     synchronized(breadcrumbLock) {
                         breadcrumbDeque.clear()
                         breadcrumbDeque.addAll(lines)
+                    }
+                }
+                // Restore Gemini logs too
+                val g = appCtx.filesDir.resolve(GEMINI_FILE)
+                if (g.exists()) {
+                    val glines = g.readLines().takeLast(MAX_GEMINI_LOGS)
+                    synchronized(geminiLock) {
+                        geminiDeque.clear()
+                        geminiDeque.addAll(glines)
+                        _geminiLogsFlow.value = geminiDeque.toList()
                     }
                 }
                 val stateFile = appCtx.filesDir.resolve(STATE_FILE)
@@ -118,7 +185,6 @@ object CrashReporter {
         val oldHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
-                // ✅ Do file write synchronously here - app is dying anyway, must flush
                 val report = buildReport(appCtx, thread, throwable, isFatal = true)
                 appCtx.filesDir.resolve(FILE_NAME).writeText(report)
                 appendHistory(appCtx, report)
@@ -133,7 +199,6 @@ object CrashReporter {
             context.registerActivityLifecycleCallbacks(CrashActivityTracker(context))
         }
 
-        // ✅ FIXED: continuous logcat watcher - keeps last 500 lines live, not one dump at startup
         ioExecutor.execute {
             try {
                 val process = Runtime.getRuntime().exec("logcat -v time")
@@ -214,10 +279,14 @@ object CrashReporter {
     }
 
     fun clearAll(context: Context) {
-        listOf(FILE_NAME, HISTORY_FILE, "last_nonfatal.txt", BREADCRUMB_FILE, STATE_FILE, "last_logcat.txt").forEach {
+        listOf(FILE_NAME, HISTORY_FILE, "last_nonfatal.txt", BREADCRUMB_FILE, STATE_FILE, "last_logcat.txt", GEMINI_FILE).forEach {
             try { context.filesDir.resolve(it).delete() } catch (_: Exception) { }
         }
         synchronized(breadcrumbLock) { breadcrumbDeque.clear() }
+        synchronized(geminiLock) {
+            geminiDeque.clear()
+            _geminiLogsFlow.value = emptyList()
+        }
         lastState = "unknown"
     }
 
@@ -275,6 +344,13 @@ object CrashReporter {
         else sb.append("(none)\n")
         sb.append("\n")
 
+        // --- NEW: Gemini logs in crash report ---
+        sb.append("=== GEMINI LOGS (last 200) ===\n")
+        val gLogs = snapshotGeminiLogs()
+        if (gLogs.isNotEmpty()) sb.append(gLogs.joinToString("\n")).append("\n")
+        else sb.append("(no Gemini calls yet)\n")
+        sb.append("\n")
+
         sb.append("=== STACK TRACE ===\n")
         appendThrowable(sb, throwable, 0)
         sb.append("\n")
@@ -290,7 +366,6 @@ object CrashReporter {
 
         sb.append("=== LAST LOGCAT (last 200 lines) ===\n")
         try {
-            // ✅ Timeout: never let logcat block the crash handler
             val process = Runtime.getRuntime().exec("logcat -v time -d -t 200")
             val finished = process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
             if (finished) {
