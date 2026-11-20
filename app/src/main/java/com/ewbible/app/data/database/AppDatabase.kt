@@ -6,7 +6,9 @@ import androidx.room.*
 @Entity(tableName = "books")
 data class BookEntity(
     @PrimaryKey val id: Int,
-    val name: String
+    val key: String = "",
+    val name: String,
+    val testament: String = ""
 )
 
 @Entity(
@@ -27,7 +29,9 @@ data class VerseEntity(
 data class SummaryEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
-    val summary: String
+    val summary: String,
+    @ColumnInfo(name = "what_happened") val whatHappened: String? = null,
+    val application: String? = null
 )
 
 @Entity(
@@ -52,25 +56,27 @@ data class CommentaryEntity(
     }
 }
 
-@Entity(tableName = "highlights")
+// FIXED: matches real db - no id, no createdAt, PK is book+chapter+verse
+@Entity(
+    tableName = "highlights",
+    primaryKeys = ["book_id", "chapter", "verse"]
+)
 data class HighlightEntity(
-    @PrimaryKey(autoGenerate = true) val id: Int = 0,
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
     val verse: Int,
-    val color: String,
-    val createdAt: Long = System.currentTimeMillis()
+    val color: String
 )
 
+// FIXED: text column is really called note_text, no updatedAt
 @Entity(tableName = "notes")
 data class NoteEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
     val verse: Int,
-    val text: String,
-    val timestamp: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    @ColumnInfo(name = "note_text") val text: String,
+    val timestamp: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "chats")
