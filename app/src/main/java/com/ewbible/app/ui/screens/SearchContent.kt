@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -33,8 +35,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,8 +55,36 @@ private fun SearchResultRow(
     textColor: Color,
     fontSizeSp: TextUnit,
     lineHeight: TextUnit,
+    searchQuery: String,
     onOpenVerse: (book: String, chapter: Int, verse: Int) -> Unit,
 ) {
+    // ✅ HIGHLIGHT: bold + gold the matched word so user sees WHY it matched
+    val highlighted = remember(result.text, searchQuery) {
+        if (searchQuery.isBlank()) {
+            buildAnnotatedString { append(result.text) }
+        } else {
+            buildAnnotatedString {
+                val lowerText = result.text.lowercase()
+                val lowerQuery = searchQuery.trim().lowercase()
+                var start = 0
+                var idx = lowerText.indexOf(lowerQuery, start)
+                if (idx == -1) {
+                    append(result.text)
+                } else {
+                    while (idx != -1) {
+                        append(result.text.substring(start, idx))
+                        withStyle(SpanStyle(color = gold, fontWeight = FontWeight.Bold)) {
+                            append(result.text.substring(idx, idx + lowerQuery.length))
+                        }
+                        start = idx + lowerQuery.length
+                        idx = lowerText.indexOf(lowerQuery, start)
+                    }
+                    append(result.text.substring(start))
+                }
+            }
+        }
+    }
+
     Card(
         onClick = { onOpenVerse(bookName, result.chapter, result.verse) },
         colors = CardDefaults.cardColors(containerColor = cardColor),
@@ -67,7 +100,7 @@ private fun SearchResultRow(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = result.text,
+                text = highlighted,
                 color = textColor,
                 fontSize = fontSizeSp,
                 lineHeight = lineHeight,
@@ -97,7 +130,6 @@ fun SearchContent(
     val fontSizeSp = effectiveFontSize.sp
     val lineHeight = (effectiveFontSize + 8).sp
 
-    // FIXED: was hardcoded dark blue Color(0xFF1B2A4A) - now follows Light / Dark theme
     val searchBoxBg = remember(textColor) { textColor.copy(alpha = 0.06f) }
     val searchBoxBorder = remember(gold) { gold.copy(alpha = 0.4f) }
     val placeholderColor = remember(textColor) { textColor.copy(alpha = 0.6f) }
@@ -116,7 +148,7 @@ fun SearchContent(
     val cardColor = remember(textColor) { textColor.copy(alpha = 0.06f) }
     val hintColor = remember(textColor) { textColor.copy(alpha = 0.6f) }
     val bookNames = remember(verseResults) {
-        verseResults.associate { it.bookId to BookCatalog.name(it.bookId) }
+        verseResults.distinctBy { it.bookId }.associate { it.bookId to BookCatalog.name(it.bookId) }
     }
 
     Column(
@@ -124,6 +156,8 @@ fun SearchContent(
             .fillMaxSize()
             .background(Color.Transparent)
             .clipToBounds()
+            .navigationBarsPadding()
+            .imePadding()
             .padding(horizontal = 16.dp)
     ) {
         OutlinedTextField(
@@ -168,10 +202,11 @@ fun SearchContent(
             if (verseResults.isEmpty()) {
                 Text("No results found.", color = hintColor, fontSize = 14.sp)
             } else {
+                // ✅ FIT: weight(1f) + bottom 120dp = last result never under FAB / nav bar / keyboard
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(bottom = 16.dp)
+                    contentPadding = PaddingValues(bottom = 120.dp)
                 ) {
                     items(
                         verseResults,
@@ -186,11 +221,21 @@ fun SearchContent(
                             textColor = textColor,
                             fontSizeSp = fontSizeSp,
                             lineHeight = lineHeight,
+                            searchQuery = searchQuery,
                             onOpenVerse = onOpenVerse
                         )
                     }
                 }
             }
+        } else {
+            // ✅ Empty state - was blank before, now tells user what to do
+            Text(
+                "Type a word, phrase, or verse — e.g. love, faith, John 3:16",
+                color = hintColor,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+                modifier = Modifier.padding(top = 8.dp)
+            )
         }
     }
 }
