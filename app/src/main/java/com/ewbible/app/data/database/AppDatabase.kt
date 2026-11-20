@@ -41,7 +41,7 @@ data class SummaryEntity(
 data class CommentaryEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
-    @ColumnInfo(name = "html_compressed", typeAffinity = ColumnInfo.BLOB) val htmlCompressed: ByteArray? = null
+    @ColumnInfo(name = "html_compressed", typeAffinity = ColumnInfo.BLOB) val htmlCompressed: ByteArray = byteArrayOf()
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -51,7 +51,7 @@ data class CommentaryEntity(
     override fun hashCode(): Int {
         var result = bookId
         result = 31 * result + chapter
-        result = 31 * result + (htmlCompressed?.contentHashCode() ?: 0)
+        result = 31 * result + htmlCompressed.contentHashCode()
         return result
     }
 }
