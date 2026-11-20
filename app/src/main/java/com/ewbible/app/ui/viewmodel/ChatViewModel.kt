@@ -3,11 +3,11 @@ package com.ewbible.app.ui.viewmodel
 import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.ewbible.app.data.ai.GeminiRepository
 import com.ewbible.app.data.database.BibleDao
 import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.database.ChatEntity
 import com.ewbible.app.data.database.CommentaryHelper
-import com.ewbible.app.data.database.GeminiRepository
 import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -48,8 +48,6 @@ class ChatViewModel(
 
     fun loadChats() {
         viewModelScope.launch {
-            // Keep sync for one-shot, but don't reload after every send -
-            // we now update chats list locally in startNewChat/send
             val chats = bibleDao.getAllChatsSync()
             _state.update { it.copy(chats = chats) }
         }
@@ -62,7 +60,6 @@ class ChatViewModel(
             _state.update {
                 it.copy(currentChatId = id, messages = emptyList(), streamingText = "", isLoading = false)
             }
-            // MAX: No full DB reload - prepend locally
             _state.update { it.copy(chats = listOf(chat.copy(id = id)) + it.chats) }
         }
     }
@@ -70,7 +67,6 @@ class ChatViewModel(
     fun openChat(chatId: Long) {
         viewModelScope.launch {
             val messages = bibleDao.getMessagesForChatSync(chatId)
-            // MAX: Real daily count from DB, not in-memory counter that resets on restart
             val todayCount = runCatching { bibleDao.getTodayUserMessageCount(chatId) }.getOrDefault(0)
             _state.update { it.copy(currentChatId = chatId, messages = messages, streamingText = "", dailyCount = todayCount) }
         }
@@ -91,7 +87,6 @@ class ChatViewModel(
         val chatId = _state.value.currentChatId ?: return
         if (_state.value.isLoading) return
 
-        // MAX: Check real DB count, not volatile variable
         viewModelScope.launch {
             val todayCount = runCatching { bibleDao.getTodayUserMessageCount(chatId) }.getOrDefault(_state.value.dailyCount)
             if (todayCount >= 50) {
@@ -107,7 +102,6 @@ class ChatViewModel(
         sendJob = viewModelScope.launch {
             val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
             val userId = bibleDao.insertMessage(userMsg)
-            // MAX: Append locally, DON'T reload whole history from DB
             _state.update {
                 it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
             }
@@ -117,7 +111,6 @@ class ChatViewModel(
             val fullAnswer = StringBuilder(2000)
             lastStreamEmit = System.currentTimeMillis()
             try {
-                // Use snapshot of history - don't re-query DB inside streaming loop
                 val historySnapshot = _state.value.messages
                 geminiRepository.askStreaming(
                     question = question,
@@ -128,8 +121,6 @@ class ChatViewModel(
                     translation = translation
                 ).collect { chunk ->
                     fullAnswer.append(chunk)
-                    // MAX: Throttle UI updates - before: update on EVERY token = 100+ recompositions/sec = jank
-                    // Now: max 1 update per 120ms
                     val now = System.currentTimeMillis()
                     if (now - lastStreamEmit >= 120) {
                         lastStreamEmit = now
@@ -145,7 +136,6 @@ class ChatViewModel(
             val aiMsg = MessageEntity(chatId = chatId, text = answerText, isUser = false)
             val aiId = bibleDao.insertMessage(aiMsg)
 
-            // MAX: Append locally, no full reload, no second loadChats() DB hit
             _state.update {
                 it.copy(
                     messages = it.messages + aiMsg.copy(id = aiId),
@@ -159,7 +149,6 @@ class ChatViewModel(
 
     private suspend fun buildBibleContext(question: String, currentRef: String): String {
         return try {
-            // 1. User asked about a specific verse: John 3:16
             val match = VERSE_REGEX.find(question)
             if (match != null) {
                 val bookName = match.groupValues[1].trim()
@@ -169,7 +158,6 @@ class ChatViewModel(
                 contextCache[cacheKey]?.let { return it }
 
                 val bookId = BookCatalog.id(bookName)
-                // MAX: getVerse() = 1 row. Before: whole chapter via getVerses().first()
                 val text = bibleDao.getVerse(bookId, chapter, verse)?.text ?: ""
                 val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
                 val result = "USER ASKED ABOUT $bookName $chapter:$verse\nNKJV TEXT: $text\nSUMMARY: $summary\n"
@@ -177,7 +165,6 @@ class ChatViewModel(
                 return result
             }
 
-            // 2. Fallback: user is reading currentRef
             val cacheKey = "c:$currentRef"
             contextCache[cacheKey]?.let { return it }
 
@@ -186,16 +173,11 @@ class ChatViewModel(
             val bookName = parts.dropLast(1).joinToString(" ")
             val bookId = BookCatalog.id(bookName)
 
-            // MAX: Don't send whole 176-verse chapter to Gemini.
-            // Psalms 119 = 176 verses = ~12KB prompt = slow + expensive.
-            // Send max 30 verses + summary + commentary. Gemini doesn't need more.
             val chapterText = bibleDao.getVerseRange(bookId, chapter, 1, 30)
                 .joinToString("\n") { "${it.verse}. ${it.text}" }
 
             val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
             val compressed = bibleDao.getCommentaryCompressed(bookId, chapter)
-            // MAX: cleanCached() uses bookId*1000+chapter key, no 50KB hash.
-            // Before: clean() hashed the whole BLOB every time.
             val commentary = CommentaryHelper.cleanCached(bookId, chapter, compressed).take(3000)
 
             val result = "USER IS READING $bookName $chapter (NKJV):\n$chapterText\n\nSUMMARY: $summary\nCOMMENTARY: $commentary\n"
