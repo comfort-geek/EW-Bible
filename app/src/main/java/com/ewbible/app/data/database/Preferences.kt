@@ -1,4 +1,4 @@
-package com.ewbible.app.data.preferences
+package com.ewbible.app.data.database
 
 import android.content.Context
 import androidx.datastore.core.DataStore
@@ -19,7 +19,6 @@ import java.io.IOException
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "ewbible_settings")
 
 class AppPreferences(context: Context) {
-    // FIXED: Use applicationContext - was holding Activity context = leak
     private val appContext = context.applicationContext
 
     companion object {
@@ -40,8 +39,6 @@ class AppPreferences(context: Context) {
         val DAILY_VERSE_NUMBER = intPreferencesKey("daily_verse_number")
     }
 
-    // FIXED: catch IOException - corrupt DataStore file was crashing all Flows
-    // FIXED: Removed dead safe() helper - it had unsafe cast emptyPreferences() as T and was never used
     private val data: Flow<Preferences> = appContext.dataStore.data
         .catch { e ->
             if (e is IOException) emit(emptyPreferences()) else throw e
@@ -81,7 +78,7 @@ class AppPreferences(context: Context) {
             prefs[LAST_CHAPTER] = chapter
             prefs[LAST_VERSE] = verse
             prefs[LAST_SCROLL_INDEX] = scrollIndex.coerceAtLeast(0)
-            prefs[LAST_SCROLL_OFFSET] = offset.coerceAtLeast(0)
+            prefs[LAST_SCROLL_OFFSET] = scrollOffset.coerceAtLeast(0)
         }
     }
 
@@ -100,7 +97,6 @@ class AppPreferences(context: Context) {
     }
 
     suspend fun setFontSize(size: Float) {
-        // FIXED: Clamp - was saving any float, UI could break on 0 or 100
         appContext.dataStore.edit { prefs ->
             prefs[FONT_SIZE] = size.coerceIn(12f, 28f)
         }
