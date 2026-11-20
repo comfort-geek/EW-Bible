@@ -1,150 +1,113 @@
-package com.ewbible.app.data.database
+package com.ewbible.app.data.ai
 
 import com.ewbible.app.BuildConfig
-import android.graphics.Bitmap
-import android.util.Base64
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
+import java.util.concurrent.TimeUnit
 
 class GeminiRepository {
 
-    fun askStreaming(
-        question: String,
-        currentRef: String,
-        history: List<MessageEntity>,
-        image: Bitmap?,
-        bibleContext: String = "",
-        translation: String = "NKJV"
-    ): Flow<String> = flow {
-        val key = BuildConfig.GEMINI_API_KEY
-        if (key.isBlank()) {
-            emit("No API key found.")
-            return@flow
-        }
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
 
-        val contents = JSONArray()
+    private val apiKey: String
+        get() = BuildConfig.GEMINI_API_KEY
 
-        contents.put(JSONObject().apply {
-            put("role", "user")
-            put("parts", JSONArray().put(JSONObject().put("text",
-                """
-                You are a helpful Bible study assistant for EW Bible app.
-                User is currently reading: $currentRef
-                User's preferred translation: $translation
+    // FIXED: try newest -> oldest, 404 on one model no longer kills AI Chat
+    private val models = listOf(
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash"
+    )
 
-                RULES:
-                1. Use the NKJV text below from the user's app as your anchor. Do not invent verse numbers.
-                2. Answer in $translation. If $translation is not NKJV, give the $translation wording, but start with the NKJV from the app so user can compare.
-                3. Answer clearly and simply. If unsure, say so.
-
-                BIBLE CONTEXT (NKJV, from user's app):
-                $bibleContext
-                """.trimIndent()
-            )))
-        })
-        contents.put(JSONObject().apply {
-            put("role", "model")
-            put("parts", JSONArray().put(JSONObject().put("text", "Understood. I will help with Bible questions about $currentRef in $translation.")))
-        })
-
-        history.takeLast(10).forEach { msg ->
-            contents.put(JSONObject().apply {
-                put("role", if (msg.isUser) "user" else "model")
-                put("parts", JSONArray().put(JSONObject().put("text", msg.text)))
-            })
-        }
-
-        val parts = JSONArray().put(JSONObject().put("text", question))
-        if (image != null) {
-            val scaled = if (image.width > 1024 || image.height > 1024) {
-                val scale = 1024f / maxOf(image.width, image.height)
-                Bitmap.createScaledBitmap(
-                    image,
-                    (image.width * scale).toInt(),
-                    (image.height * scale).toInt(),
-                    true
+    suspend fun askQuestion(question: String, context: String = ""): Result<String> =
+        withContext(Dispatchers.IO) {
+            if (apiKey.isBlank()) {
+                return@withContext Result.failure(
+                    Exception("Gemini API key is missing. Add GEMINI_API_KEY in local.properties")
                 )
-            } else image
-            val stream = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, 75, stream)
-            if (scaled != image) scaled.recycle()
-            val base64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
-            parts.put(JSONObject().apply {
-                put("inline_data", JSONObject().apply {
-                    put("mime_type", "image/jpeg")
-                    put("data", base64)
-                })
-            })
-        }
-        contents.put(JSONObject().apply {
-            put("role", "user")
-            put("parts", parts)
-        })
-
-        val body = JSONObject().apply {
-            put("contents", contents)
-            put("generationConfig", JSONObject().apply {
-                put("temperature", 0.7)
-                put("maxOutputTokens", 2048)
-            })
-        }.toString()
-
-        // FIX: gemini-2.5-flash 404s for many keys - try in order
-        val models = listOf("gemini-2.0-flash", "gemini-1.5-flash")
-        var lastError = ""
-        var success = false
-
-        for (model in models) {
-            if (success) break
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?alt=sse&key=$key")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                setRequestProperty("Content-Type", "application/json")
-                doOutput = true
-                connectTimeout = 15000
-                readTimeout = 60000
-                outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             }
-            try {
-                val code = conn.responseCode
-                if (code != HttpURLConnection.HTTP_OK) {
-                    lastError = conn.errorStream?.bufferedReader()?.readText()?.take(500) ?: "HTTP $code"
-                    if (code == 429) {
-                        emit("Sorry, too many requests. Please try again in a minute.")
-                        return@flow
-                    }
-                    if (code == 404) continue // try next model
-                    emit("Sorry, Gemini returned an error ($code): $lastError")
-                    return@flow
-                }
 
-                conn.inputStream.bufferedReader().useLines { lines ->
-                    for (line in lines) {
-                        if (line.startsWith("data: ")) {
-                            val json = line.removePrefix("data: ").trim()
-                            if (json.isEmpty() || json == "[") continue
-                            try {
-                                val text = JSONObject(json)
-                                    .optJSONArray("candidates")?.optJSONObject(0)
-                                    ?.optJSONObject("content")?.optJSONArray("parts")
-                                    ?.optJSONObject(0)?.optString("text", "") ?: ""
-                                if (text.isNotEmpty()) emit(text)
-                            } catch (e: Exception) { /* skip partial chunk */ }
+            val prompt = buildString {
+                if (context.isNotBlank()) {
+                    append("Bible context:\n")
+                    append(context)
+                    append("\n\n")
+                }
+                append("Answer this Bible question clearly, based on Scripture. Keep it simple and faithful:\n")
+                append(question)
+            }
+
+            var lastError: Exception? = null
+
+            for (model in models) {
+                try {
+                    val bodyJson = JSONObject().apply {
+                        put("contents", JSONArray().put(
+                            JSONObject().put("parts", JSONArray().put(
+                                JSONObject().put("text", prompt)
+                            ))
+                        ))
+                        put("generationConfig", JSONObject().apply {
+                            put("temperature", 0.7)
+                            put("maxOutputTokens", 1024)
+                        })
+                    }
+
+                    val request = Request.Builder()
+                        .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey")
+                        .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+
+                    val response = client.newCall(request).execute()
+                    val responseBody = response.body?.string() ?: ""
+
+                    if (!response.isSuccessful) {
+                        // 404 = model not found, try next model. Other errors = stop and show real error
+                        if (response.code == 404) {
+                            lastError = Exception("Model $model not found (404), trying next...")
+                            continue
                         }
+                        val errMsg = runCatching {
+                            JSONObject(responseBody)
+                                .getJSONObject("error")
+                                .getString("message")
+                        }.getOrNull() ?: "HTTP ${response.code}: $responseBody"
+                        return@withContext Result.failure(Exception(errMsg))
                     }
+
+                    val text = runCatching {
+                        JSONObject(responseBody)
+                            .getJSONArray("candidates")
+                            .getJSONObject(0)
+                            .getJSONObject("content")
+                            .getJSONArray("parts")
+                            .getJSONObject(0)
+                            .getString("text")
+                    }.getOrNull()
+
+                    if (!text.isNullOrBlank()) {
+                        return@withContext Result.success(text.trim())
+                    } else {
+                        lastError = Exception("Empty response from $model")
+                        continue
+                    }
+                } catch (e: Exception) {
+                    lastError = e
+                    // Network error - try next model once, then give up
+                    continue
                 }
-                success = true
-            } finally {
-                conn.disconnect()
             }
+
+            Result.failure(lastError ?: Exception("Gemini failed - all models tried"))
         }
-        if (!success) emit("Sorry, Gemini returned an error: $lastError")
-    }.flowOn(Dispatchers.IO)
 }
