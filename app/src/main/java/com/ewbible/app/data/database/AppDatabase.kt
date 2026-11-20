@@ -12,9 +12,7 @@ import androidx.room.RoomDatabase
         SummaryEntity::class,
         CommentaryEntity::class,
         HighlightEntity::class,
-        NoteEntity::class,
-        ChatEntity::class,
-        MessageEntity::class
+        NoteEntity::class
     ],
     version = 4,
     exportSchema = false
@@ -35,8 +33,6 @@ abstract class AppDatabase : RoomDatabase() {
                     "ewbible.db"
                 )
                     .createFromAsset("ewbible.db")
-                    // REMOVED: .fallbackToDestructiveMigration()
-                    // That was deleting all verses/commentary on version mismatch
                     .build()
                 INSTANCE = instance
                 instance
