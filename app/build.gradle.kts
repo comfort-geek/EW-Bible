@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "com.ewbible.app"
-    compileSdk = 35
+    compileSdk = 36
 
     // FIX: Use fixed debug.keystore from repo root, so SHA-1 never changes on GitHub
     // WARNING: debug.keystore MUST be committed to repo root, or CI fails with "Keystore file not found"
@@ -24,7 +24,7 @@ android {
     defaultConfig {
         applicationId = "com.ewbible.app"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 3
         versionName = "1.2"
         buildConfigField("String", "GEMINI_API_KEY", "\"${System.getenv("GEMINI_API_KEY") ?: ""}\"")
