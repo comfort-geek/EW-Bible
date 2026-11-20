@@ -96,45 +96,55 @@ class GeminiRepository {
             })
         }.toString()
 
-        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=$key")
-        // FIXED: No withContext() around emit anymore.
-        // flowOn(Dispatchers.IO) below already runs ALL of this on IO.
-        // emit() inside withContext() = "Flow invariant is violated" crash.
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            setRequestProperty("Content-Type", "application/json")
-            doOutput = true
-            connectTimeout = 15000
-            readTimeout = 60000
-            outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-        }
+        // FIX: gemini-2.5-flash 404s for many keys - try in order
+        val models = listOf("gemini-2.0-flash", "gemini-1.5-flash")
+        var lastError = ""
+        var success = false
 
-        try {
-            val code = conn.responseCode
-            if (code != HttpURLConnection.HTTP_OK) {
-                val err = conn.errorStream?.bufferedReader()?.readText()?.take(500) ?: "HTTP $code"
-                if (code == 429) emit("Sorry, too many requests. Please try again in a minute.")
-                else emit("Sorry, Gemini returned an error ($code). Please try again.")
-                return@flow
+        for (model in models) {
+            if (success) break
+            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?alt=sse&key=$key")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                doOutput = true
+                connectTimeout = 15000
+                readTimeout = 60000
+                outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             }
+            try {
+                val code = conn.responseCode
+                if (code != HttpURLConnection.HTTP_OK) {
+                    lastError = conn.errorStream?.bufferedReader()?.readText()?.take(500) ?: "HTTP $code"
+                    if (code == 429) {
+                        emit("Sorry, too many requests. Please try again in a minute.")
+                        return@flow
+                    }
+                    if (code == 404) continue // try next model
+                    emit("Sorry, Gemini returned an error ($code): $lastError")
+                    return@flow
+                }
 
-            conn.inputStream.bufferedReader().useLines { lines ->
-                for (line in lines) {
-                    if (line.startsWith("data: ")) {
-                        val json = line.removePrefix("data: ").trim()
-                        if (json.isEmpty() || json == "[") continue
-                        try {
-                            val text = JSONObject(json)
-                                .optJSONArray("candidates")?.optJSONObject(0)
-                                ?.optJSONObject("content")?.optJSONArray("parts")
-                                ?.optJSONObject(0)?.optString("text", "") ?: ""
-                            if (text.isNotEmpty()) emit(text)
-                        } catch (e: Exception) { /* skip partial chunk */ }
+                conn.inputStream.bufferedReader().useLines { lines ->
+                    for (line in lines) {
+                        if (line.startsWith("data: ")) {
+                            val json = line.removePrefix("data: ").trim()
+                            if (json.isEmpty() || json == "[") continue
+                            try {
+                                val text = JSONObject(json)
+                                    .optJSONArray("candidates")?.optJSONObject(0)
+                                    ?.optJSONObject("content")?.optJSONArray("parts")
+                                    ?.optJSONObject(0)?.optString("text", "") ?: ""
+                                if (text.isNotEmpty()) emit(text)
+                            } catch (e: Exception) { /* skip partial chunk */ }
+                        }
                     }
                 }
+                success = true
+            } finally {
+                conn.disconnect()
             }
-        } finally {
-            conn.disconnect()
         }
+        if (!success) emit("Sorry, Gemini returned an error: $lastError")
     }.flowOn(Dispatchers.IO)
 }
