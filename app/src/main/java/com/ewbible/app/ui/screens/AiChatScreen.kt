@@ -20,10 +20,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.ui.viewmodel.ChatViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -44,9 +46,9 @@ private fun MessageBubble(
             color = if (isUser) Color.White else textColor,
             fontSize = 15.sp,
             modifier = Modifier
+                .fillMaxWidth(0.85f)
                 .background(if (isUser) gold else panel, RoundedCornerShape(12.dp))
                 .padding(10.dp)
-                .widthIn(max = 300.dp)
         )
     }
 }
@@ -88,10 +90,19 @@ fun AiChatScreen(
         }
     }
 
-    LaunchedEffect(Unit) { viewModel.loadChats() }
-
-    LaunchedEffect(state.currentChatId) {
-        if (state.currentChatId == null) viewModel.startNewChat(currentRef)
+    // ✅ FIXED: Single init - no double-chat race
+    // Old code: loadChats() + startNewChat() fired at same time = 2 empty chats
+    LaunchedEffect(Unit) {
+        viewModel.loadChats()
+        delay(350) // let loadChats() finish
+        val s = viewModel.state.value
+        if (s.currentChatId == null) {
+            if (s.chats.isNotEmpty()) {
+                viewModel.openChat(s.chats.first().id)
+            } else {
+                viewModel.startNewChat(currentRef)
+            }
+        }
     }
 
     LaunchedEffect(state.messages.size, state.isLoading) {
@@ -110,9 +121,15 @@ fun AiChatScreen(
     val gray = remember { Color.Gray }
 
     if (showHistory) {
-        ModalBottomSheet(onDismissRequest = { showHistory = false }) {
+        ModalBottomSheet(
+            onDismissRequest = { showHistory = false },
+            modifier = Modifier.navigationBarsPadding()
+        ) {
             Text("Chat History", fontWeight = FontWeight.Bold, modifier = Modifier.padding(16.dp))
-            LazyColumn(modifier = Modifier.fillMaxHeight(0.6f)) {
+            LazyColumn(
+                modifier = Modifier.fillMaxHeight(0.6f),
+                contentPadding = PaddingValues(bottom = 16.dp)
+            ) {
                 items(state.chats, key = { it.id }) { chat ->
                     Row(
                         modifier = Modifier.fillMaxWidth()
@@ -124,8 +141,8 @@ fun AiChatScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(chat.title, fontWeight = FontWeight.Bold)
-                            Text(chat.ref, fontSize = 12.sp, color = gray)
+                            Text(chat.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(chat.ref, fontSize = 12.sp, color = gray, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         IconButton(onClick = { viewModel.deleteChat(chat.id) }) { Icon(Icons.Default.Delete, null) }
                     }
@@ -134,15 +151,43 @@ fun AiChatScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(background).statusBarsPadding().navigationBarsPadding()) {
-        Row(modifier = Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose) { Icon(Icons.Default.Close, null, tint = textColor) }
-            IconButton(onClick = { showHistory = true }) { Icon(Icons.Default.History, null, tint = textColor) }
-            Text("Ask Gemini", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
-            Text(currentRef, color = gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            IconButton(onClick = { viewModel.startNewChat(currentRef) }) { Icon(Icons.Default.Add, null, tint = gold) }
+    // ✅ FIXED: Root handles system bars ONCE, input handles IME
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(background)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
+        // --- Top bar: fixed height, no wrap / overlap ---
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onClose, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Close, null, tint = textColor) }
+            IconButton(onClick = { showHistory = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.History, null, tint = textColor) }
+            Text(
+                "Ask Gemini",
+                color = textColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 18.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                currentRef,
+                color = gold,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            IconButton(onClick = { viewModel.startNewChat(currentRef) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
         }
 
+        // --- Translation chips ---
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -160,7 +205,13 @@ fun AiChatScreen(
             }
         }
 
-        LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // --- Messages: weight(1f) so input never overlaps ---
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(top = 4.dp, bottom = 8.dp)
+        ) {
             items(state.messages, key = { it.id }, contentType = { if (it.isUser) "user" else "ai" }) { msg ->
                 MessageBubble(text = msg.text, isUser = msg.isUser, textColor = textColor, gold = gold, panel = panel)
             }
@@ -169,30 +220,50 @@ fun AiChatScreen(
                     Text(
                         if (state.streamingText.isNotEmpty()) state.streamingText else "Gemini is thinking...",
                         color = textColor, fontSize = 15.sp,
-                        modifier = Modifier.background(panel, RoundedCornerShape(12.dp)).padding(10.dp)
+                        modifier = Modifier.fillMaxWidth(0.85f).background(panel, RoundedCornerShape(12.dp)).padding(10.dp)
                     )
                 }
             }
         }
 
+        // --- Image attached banner ---
         if (selectedImage != null) {
-            Row(modifier = Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text("Image attached ✓", color = gold, fontSize = 13.sp, modifier = Modifier.weight(1f))
                 TextButton(onClick = { selectedImage = null }) { Text("Remove") }
             }
         }
 
-        Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { picker.launch("image/*") }) { Icon(Icons.Default.Image, null, tint = gold) }
-            OutlinedTextField(value = input, onValueChange = { input = it }, placeholder = { Text("Ask anything...") }, modifier = Modifier.weight(1f), maxLines = 4)
-            IconButton(onClick = {
-                val q = input.trim()
-                if (q.isBlank() || state.isLoading) return@IconButton
-                viewModel.send(q, currentRef, selectedImage, selectedTranslation)
-                input = ""
-                selectedImage = null
-            }) { Icon(Icons.Default.Send, null, tint = gold) }
+        // --- Input: imePadding() is the KEY fix - keyboard pushes it up, never overlaps ---
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .imePadding()
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = { picker.launch("image/*") }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Image, null, tint = gold) }
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                placeholder = { Text("Ask anything...", maxLines = 1) },
+                modifier = Modifier.weight(1f),
+                maxLines = 4
+            )
+            IconButton(
+                onClick = {
+                    val q = input.trim()
+                    if (q.isBlank() || state.isLoading) return@IconButton
+                    viewModel.send(q, currentRef, selectedImage, selectedTranslation)
+                    input = ""
+                    selectedImage = null
+                },
+                modifier = Modifier.size(40.dp)
+            ) { Icon(Icons.Default.Send, null, tint = gold) }
         }
-        Text("Daily: ${state.dailyCount}/50 • No login needed • Verses/notes never sent", color = dimTextColor, fontSize = 11.sp, modifier = Modifier.padding(start = 12.dp, bottom = 4.dp))
+        // ❌ FOOTER REMOVED - was: "Daily: ... • No login needed..."
     }
 }
