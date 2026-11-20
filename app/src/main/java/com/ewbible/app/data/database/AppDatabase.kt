@@ -12,7 +12,9 @@ import androidx.room.RoomDatabase
         SummaryEntity::class,
         CommentaryEntity::class,
         HighlightEntity::class,
-        NoteEntity::class
+        NoteEntity::class,
+        ChatEntity::class,
+        MessageEntity::class
     ],
     version = 4,
     exportSchema = false
