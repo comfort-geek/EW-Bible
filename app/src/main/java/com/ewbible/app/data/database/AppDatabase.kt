@@ -30,8 +30,8 @@ data class SummaryEntity(
     @ColumnInfo(name = "book_id") val bookId: Int,
     val chapter: Int,
     val summary: String,
-    @ColumnInfo(name = "what_happened") val whatHappened: String? = null,
-    val application: String? = null
+    @ColumnInfo(name = "what_happened") val whatHappened: String = "",
+    val application: String = ""
 )
 
 @Entity(
