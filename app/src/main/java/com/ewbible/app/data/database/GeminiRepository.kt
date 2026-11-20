@@ -1,7 +1,12 @@
 package com.ewbible.app.data.ai
 
+import android.graphics.Bitmap
+import android.util.Base64
 import com.ewbible.app.BuildConfig
+import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -9,6 +14,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 
 class GeminiRepository {
@@ -27,7 +33,44 @@ class GeminiRepository {
         "gemini-2.0-flash"
     )
 
-    suspend fun askQuestion(question: String, context: String = ""): Result<String> =
+    // Called by ChatViewModel - returns Flow so UI can stream
+    fun askStreaming(
+        question: String,
+        currentRef: String = "",
+        history: List<MessageEntity> = emptyList(),
+        image: Bitmap? = null,
+        bibleContext: String = "",
+        translation: String = "NKJV"
+    ): Flow<String> = flow {
+        val context = buildString {
+            if (bibleContext.isNotBlank()) {
+                append("Bible context ($translation, reading $currentRef):\n")
+                append(bibleContext)
+                append("\n\n")
+            }
+            if (history.isNotEmpty()) {
+                append("Chat history:\n")
+                history.takeLast(6).forEach {
+                    append(if (it.isUser) "User: " else "AI: ")
+                    append(it.text)
+                    append("\n")
+                }
+                append("\n")
+            }
+        }
+        // Reuse askQuestion, then emit in chunks so ChatViewModel streaming works
+        val result = askQuestion(question, context, image)
+        val text = result.getOrThrow()
+        // Emit in ~100 char chunks
+        var i = 0
+        while (i < text.length) {
+            val end = minOf(i + 100, text.length)
+            emit(text.substring(i, end))
+            i = end
+        }
+    }
+
+    suspend fun askQuestion(question: String, context: String = "", image: Bitmap? = null): Result<String> =
         withContext(Dispatchers.IO) {
             if (apiKey.isBlank()) {
                 return@withContext Result.failure(
@@ -49,12 +92,21 @@ class GeminiRepository {
 
             for (model in models) {
                 try {
+                    val parts = JSONArray().put(JSONObject().put("text", prompt))
+                    if (image != null) {
+                        val stream = ByteArrayOutputStream()
+                        image.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+                        val b64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+                        parts.put(JSONObject().apply {
+                            put("inline_data", JSONObject().apply {
+                                put("mime_type", "image/jpeg")
+                                put("data", b64)
+                            })
+                        })
+                    }
+
                     val bodyJson = JSONObject().apply {
-                        put("contents", JSONArray().put(
-                            JSONObject().put("parts", JSONArray().put(
-                                JSONObject().put("text", prompt)
-                            ))
-                        ))
+                        put("contents", JSONArray().put(JSONObject().put("parts", parts)))
                         put("generationConfig", JSONObject().apply {
                             put("temperature", 0.7)
                             put("maxOutputTokens", 1024)
@@ -75,9 +127,7 @@ class GeminiRepository {
                             continue
                         }
                         val errMsg = runCatching {
-                            JSONObject(responseBody)
-                                .getJSONObject("error")
-                                .getString("message")
+                            JSONObject(responseBody).getJSONObject("error").getString("message")
                         }.getOrNull() ?: "HTTP ${response.code}: $responseBody"
                         return@withContext Result.failure(Exception(errMsg))
                     }
@@ -106,29 +156,4 @@ class GeminiRepository {
 
             Result.failure(lastError ?: Exception("Gemini failed - all models tried"))
         }
-
-    // FIXED: ChatViewModel calls askStreaming(ref = ...) - this was missing
-    // Simulates streaming by emitting the full answer in chunks
-    suspend fun askStreaming(
-        question: String,
-        context: String = "",
-        ref: String = "",
-        onChunk: (String) -> Unit
-    ): Result<String> {
-        val fullContext = if (ref.isNotBlank()) {
-            "Verse reference: $ref\n$context"
-        } else context
-
-        val result = askQuestion(question, fullContext)
-        result.onSuccess { text ->
-            // Emit in ~100 char chunks so UI types it out
-            var i = 0
-            while (i < text.length) {
-                val end = minOf(i + 100, text.length)
-                onChunk(text.substring(i, end))
-                i = end
-            }
-        }
-        return result
-    }
 }
