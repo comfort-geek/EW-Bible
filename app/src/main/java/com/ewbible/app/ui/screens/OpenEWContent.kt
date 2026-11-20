@@ -15,14 +15,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
@@ -38,6 +42,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.URLDecoder
 import java.net.URLEncoder
+import kotlin.math.abs
 
 private val DISPLAY_NAMES: List<String> = BookCatalog.allDisplayNames()
 private val BOOK_PATTERN = DISPLAY_NAMES
@@ -141,16 +146,16 @@ fun OpenEWContent(
     val htmlHash = commentaryHtml.hashCode()
     val cacheKey = "$bookName-$chapter-$htmlHash"
 
-    val goldSpanned by produceState<SpannableString?>(initialValue = parsedCache.get(cacheKey), cacheKey) {
+    val parsed by produceState<SpannableString?>(initialValue = parsedCache.get(cacheKey), cacheKey) {
         if (commentaryHtml.isBlank()) { value = null; return@produceState }
         parsedCache.get(cacheKey)?.let { value = it; return@produceState }
         value = withContext(Dispatchers.Default) {
             runCatching {
-                val parsed = HtmlCompat.fromHtml(
+                val parsedHtml = HtmlCompat.fromHtml(
                     linkifyForHtml(cleanForHtml(commentaryHtml, bookName, chapter)),
                     HtmlCompat.FROM_HTML_MODE_LEGACY, null, null
                 )
-                val spannable = parsed as? Spannable ?: SpannableString(parsed)
+                val spannable = parsedHtml as? Spannable ?: SpannableString(parsedHtml)
                 spannable.getSpans(0, spannable.length, URLSpan::class.java).forEach { span ->
                     spannable.setSpan(
                         ForegroundColorSpan(0xFFC9A227.toInt()),
@@ -165,9 +170,19 @@ fun OpenEWContent(
         }
     }
 
-    // FIXED: was if (hasError && goldSpanned == null) - error HTML parses, so Retry never showed
-    if (hasError) {
-        Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
+    // ✅ INSTANT: keep last good commentary until new one parses - never blank / never "No commentary" flash
+    var cachedSpanned by remember { mutableStateOf<SpannableString?>(null) }
+    var cachedKey by remember { mutableStateOf<String?>(null) }
+    if (parsed != null) {
+        if (cachedKey != cacheKey) {
+            cachedSpanned = parsed
+            cachedKey = cacheKey
+        }
+    }
+    val goldSpanned = cachedSpanned
+
+    if (hasError && goldSpanned == null) {
+        Column(modifier = Modifier.fillMaxSize().navigationBarsPadding().padding(18.dp)) {
             Text(
                 "Could not load commentary. Please try again.",
                 color = textColor.copy(alpha = 0.6f),
@@ -181,10 +196,12 @@ fun OpenEWContent(
         return
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().navigationBarsPadding()) {
         if (goldSpanned == null) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
-                if (!isLoading) {
+            // ✅ REMOVED flash: only show "No commentary" when truly empty + NOT loading + no cached
+            // While switching chapters, this branch is skipped because cachedSpanned is still old chapter
+            if (!isLoading && commentaryHtml.isBlank()) {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
                     Text(
                         "No commentary available for this chapter.",
                         color = textColor.copy(alpha = 0.6f),
@@ -192,21 +209,45 @@ fun OpenEWContent(
                         lineHeight = (effectiveFontSize + 8).sp
                     )
                 }
+            } else {
+                // Parsing new chapter - show nothing, keep layout stable (no blank jump)
+                Box(modifier = Modifier.weight(1f).fillMaxWidth())
             }
         } else {
             AndroidView(
                 modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds(),
                 factory = { ctx ->
                     val padPx = with(density) { 16.dp.roundToPx() }
-                    val bottomPx = with(density) { 96.dp.roundToPx() }
+                    // ✅ FIT: 120dp bottom = FAB + bottom bar + nav bar, last line never hidden
+                    val bottomPx = with(density) { 120.dp.roundToPx() }
                     val swipePx = with(density) { 80.dp.toPx() }
-                    var flingFired = false
+                    var swipeFired = false
+                    var startX = 0f
+                    var startY = 0f
                     lateinit var gestureDetector: GestureDetector
                     val textView = object : TextView(ctx) {
                         override fun onTouchEvent(event: MotionEvent): Boolean {
-                            if (event.action == MotionEvent.ACTION_DOWN) flingFired = false
+                            when (event.action) {
+                                MotionEvent.ACTION_DOWN -> {
+                                    swipeFired = false
+                                    startX = event.x
+                                    startY = event.y
+                                }
+                                MotionEvent.ACTION_MOVE -> {
+                                    // ✅ INSTANT: fire mid-drag at 80dp, don't wait for fling / lift
+                                    if (!swipeFired) {
+                                        val dx = event.x - startX
+                                        val dy = event.y - startY
+                                        if (abs(dx) > swipePx && abs(dx) > abs(dy) * 1.5f) {
+                                            swipeFired = true
+                                            if (dx < 0) currentOnNext() else currentOnPrev()
+                                            return true
+                                        }
+                                    }
+                                }
+                            }
                             gestureDetector.onTouchEvent(event)
-                            if (flingFired) return true
+                            if (swipeFired) return true
                             return super.onTouchEvent(event)
                         }
                     }.apply {
@@ -248,23 +289,6 @@ fun OpenEWContent(
                     }
                     gestureDetector = GestureDetector(ctx, object : GestureDetector.SimpleOnGestureListener() {
                         override fun onDown(e: MotionEvent): Boolean = false
-                        override fun onFling(
-                            e1: MotionEvent?, e2: MotionEvent,
-                            velocityX: Float, velocityY: Float
-                        ): Boolean {
-                            if (e1 == null) return false
-                            val dx = e2.x - e1.x
-                            val dy = e2.y - e1.y
-                            if (kotlin.math.abs(dx) > swipePx &&
-                                kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.5f &&
-                                kotlin.math.abs(velocityX) > 600
-                            ) {
-                                if (dx < 0) currentOnNext() else currentOnPrev()
-                                flingFired = true
-                                return true
-                            }
-                            return false
-                        }
                     })
                     textView
                 },
