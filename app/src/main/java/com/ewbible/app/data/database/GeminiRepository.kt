@@ -22,11 +22,10 @@ class GeminiRepository {
     private val apiKey: String
         get() = BuildConfig.GEMINI_API_KEY
 
-    // FIXED: try newest -> oldest, 404 on one model no longer kills AI Chat
+    // FIXED: 1.5 removed - too old. Only 2.5 -> 2.0
     private val models = listOf(
         "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash"
+        "gemini-2.0-flash"
     )
 
     suspend fun askQuestion(question: String, context: String = ""): Result<String> =
@@ -72,7 +71,6 @@ class GeminiRepository {
                     val responseBody = response.body?.string() ?: ""
 
                     if (!response.isSuccessful) {
-                        // 404 = model not found, try next model. Other errors = stop and show real error
                         if (response.code == 404) {
                             lastError = Exception("Model $model not found (404), trying next...")
                             continue
@@ -103,7 +101,6 @@ class GeminiRepository {
                     }
                 } catch (e: Exception) {
                     lastError = e
-                    // Network error - try next model once, then give up
                     continue
                 }
             }
