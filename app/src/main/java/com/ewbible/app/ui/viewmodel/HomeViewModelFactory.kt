@@ -9,8 +9,7 @@ import com.ewbible.app.data.preferences.AppPreferences
 class HomeViewModelFactory(
     private val dao: BibleDao,
     private val preferences: AppPreferences,
-    private val geminiRepository: GeminiRepository,
-    private val bibleDao: BibleDao
+    private val geminiRepository: GeminiRepository
 ) : ViewModelProvider.Factory {
 
     @Suppress("UNCHECKED_CAST")
@@ -20,8 +19,8 @@ class HomeViewModelFactory(
         }
         if (modelClass.isAssignableFrom(ChatViewModel::class.java)) {
             // FIXED: ChatViewModel now takes (bibleDao, geminiRepository) only
-            // ChatDao deleted - chats are in BibleDao
-            return ChatViewModel(bibleDao, geminiRepository) as T
+            // ChatDao deleted - chats are in BibleDao, dao IS the BibleDao
+            return ChatViewModel(dao, geminiRepository) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
     }
