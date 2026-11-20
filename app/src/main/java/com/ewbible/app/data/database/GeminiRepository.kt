@@ -1,7 +1,6 @@
 package com.ewbible.app.data.ai
 
 import android.graphics.Bitmap
-import android.util.Base64
 import com.ewbible.app.BuildConfig
 import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +15,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
+import android.util.Base64
 
 class GeminiRepository {
 
