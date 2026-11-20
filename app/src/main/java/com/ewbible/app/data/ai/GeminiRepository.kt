@@ -2,8 +2,8 @@ package com.ewbible.app.data.ai
 
 import android.graphics.Bitmap
 import android.util.Base64
-import android.util.Log
 import com.ewbible.app.BuildConfig
+import com.ewbible.app.CrashReporter
 import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -31,7 +31,7 @@ class GeminiRepository {
     private val apiKey: String
         get() {
             val fromBuildConfig = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
-            Log.d("Gemini", "Key check - BuildConfig length: ${fromBuildConfig.length}, Fallback length: ${FALLBACK_API_KEY.length}")
+            CrashReporter.geminiLog("Key check - BuildConfig length: ${fromBuildConfig.length}, Fallback length: ${FALLBACK_API_KEY.length}")
             return if (fromBuildConfig.isNotBlank() && fromBuildConfig != "YOUR_API_KEY_HERE") {
                 fromBuildConfig
             } else {
@@ -39,10 +39,10 @@ class GeminiRepository {
             }
         }
 
+    // Last two from table - both free, 500/day each
     private val models = listOf(
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash"
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite"
     )
 
     fun askStreaming(
@@ -75,7 +75,7 @@ class GeminiRepository {
 
             if (result.isFailure) {
                 val msg = result.exceptionOrNull()?.message ?: "Unknown Gemini error"
-                Log.e("Gemini", "askStreaming failed: $msg")
+                CrashReporter.geminiLog("askStreaming failed: $msg")
                 emit("⚠️ $msg")
                 return@flow
             }
@@ -93,7 +93,7 @@ class GeminiRepository {
                 i = end
             }
         } catch (e: Exception) {
-            Log.e("Gemini", "askStreaming crashed", e)
+            CrashReporter.geminiLog("askStreaming crashed: ${e.message}")
             emit("⚠️ Error: ${e.message}")
         }
     }
@@ -106,8 +106,6 @@ class GeminiRepository {
                 )
             }
 
-            // FIXED: Don't add "Bible context:" again - askStreaming already added
-            // "Bible context (NKJV, reading ...):" above. Was sending header twice.
             val prompt = buildString {
                 if (context.isNotBlank()) {
                     append(context)
@@ -149,17 +147,17 @@ class GeminiRepository {
 
                     val resultForModel: Result<String>? = client.newCall(request).execute().use { response ->
                         val responseBody = response.body?.string() ?: ""
-                        Log.d("Gemini", "Model $model -> HTTP ${response.code}")
+                        CrashReporter.geminiLog("Model $model -> HTTP ${response.code}")
 
                         if (!response.isSuccessful) {
                             val errMsg = runCatching {
                                 JSONObject(responseBody).getJSONObject("error").getString("message")
                             }.getOrNull() ?: "HTTP ${response.code}: $responseBody"
-                            Log.e("Gemini", "Model $model failed: $errMsg")
+                            CrashReporter.geminiLog("Model $model failed: $errMsg")
 
                             if (response.code == 404 || response.code == 429 || response.code == 503) {
-                                lastError = Exception("Model $model failed (${response.code}), trying next...")
-                                null
+                                lastError = Exception("$model failed (${response.code}): $errMsg")
+                                null // try next model
                             } else {
                                 Result.failure(Exception("Gemini Error ($model): $errMsg"))
                             }
@@ -175,10 +173,11 @@ class GeminiRepository {
                             }.getOrNull()
 
                             if (!text.isNullOrBlank()) {
+                                CrashReporter.geminiLog("Model $model success, ${text.length} chars")
                                 Result.success(text.trim())
                             } else {
                                 lastError = Exception("Empty response from $model")
-                                                           null
+                                null
                             }
                         }
                     }
@@ -186,11 +185,11 @@ class GeminiRepository {
                         return@withContext resultForModel
                     }
                 } catch (e: Exception) {
-                    Log.e("Gemini", "Model $model exception", e)
+                    CrashReporter.geminiLog("Model $model exception: ${e.message}")
                     lastError = e
                     continue
                 }
             }
-            Result.failure(lastError ?: Exception("Gemini failed - all models tried"))
+            Result.failure(lastError ?: Exception("Gemini failed - both Lite models tried, check Gemini logs in CrashReporter"))
         }
-}   
+}
