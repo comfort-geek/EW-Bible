@@ -42,8 +42,6 @@ class ChatViewModel(
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 20
     }
 
-    // Full type (general/bible/prayer/study/life...) lives in cloud + here.
-    // Local ChatEntity only has ref, so we keep type in memory and refill from cloud on load.
     private val chatTypes = mutableMapOf<Long, String>()
     private val chatContexts = mutableMapOf<Long, String>()
 
@@ -54,7 +52,6 @@ class ChatViewModel(
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
     init {
-        // Track which provider answered - Gemini or Groq
         viewModelScope.launch {
             geminiRepository.lastProvider.collect { provider ->
                 _state.update { it.copy(aiProvider = provider) }
@@ -62,7 +59,6 @@ class ChatViewModel(
         }
     }
 
-    // NEW DAO: 1 query, global across all chats. No N+1, no new-chat bypass.
     private suspend fun getGlobalTodayCount(): Int =
         runCatching { bibleDao.getTodayUserMessageCountGlobal() }.getOrDefault(0)
 
@@ -70,8 +66,6 @@ class ChatViewModel(
         viewModelScope.launch {
             val chats = bibleDao.getAllChatsSync()
             _state.update { it.copy(chats = chats) }
-            // Refill type map from cloud so type survives restart
-            // (local DB has no type column, cloud does)
             val cloud = syncManager?.getChatList()?.getOrNull() ?: return@launch
             for (c in cloud) {
                 val localId = c.chatId.toLongOrNull() ?: continue
@@ -84,11 +78,8 @@ class ChatViewModel(
         }
     }
 
-    // type: "general", "bible", "prayer", "study", "life", "devotional", etc.
-    // context: e.g. "John 3:16", "Prayer for family", "" if none
     fun startNewChat(title: String = "New Chat", type: String = "general", context: String = "", currentRef: String = "") {
         viewModelScope.launch {
-            // Local: only title + ref exist. Bible chats store ref, general chats store "".
             val ref = if (type == "bible") context.ifBlank { currentRef } else ""
             val chat = ChatEntity(title = title, ref = ref)
             val id = bibleDao.insertChat(chat)
@@ -98,7 +89,6 @@ class ChatViewModel(
                 it.copy(currentChatId = id, currentChatType = type, messages = emptyList(), streamingText = "", isLoading = false)
             }
             _state.update { it.copy(chats = listOf(chat.copy(id = id)) + it.chats) }
-            // Cloud: full type + context - uses YOUR exact signature
             syncManager?.createChat(
                 chatId = id.toString(),
                 title = title,
@@ -110,7 +100,6 @@ class ChatViewModel(
         }
     }
 
-    // Backwards compat: old call startNewChat("Genesis 1") = bible chat
     fun startNewChat(currentRef: String) {
         val type = if (currentRef.isBlank()) "general" else "bible"
         startNewChat(title = "New Chat", type = type, context = currentRef, currentRef = currentRef)
@@ -120,7 +109,6 @@ class ChatViewModel(
         viewModelScope.launch {
             val messages = bibleDao.getMessagesForChatSync(chatId)
             val todayCount = getGlobalTodayCount()
-            // Type: memory/cloud first, fallback to ref ("" = general, else bible)
             val local = _state.value.chats.find { it.id == chatId } ?: bibleDao.getChatById(chatId)
             val type = chatTypes[chatId]
                 ?: local?.let { if (it.ref.isBlank()) "general" else "bible" }
@@ -128,7 +116,6 @@ class ChatViewModel(
             _state.update {
                 it.copy(currentChatId = chatId, currentChatType = type, messages = messages, streamingText = "", dailyCount = todayCount)
             }
-            // If local has no messages but cloud does (new device), pull from cloud
             if (messages.isEmpty()) {
                 val cloudMsgs = syncManager?.getMessages(chatId.toString())?.getOrNull() ?: return@launch
                 if (cloudMsgs.isNotEmpty()) {
@@ -164,7 +151,6 @@ class ChatViewModel(
             val updated = chat.copy(title = newTitle)
             bibleDao.updateChat(updated)
             _state.update { it.copy(chats = it.chats.map { c -> if (c.id == chatId) updated else c }) }
-            // Keep cloud title in sync
             syncManager?.createChat(
                 chatId = chatId.toString(),
                 title = newTitle,
@@ -192,18 +178,16 @@ class ChatViewModel(
     private fun doSend(chatId: Long, question: String, currentRef: String, image: Bitmap?, translation: String, todayCount: Int) {
         sendJob?.cancel()
         sendJob = viewModelScope.launch {
-            // FIX: history BEFORE adding userMsg - avoids sending question twice
             val historySnapshot = _state.value.messages
             val chatType = _state.value.currentChatType
             val chatContext = chatContexts[chatId] ?: currentRef
 
-            // Local: only chatId/text/isUser/timestamp. Image NOT stored - MessageEntity has no image field.
             val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
             val userId = bibleDao.insertMessage(userMsg)
+            // FIXED: removed aiProvider = "Gemini" - lastProvider.collect in init() sets the real provider
             _state.update {
-                it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount, aiProvider = "Gemini")
+                it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
             }
-            // Cloud: uses YOUR exact CloudMessage fields
             syncManager?.uploadMessage(
                 chatId.toString(),
                 CloudMessage(
@@ -219,7 +203,6 @@ class ChatViewModel(
                 )
             )
 
-            // FIX: general chat = NO bible context. Only bible/study/prayer get it.
             val bibleContext = if (chatType == "bible" || chatType == "study" || chatType == "prayer") {
                 buildBibleContext(question, currentRef)
             } else {
@@ -260,7 +243,6 @@ class ChatViewModel(
                     dailyCount = todayCount + 1
                 )
             }
-            // Cloud: AI message
             syncManager?.uploadMessage(
                 chatId.toString(),
                 CloudMessage(
