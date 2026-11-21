@@ -7,6 +7,9 @@ import com.ewbible.app.CrashReporter
 import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -25,6 +28,12 @@ class AiRepository {
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
+
+    // --- Provider tracking for UI ---
+    // Gemini = default, Groq = fallback
+    // UI shows "Gemini is thinking..." or "Groq is connecting..."
+    private val _lastProvider = MutableStateFlow("Gemini")
+    val lastProvider: StateFlow<String> = _lastProvider.asStateFlow()
 
     private val geminiKey: String
         get() {
@@ -118,8 +127,9 @@ class AiRepository {
                 append(question)
             }
 
-            // --- 1. Try Gemini ---
+            // --- 1. Try Gemini FIRST ---
             if (geminiKey.isNotBlank() && geminiKey != "YOUR_API_KEY_HERE") {
+                _lastProvider.value = "Gemini"
                 for (model in geminiModels) {
                     val r = tryGemini(model, prompt, image)
                     if (r.isSuccess) return@withContext r
@@ -131,6 +141,8 @@ class AiRepository {
 
             // --- 2. Fallback to Groq ---
             if (groqKey.isNotBlank() && groqKey != "YOUR_API_KEY_HERE") {
+                // Set early so UI shows "Groq is connecting..." while Groq is working
+                _lastProvider.value = "Groq"
                 val r = tryGroq(prompt, image)
                 if (r.isSuccess) return@withContext r
                 CrashReporter.geminiLog("Groq failed: ${r.exceptionOrNull()?.message}")
@@ -185,7 +197,10 @@ class AiRepository {
                             .getJSONObject("content").getJSONArray("parts")
                             .getJSONObject(0).getString("text")
                     }.getOrNull()
-                    if (!text.isNullOrBlank()) Result.success(text.trim())
+                    if (!text.isNullOrBlank()) {
+                        _lastProvider.value = "Gemini"
+                        Result.success(text.trim())
+                    }
                     else Result.failure(Exception("Empty response from $model"))
                 }
             }
@@ -247,6 +262,7 @@ class AiRepository {
                             .getJSONObject("message").getString("content")
                     }.getOrNull()
                     if (!text.isNullOrBlank()) {
+                        _lastProvider.value = "Groq"
                         CrashReporter.geminiLog("Groq success, ${text.length} chars")
                         Result.success(text.trim())
                     } else Result.failure(Exception("Empty response from Groq"))
