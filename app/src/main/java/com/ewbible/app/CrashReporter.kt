@@ -24,9 +24,11 @@ object CrashReporter {
     private const val BREADCRUMB_FILE = "breadcrumbs.txt"
     private const val STATE_FILE = "last_state.txt"
     private const val GEMINI_FILE = "gemini_logs.txt"
+    private const val GROQ_FILE = "groq_logs.txt"
     private const val MAX_BREADCRUMBS = 100
     private const val MAX_HISTORY = 10
     private const val MAX_GEMINI_LOGS = 200
+    private const val MAX_GROQ_LOGS = 200
 
     @Volatile var lastState: String = "unknown"
     @Volatile var lastBook: String = ""
@@ -49,11 +51,17 @@ object CrashReporter {
     private val breadcrumbLock = Any()
     private val breadcrumbDeque = ArrayDeque<String>(MAX_BREADCRUMBS)
 
-    // --- NEW: Gemini logs, same pattern as breadcrumbs ---
+    // --- Gemini logs, same pattern as breadcrumbs ---
     private val geminiLock = Any()
     private val geminiDeque = ArrayDeque<String>(MAX_GEMINI_LOGS)
     private val _geminiLogsFlow = MutableStateFlow<List<String>>(emptyList())
     val geminiLogsFlow: StateFlow<List<String>> = _geminiLogsFlow
+
+    // --- NEW: Groq logs, same pattern as Gemini ---
+    private val groqLock = Any()
+    private val groqDeque = ArrayDeque<String>(MAX_GROQ_LOGS)
+    private val _groqLogsFlow = MutableStateFlow<List<String>>(emptyList())
+    val groqLogsFlow: StateFlow<List<String>> = _groqLogsFlow
 
     private fun snapshotBreadcrumbs(): List<String> = synchronized(breadcrumbLock) {
         breadcrumbDeque.toList()
@@ -61,6 +69,10 @@ object CrashReporter {
 
     private fun snapshotGeminiLogs(): List<String> = synchronized(geminiLock) {
         geminiDeque.toList()
+    }
+
+    private fun snapshotGroqLogs(): List<String> = synchronized(groqLock) {
+        groqDeque.toList()
     }
 
     fun breadcrumb(context: Context, message: String) {
@@ -84,18 +96,17 @@ object CrashReporter {
         appContext?.let { breadcrumb(it, message) }
     }
 
-    // --- NEW: Use this from GeminiRepository instead of Log.d ---
+    // --- Use this from AiRepository Gemini path instead of Log.d ---
     fun geminiLog(message: String) {
         try {
             val time = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
             val line = "[$time] $message"
-            Log.d("Gemini", message) // still goes to Android Studio Logcat
+            Log.d("Gemini", message)
             synchronized(geminiLock) {
                 geminiDeque.addLast(line)
                 while (geminiDeque.size > MAX_GEMINI_LOGS) geminiDeque.removeFirst()
                 _geminiLogsFlow.value = geminiDeque.toList()
             }
-            // Also add to breadcrumbs so it appears in crash reports
             breadcrumb("GEMINI: $message")
             val ctx = appContext
             if (ctx != null) {
@@ -113,8 +124,40 @@ object CrashReporter {
         geminiLog(message)
     }
 
+    // --- NEW: Use this from AiRepository Groq path ---
+    fun groqLog(message: String) {
+        try {
+            val time = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+            val line = "[$time] $message"
+            Log.d("Groq", message)
+            synchronized(groqLock) {
+                groqDeque.addLast(line)
+                while (groqDeque.size > MAX_GROQ_LOGS) groqDeque.removeFirst()
+                _groqLogsFlow.value = groqDeque.toList()
+            }
+            breadcrumb("GROQ: $message")
+            val ctx = appContext
+            if (ctx != null) {
+                ioExecutor.execute {
+                    try {
+                        ctx.filesDir.resolve(GROQ_FILE).writeText(snapshotGroqLogs().joinToString("\n"))
+                    } catch (_: Exception) { }
+                }
+            }
+        } catch (_: Exception) { }
+    }
+
+    fun groqLog(context: Context, message: String) {
+        appContext = context.applicationContext
+        groqLog(message)
+    }
+
+    // Generic AI log - routes to correct file
+    fun aiLog(provider: String, message: String) {
+        if (provider.equals("Groq", ignoreCase = true)) groqLog(message) else geminiLog(message)
+    }
+
     fun getGeminiLogs(context: Context): String? {
-        // Prefer in-memory first
         val mem = snapshotGeminiLogs()
         if (mem.isNotEmpty()) return mem.joinToString("\n")
         val file = context.filesDir.resolve(GEMINI_FILE)
@@ -129,6 +172,29 @@ object CrashReporter {
         ioExecutor.execute {
             try { context.filesDir.resolve(GEMINI_FILE).delete() } catch (_: Exception) { }
         }
+    }
+
+    fun getGroqLogs(context: Context): String? {
+        val mem = snapshotGroqLogs()
+        if (mem.isNotEmpty()) return mem.joinToString("\n")
+        val file = context.filesDir.resolve(GROQ_FILE)
+        return if (file.exists()) file.readText() else null
+    }
+
+    fun clearGroqLogs(context: Context) {
+        synchronized(groqLock) {
+            groqDeque.clear()
+            _groqLogsFlow.value = emptyList()
+        }
+        ioExecutor.execute {
+            try { context.filesDir.resolve(GROQ_FILE).delete() } catch (_: Exception) { }
+        }
+    }
+
+    fun getAiLogs(context: Context): String {
+        val g = getGeminiLogs(context) ?: "(no Gemini calls yet)"
+        val q = getGroqLogs(context) ?: "(no Groq calls yet)"
+        return "=== GEMINI ===\n$g\n\n=== GROQ ===\n$q"
     }
 
     fun setState(context: Context, book: String, chapter: Int, tab: String, verse: Int = -1) {
@@ -173,6 +239,16 @@ object CrashReporter {
                         geminiDeque.clear()
                         geminiDeque.addAll(glines)
                         _geminiLogsFlow.value = geminiDeque.toList()
+                    }
+                }
+                // Restore Groq logs too
+                val q = appCtx.filesDir.resolve(GROQ_FILE)
+                if (q.exists()) {
+                    val qlines = q.readLines().takeLast(MAX_GROQ_LOGS)
+                    synchronized(groqLock) {
+                        groqDeque.clear()
+                        groqDeque.addAll(qlines)
+                        _groqLogsFlow.value = groqDeque.toList()
                     }
                 }
                 val stateFile = appCtx.filesDir.resolve(STATE_FILE)
@@ -279,13 +355,17 @@ object CrashReporter {
     }
 
     fun clearAll(context: Context) {
-        listOf(FILE_NAME, HISTORY_FILE, "last_nonfatal.txt", BREADCRUMB_FILE, STATE_FILE, "last_logcat.txt", GEMINI_FILE).forEach {
+        listOf(FILE_NAME, HISTORY_FILE, "last_nonfatal.txt", BREADCRUMB_FILE, STATE_FILE, "last_logcat.txt", GEMINI_FILE, GROQ_FILE).forEach {
             try { context.filesDir.resolve(it).delete() } catch (_: Exception) { }
         }
         synchronized(breadcrumbLock) { breadcrumbDeque.clear() }
         synchronized(geminiLock) {
             geminiDeque.clear()
             _geminiLogsFlow.value = emptyList()
+        }
+        synchronized(groqLock) {
+            groqDeque.clear()
+            _groqLogsFlow.value = emptyList()
         }
         lastState = "unknown"
     }
@@ -344,11 +424,16 @@ object CrashReporter {
         else sb.append("(none)\n")
         sb.append("\n")
 
-        // --- NEW: Gemini logs in crash report ---
         sb.append("=== GEMINI LOGS (last 200) ===\n")
         val gLogs = snapshotGeminiLogs()
         if (gLogs.isNotEmpty()) sb.append(gLogs.joinToString("\n")).append("\n")
         else sb.append("(no Gemini calls yet)\n")
+        sb.append("\n")
+
+        sb.append("=== GROQ LOGS (last 200) ===\n")
+        val qLogs = snapshotGroqLogs()
+        if (qLogs.isNotEmpty()) sb.append(qLogs.joinToString("\n")).append("\n")
+        else sb.append("(no Groq calls yet)\n")
         sb.append("\n")
 
         sb.append("=== STACK TRACE ===\n")
