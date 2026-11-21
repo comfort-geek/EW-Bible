@@ -230,7 +230,7 @@ fun SearchContent(
         } else {
             // ✅ Empty state - was blank before, now tells user what to do
             Text(
-                "Type a word to Search",
+                "Type a word to Search the Bible",
                 color = hintColor,
                 fontSize = 14.sp,
                 lineHeight = 20.sp,
