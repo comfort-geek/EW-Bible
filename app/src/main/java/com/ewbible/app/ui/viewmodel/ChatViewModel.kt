@@ -184,7 +184,6 @@ class ChatViewModel(
 
             val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
             val userId = bibleDao.insertMessage(userMsg)
-            // FIXED: removed aiProvider = "Gemini" - lastProvider.collect in init() sets the real provider
             _state.update {
                 it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
             }
@@ -286,7 +285,10 @@ class ChatViewModel(
                 .joinToString("\n") { "${it.verse}. ${it.text}" }
             val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
             val compressed = bibleDao.getCommentaryCompressed(bookId, chapter)
-            val commentary = CommentaryHelper.cleanCached(bookId, chapter, compressed).take(3000)
+            // FIXED: cleanCached does not exist - use decompress() like HomeViewModel does
+            val commentary = runCatching {
+                if (compressed.isNullOrEmpty()) "" else CommentaryHelper.decompress(compressed)
+            }.getOrDefault("").take(3000)
             val result = "USER IS READING $bookName $chapter (NKJV):\n$chapterText\n\nSUMMARY: $summary\nCOMMENTARY: $commentary\n"
             contextCache[cacheKey] = result
             result
