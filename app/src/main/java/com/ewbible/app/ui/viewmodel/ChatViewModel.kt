@@ -3,7 +3,7 @@ package com.ewbible.app.ui.viewmodel
 import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ewbible.app.data.ai.GeminiRepository
+import com.ewbible.app.data.ai.AiRepository
 import com.ewbible.app.data.database.BibleDao
 import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.database.ChatEntity
@@ -31,7 +31,7 @@ data class ChatState(
 
 class ChatViewModel(
     private val bibleDao: BibleDao,
-    private val geminiRepository: GeminiRepository,
+    private val geminiRepository: AiRepository,
     private val syncManager: SyncManager? = null
 ) : ViewModel() {
 
