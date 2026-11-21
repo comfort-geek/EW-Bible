@@ -164,17 +164,13 @@ class ChatViewModel(
         }
     }
 
-    // FIXED: single launch, no double-launch race
+    // FREE $0: No hard daily limit - provider quota handles it
     fun send(question: String, currentRef: String, image: Bitmap?, translation: String = "NKJV") {
         val chatId = _state.value.currentChatId ?: return
         if (_state.value.isLoading) return
         sendJob?.cancel()
         sendJob = viewModelScope.launch {
             val todayCount = getGlobalTodayCount()
-            if (todayCount >= 50) {
-                _state.update { it.copy(error = "Daily limit reached (50/50)", dailyCount = todayCount) }
-                return@launch
-            }
             doSend(chatId, question, currentRef, image, translation, todayCount)
         }
     }
@@ -232,7 +228,13 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e // FIXED: cancel is not an error, don't show "Failed"
         } catch (e: Exception) {
-            _state.update { it.copy(isLoading = false, streamingText = "", error = "Failed: ${e.message}") }
+            val msg = e.message ?: ""
+            val friendly = if (msg.contains("429") || msg.contains("quota", ignoreCase = true) || msg.contains("Rate limit", ignoreCase = true) || msg.contains("rate limit", ignoreCase = true)) {
+                "Free AI limit reached for today. Please try again tomorrow - it resets at midnight."
+            } else {
+                "Failed: ${e.message}"
+            }
+            _state.update { it.copy(isLoading = false, streamingText = "", error = friendly) }
             return
         }
 
