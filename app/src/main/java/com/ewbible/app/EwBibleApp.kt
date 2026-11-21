@@ -7,5 +7,6 @@ class EwBibleApp : Application() {
         super.onCreate()
         CrashReporter.init(this)
         CrashReporter.breadcrumb(this, "EwBibleApp.onCreate")
+        registerActivityLifecycleCallbacks(CrashActivityTracker(this))
     }
 }
