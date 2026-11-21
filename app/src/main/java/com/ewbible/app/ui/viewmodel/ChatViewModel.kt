@@ -286,7 +286,7 @@ class ChatViewModel(
             val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
             val compressed = bibleDao.getCommentaryCompressed(bookId, chapter)
             val commentary = runCatching {
-                if (compressed.isEmpty()) "" else CommentaryHelper.decompress(compressed)
+                compressed?.let { CommentaryHelper.decompress(it) } ?: ""
             }.getOrDefault("").take(3000)
             val result = "USER IS READING $bookName $chapter (NKJV):\n$chapterText\n\nSUMMARY: $summary\nCOMMENTARY: $commentary\n"
             contextCache[cacheKey] = result
