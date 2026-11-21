@@ -11,6 +11,7 @@ import com.ewbible.app.data.database.CommentaryHelper
 import com.ewbible.app.data.database.MessageEntity
 import com.ewbible.app.data.sync.CloudMessage
 import com.ewbible.app.data.sync.SyncManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,7 +37,8 @@ class ChatViewModel(
     private val syncManager: SyncManager? = null
 ) : ViewModel() {
 
-    private val VERSE_REGEX = Regex("""([1-3]?\s?[A-Za-z]+)\s+(\d+):(\d+)""")
+    // FIXED: matches multi-word books - Song of Solomon 2:7, 1 Corinthians 13:4, 1 John 3:16
+    private val VERSE_REGEX = Regex("""((?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s+(\d+):(\d+)""")
 
     private val contextCache = object : LinkedHashMap<String, String>(20, 0.75f, true) {
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 20
@@ -162,10 +164,12 @@ class ChatViewModel(
         }
     }
 
+    // FIXED: single launch, no double-launch race
     fun send(question: String, currentRef: String, image: Bitmap?, translation: String = "NKJV") {
         val chatId = _state.value.currentChatId ?: return
         if (_state.value.isLoading) return
-        viewModelScope.launch {
+        sendJob?.cancel()
+        sendJob = viewModelScope.launch {
             val todayCount = getGlobalTodayCount()
             if (todayCount >= 50) {
                 _state.update { it.copy(error = "Daily limit reached (50/50)", dailyCount = todayCount) }
@@ -175,88 +179,88 @@ class ChatViewModel(
         }
     }
 
-    private fun doSend(chatId: Long, question: String, currentRef: String, image: Bitmap?, translation: String, todayCount: Int) {
-        sendJob?.cancel()
-        sendJob = viewModelScope.launch {
-            val historySnapshot = _state.value.messages
-            val chatType = _state.value.currentChatType
-            val chatContext = chatContexts[chatId] ?: currentRef
+    // FIXED: suspend only - does NOT launch its own job
+    private suspend fun doSend(chatId: Long, question: String, currentRef: String, image: Bitmap?, translation: String, todayCount: Int) {
+        val historySnapshot = _state.value.messages
+        val chatType = _state.value.currentChatType
+        val chatContext = chatContexts[chatId] ?: currentRef
 
-            val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
-            val userId = bibleDao.insertMessage(userMsg)
-            _state.update {
-                it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
-            }
-            syncManager?.uploadMessage(
-                chatId.toString(),
-                CloudMessage(
-                    messageId = userId.toString(),
-                    chatId = chatId.toString(),
-                    role = "user",
-                    type = if (image != null) "image" else "text",
-                    text = question,
-                    context = chatContext,
-                    bibleRef = if (chatType == "bible") chatContext else "",
-                    imageUrl = "",
-                    timestamp = userMsg.timestamp
-                )
+        val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
+        val userId = bibleDao.insertMessage(userMsg)
+        _state.update {
+            it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
+        }
+        syncManager?.uploadMessage(
+            chatId.toString(),
+            CloudMessage(
+                messageId = userId.toString(),
+                chatId = chatId.toString(),
+                role = "user",
+                type = if (image != null) "image" else "text",
+                text = question,
+                context = chatContext,
+                bibleRef = if (chatType == "bible") chatContext else "",
+                imageUrl = "",
+                timestamp = userMsg.timestamp
             )
+        )
 
-            val bibleContext = if (chatType == "bible" || chatType == "study" || chatType == "prayer") {
-                buildBibleContext(question, currentRef)
-            } else {
-                ""
-            }
+        val bibleContext = if (chatType == "bible" || chatType == "study" || chatType == "prayer") {
+            buildBibleContext(question, currentRef)
+        } else {
+            ""
+        }
 
-            val fullAnswer = StringBuilder(2000)
-            lastStreamEmit = System.currentTimeMillis()
-            try {
-                geminiRepository.askStreaming(
-                    question = question,
-                    currentRef = currentRef,
-                    history = historySnapshot,
-                    image = image,
-                    bibleContext = bibleContext,
-                    translation = translation
-                ).collect { chunk ->
-                    fullAnswer.append(chunk)
-                    val now = System.currentTimeMillis()
-                    if (now - lastStreamEmit >= 120) {
-                        lastStreamEmit = now
-                        _state.update { it.copy(streamingText = fullAnswer.toString()) }
-                    }
+        val fullAnswer = StringBuilder(2000)
+        lastStreamEmit = System.currentTimeMillis()
+        try {
+            geminiRepository.askStreaming(
+                question = question,
+                currentRef = currentRef,
+                history = historySnapshot,
+                image = image,
+                bibleContext = bibleContext,
+                translation = translation
+            ).collect { chunk ->
+                fullAnswer.append(chunk)
+                val now = System.currentTimeMillis()
+                if (now - lastStreamEmit >= 120) {
+                    lastStreamEmit = now
+                    _state.update { it.copy(streamingText = fullAnswer.toString()) }
                 }
-            } catch (e: Exception) {
-                _state.update { it.copy(isLoading = false, streamingText = "", error = "Failed: ${e.message}") }
-                return@launch
             }
+        } catch (e: CancellationException) {
+            throw e // FIXED: cancel is not an error, don't show "Failed"
+        } catch (e: Exception) {
+            _state.update { it.copy(isLoading = false, streamingText = "", error = "Failed: ${e.message}") }
+            return
+        }
 
-            val answerText = fullAnswer.toString().ifBlank { "Sorry, I couldn't answer that." }
-            val aiMsg = MessageEntity(chatId = chatId, text = answerText, isUser = false)
-            val aiId = bibleDao.insertMessage(aiMsg)
-            _state.update {
-                it.copy(
-                    messages = it.messages + aiMsg.copy(id = aiId),
-                    isLoading = false,
-                    streamingText = "",
-                    dailyCount = todayCount + 1
-                )
-            }
-            syncManager?.uploadMessage(
-                chatId.toString(),
-                CloudMessage(
-                    messageId = aiId.toString(),
-                    chatId = chatId.toString(),
-                    role = "ai",
-                    type = "text",
-                    text = answerText,
-                    context = chatContext,
-                    bibleRef = if (chatType == "bible") chatContext else "",
-                    imageUrl = "",
-                    timestamp = aiMsg.timestamp
-                )
+        val answerText = fullAnswer.toString().ifBlank { "Sorry, I couldn't answer that." }
+        val aiMsg = MessageEntity(chatId = chatId, text = answerText, isUser = false)
+        val aiId = bibleDao.insertMessage(aiMsg)
+        _state.update {
+            it.copy(
+                messages = it.messages + aiMsg.copy(id = aiId),
+                isLoading = false,
+                streamingText = "",
+                dailyCount = todayCount + 1
             )
         }
+        syncManager?.uploadMessage(
+            chatId.toString(),
+            CloudMessage(
+                messageId = aiId.toString(),
+                chatId = chatId.toString(),
+                role = "ai",
+                type = "text",
+                text = answerText,
+                context = chatContext,
+                bibleRef = if (chatType == "bible") chatContext else "",
+                imageUrl = "",
+                timestamp = aiMsg.timestamp
+            )
+        )
     }
 
     private suspend fun buildBibleContext(question: String, currentRef: String): String {
