@@ -26,7 +26,8 @@ data class ChatState(
     val isLoading: Boolean = false,
     val streamingText: String = "",
     val dailyCount: Int = 0,
-    val error: String? = null
+    val error: String? = null,
+    val aiProvider: String = "Gemini"
 )
 
 class ChatViewModel(
@@ -51,6 +52,15 @@ class ChatViewModel(
 
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
+
+    init {
+        // Track which provider answered - Gemini or Groq
+        viewModelScope.launch {
+            geminiRepository.lastProvider.collect { provider ->
+                _state.update { it.copy(aiProvider = provider) }
+            }
+        }
+    }
 
     // NEW DAO: 1 query, global across all chats. No N+1, no new-chat bypass.
     private suspend fun getGlobalTodayCount(): Int =
@@ -191,7 +201,7 @@ class ChatViewModel(
             val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
             val userId = bibleDao.insertMessage(userMsg)
             _state.update {
-                it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
+                it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount, aiProvider = "Gemini")
             }
             // Cloud: uses YOUR exact CloudMessage fields
             syncManager?.uploadMessage(
