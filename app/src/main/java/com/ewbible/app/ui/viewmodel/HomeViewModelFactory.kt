@@ -10,7 +10,7 @@ import com.ewbible.app.data.sync.SyncManager
 class HomeViewModelFactory(
     private val dao: BibleDao,
     private val preferences: AppPreferences,
-    private val geminiRepository: GeminiRepository,
+    private val geminiRepository: AiRepository,
     private val syncManager: SyncManager? = null
 ) : ViewModelProvider.Factory {
 
