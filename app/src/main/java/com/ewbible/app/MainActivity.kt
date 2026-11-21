@@ -14,6 +14,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ewbible.app.data.ai.GeminiRepository
 import com.ewbible.app.data.database.AppDatabase
@@ -30,7 +32,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // ✅ FIXED: init() already ran in EwBibleApp - don't init twice
+        // FIXED: init() already ran in EwBibleApp - don't init twice
         CrashReporter.breadcrumb(this, "MainActivity.onCreate")
 
         // Read crash ONCE before setContent
@@ -77,20 +79,37 @@ class MainActivity : ComponentActivity() {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                // ✅ FIXED: Share -> Copy
+                                // FIXED: Share -> Copy
                                 text = "Database failed to open.\n\n$dbError\n\nTake a screenshot, or copy this from the crash report.",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
                     } else if (dao != null) {
-                        val factory = HomeViewModelFactory(
-                            dao = dao,
-                            preferences = preferences,
-                            geminiRepository = geminiRepository,
-                            syncManager = syncManager
-                        )
-                        val homeViewModel: HomeViewModel = viewModel(factory = factory)
-                        val chatViewModel: ChatViewModel = viewModel(factory = factory)
+                        val homeFactory = remember(dao) {
+                            HomeViewModelFactory(
+                                dao = dao,
+                                preferences = preferences,
+                                geminiRepository = geminiRepository,
+                                syncManager = syncManager
+                            )
+                        }
+                        // FIXED: Separate factory for ChatViewModel.
+                        // Old code used the same HomeViewModelFactory for both,
+                        // which crashes if factory only knows HomeViewModel.
+                        val chatFactory = remember(geminiRepository) {
+                            object : ViewModelProvider.Factory {
+                                @Suppress("UNCHECKED_CAST")
+                                override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                                    if (modelClass.isAssignableFrom(ChatViewModel::class.java)) {
+                                        return ChatViewModel(geminiRepository) as T
+                                    }
+                                    throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+                                }
+                            }
+                        }
+
+                        val homeViewModel: HomeViewModel = viewModel(factory = homeFactory)
+                        val chatViewModel: ChatViewModel = viewModel(factory = chatFactory)
 
                         HomeScreen(
                             viewModel = homeViewModel,
@@ -101,10 +120,10 @@ class MainActivity : ComponentActivity() {
                     if (showCrashDialog) {
                         CrashReportDialog(
                             crashText = crashText,
-                            // ✅ FIXED: onShare + shareCrashText() -> onCopy (copies full report)
+                            // FIXED: onShare + shareCrashText() -> onCopy (copies full report)
                             onCopy = { /* CrashReportDialog already copies to clipboard */ },
                             onClear = {
-                                CrashReporter.clear(this@MainActivity)
+                                // FIXED: clearAll() already clears everything, no need for clear() too
                                 CrashReporter.clearAll(this@MainActivity)
                                 showCrashDialog = false
                             },
