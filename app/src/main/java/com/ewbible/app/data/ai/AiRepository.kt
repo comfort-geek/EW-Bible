@@ -32,6 +32,11 @@ class AiRepository {
     private val groqKey: String
         get() = try { BuildConfig.GROQ_API_KEY } catch (_: Exception) { "" }
 
+    // --- FREE $0 MODELS ---
+    // Primary: Gemini 3.8 Flash - free, modern, images ✅
+    // Fallback: Groq Llama-4 Scout - free, modern, images ✅
+    // Old models removed: gemini-1.5-flash, llama-3.3-70b-versatile (both dead for free)
+
     // --- Public API used by ChatViewModel ---
     fun askStreaming(
         question: String,
@@ -74,9 +79,8 @@ class AiRepository {
 
         // --- 2. Fallback to Groq ---
         if (groqKey.isNotBlank()) {
-            // FIXED: don't set provider to Groq until it actually succeeds
             CrashReporter.groqLog("Groq trying - Gemini failed: $geminiError")
-            val groqResult = tryGroq(prompt)
+            val groqResult = tryGroq(prompt, image)
             if (groqResult.isSuccess) {
                 val text = groqResult.getOrNull()
                 if (!text.isNullOrBlank()) {
@@ -87,6 +91,11 @@ class AiRepository {
             }
             val groqError = groqResult.exceptionOrNull()?.message ?: "Groq empty"
             CrashReporter.groqLog("Groq failed: $groqError")
+
+            // Both free tiers hit - friendly message
+            if (geminiError.contains("429") && groqError.contains("429")) {
+                return Result.failure(Exception("Free daily limit reached for today. Please try again tomorrow - it's free, so we share a daily limit."))
+            }
             return Result.failure(Exception("Gemini: $geminiError | Groq: $groqError"))
         }
 
@@ -110,7 +119,6 @@ class AiRepository {
         if (history.isNotEmpty()) {
             sb.append("CONVERSATION HISTORY (last 6):\n")
             history.takeLast(6).forEach {
-                // FIXED: truncate each message so prompt doesn't blow up tokens
                 sb.append(if (it.isUser) "User: " else "Assistant: ").append(it.text.take(800)).append("\n")
             }
             sb.append("\n")
@@ -119,12 +127,23 @@ class AiRepository {
         return sb.toString()
     }
 
-    // --- Gemini ---
+    private fun bitmapToBase64(image: Bitmap?): String? {
+        if (image == null) return null
+        return try {
+            val bytes = ByteArrayOutputStream().use { out ->
+                image.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                out.toByteArray()
+            }
+            android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        } catch (_: Exception) { null }
+    }
+
+    // --- Gemini - FREE gemini-3.8-flash ---
     private suspend fun tryGemini(prompt: String, image: Bitmap?): Result<String> = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
             if (geminiKey.isBlank()) return@withContext Result.failure(Exception("No Gemini API key"))
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$geminiKey")
+            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=$geminiKey")
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
@@ -134,12 +153,8 @@ class AiRepository {
             }
             val parts = JSONArray()
             parts.put(JSONObject().put("text", prompt))
-            if (image != null) {
-                val bytes = ByteArrayOutputStream().use { out ->
-                    image.compress(Bitmap.CompressFormat.JPEG, 80, out)
-                    out.toByteArray()
-                }
-                val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            val base64 = bitmapToBase64(image)
+            if (base64 != null) {
                 parts.put(
                     JSONObject().put(
                         "inlineData", JSONObject()
@@ -168,18 +183,17 @@ class AiRepository {
             if (text.isNullOrBlank()) Result.failure(Exception("Gemini empty response"))
             else Result.success(text)
         } catch (e: CancellationException) {
-            throw e // FIXED: cancel is not an error, don't fall back to Groq on cancel
+            throw e
         } catch (e: Exception) {
             CrashReporter.geminiLog("Gemini exception: ${e.message}")
             Result.failure(e)
         } finally {
-            // FIXED: always close connection, no socket leak
             runCatching { conn?.disconnect() }
         }
     }
 
-    // --- Groq ---
-    private suspend fun tryGroq(prompt: String): Result<String> = withContext(Dispatchers.IO) {
+    // --- Groq - FREE llama-4-scout (vision) ---
+    private suspend fun tryGroq(prompt: String, image: Bitmap?): Result<String> = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
             if (groqKey.isBlank()) return@withContext Result.failure(Exception("No Groq API key"))
@@ -192,14 +206,26 @@ class AiRepository {
                 readTimeout = 60000
                 doOutput = true
             }
+
+            // Groq OpenAI format - text + image as content array
+            val userContent = JSONArray()
+            userContent.put(JSONObject().put("type", "text").put("text", prompt))
+            val base64 = bitmapToBase64(image)
+            if (base64 != null) {
+                userContent.put(
+                    JSONObject().put("type", "image_url")
+                        .put("image_url", JSONObject().put("url", "data:image/jpeg;base64,$base64"))
+                )
+            }
+
             val body = JSONObject()
-                .put("model", "llama-3.3-70b-versatile")
+                .put("model", "meta-llama/llama-4-scout-17b-16e-instruct")
                 .put("temperature", 0.7)
                 .put("max_tokens", 1500)
                 .put(
                     "messages", JSONArray()
                         .put(JSONObject().put("role", "system").put("content", "You are a helpful Bible assistant. Answer clearly, warmly, and biblically."))
-                        .put(JSONObject().put("role", "user").put("content", prompt))
+                        .put(JSONObject().put("role", "user").put("content", userContent))
                 )
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
@@ -217,12 +243,11 @@ class AiRepository {
             if (text.isNullOrBlank()) Result.failure(Exception("Groq empty response"))
             else Result.success(text)
         } catch (e: CancellationException) {
-            throw e // FIXED: cancel is not an error
+            throw e
         } catch (e: Exception) {
             CrashReporter.groqLog("Groq exception: ${e.message}")
             Result.failure(e)
         } finally {
-            // FIXED: always close connection, no socket leak
             runCatching { conn?.disconnect() }
         }
     }
