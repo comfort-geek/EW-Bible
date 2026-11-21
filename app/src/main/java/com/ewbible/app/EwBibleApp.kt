@@ -7,6 +7,7 @@ class EwBibleApp : Application() {
         super.onCreate()
         CrashReporter.init(this)
         CrashReporter.breadcrumb(this, "EwBibleApp.onCreate")
-        registerActivityLifecycleCallbacks(CrashActivityTracker(this))
+        // REMOVED: CrashReporter.init() already registers CrashActivityTracker
+        // Don't register it again here or you'll get double breadcrumbs
     }
 }
