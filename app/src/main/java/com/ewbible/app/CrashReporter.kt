@@ -1,10 +1,8 @@
 package com.ewbible.app
 
-import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.os.Build
-import android.os.Bundle
 import android.os.Debug
 import android.os.Looper
 import android.os.Process
@@ -379,8 +377,6 @@ object CrashReporter {
         val appCtx = context.applicationContext
         appContext = appCtx
 
-        // Catch main-thread disk/network, leaked SQLite cursors, etc. early.
-        // Safe on release too: penaltyLog only, no crash.
         try {
             StrictMode.setThreadPolicy(
                 StrictMode.ThreadPolicy.Builder()
@@ -440,7 +436,6 @@ object CrashReporter {
         val oldHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
-                // Write synchronously: process may die right after this.
                 val report = buildReport(appCtx, thread, throwable, isFatal = true)
                 appCtx.filesDir.resolve(FILE_NAME).writeText(report)
                 appendHistory(appCtx, report, label = "FATAL")
@@ -457,7 +452,6 @@ object CrashReporter {
 
         startLogcatCapture()
         startAnrWatchdog()
-        // Baseline resource check once per launch.
         ioExecutor.execute { checkDiskAndMemory() }
     }
 
@@ -497,7 +491,6 @@ object CrashReporter {
                     val responded = AtomicBoolean(false)
                     val postedAt = SystemClock.uptimeMillis()
                     mainHandler.post { responded.set(true) }
-                    // Poll without blocking main thread.
                     var waited = 0L
                     while (!responded.get() && waited < ANR_THRESHOLD_MS + 2000) {
                         Thread.sleep(100)
@@ -553,7 +546,6 @@ object CrashReporter {
         if (appContext == null) appContext = ctx
         ioExecutor.execute {
             try {
-                // Write breadcrumb directly to avoid nested schedule ordering issues.
                 addBreadcrumbDirect("NON-FATAL: $tag - ${redact(throwable.message ?: throwable.toString())}")
                 val report = buildReport(ctx, Thread.currentThread(), throwable, isFatal = false, tag = tag)
                 ctx.filesDir.resolve(NONFATAL_FILE).writeText(report)
@@ -626,7 +618,6 @@ object CrashReporter {
             val file = context.filesDir.resolve(HISTORY_FILE)
             val existing = if (file.exists()) file.readText() else ""
             val separator = "\n\n========== $label ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())} ==========\n\n"
-            // Store as one block per entry: split only on our exact separator start.
             val marker = "\n\n========== "
             val parts = if (existing.isEmpty()) emptyList() else existing.split(marker).filter { it.isNotBlank() }
             val rebuilt = parts.map { marker + it }
@@ -723,23 +714,5 @@ object CrashReporter {
             sb.append(indent).append("    Suppressed: ").append(redact(sup.toString())).append("\n")
         }
         throwable.cause?.let { appendThrowable(sb, it, depth + 1) }
-    }
-
-    // Minimal lifecycle tracker so we know which Activity died.
-    // Replaces the missing CrashActivityTracker referenced by old init().
-    private class CrashActivityTracker : Application.ActivityLifecycleCallbacks {
-        override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
-            breadcrumb("Activity created: ${activity.javaClass.simpleName}")
-        }
-        override fun onActivityStarted(activity: Activity) {}
-        override fun onActivityResumed(activity: Activity) {
-            breadcrumb("Activity resumed: ${activity.javaClass.simpleName}")
-        }
-        override fun onActivityPaused(activity: Activity) {}
-        override fun onActivityStopped(activity: Activity) {}
-        override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
-        override fun onActivityDestroyed(activity: Activity) {
-            breadcrumb("Activity destroyed: ${activity.javaClass.simpleName}")
-        }
     }
 }
