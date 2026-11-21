@@ -5,7 +5,6 @@ import android.content.Context
 import android.os.Build
 import android.os.Debug
 import android.os.Looper
-import android.os.Process
 import android.os.StrictMode
 import android.os.SystemClock
 import android.util.Log
@@ -65,7 +64,6 @@ object CrashReporter {
     private val logcatStarted = AtomicBoolean(false)
     private val lastAnrAt = AtomicLong(0L)
 
-    // Single-threaded scheduled executor: serializes all file writes, allows debounce.
     private val ioExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { r ->
             Thread(r, "CrashReporter-IO").apply { isDaemon = true }
@@ -87,7 +85,6 @@ object CrashReporter {
     val groqLogsFlow: StateFlow<List<String>> = _groqLogsFlow
     private val groqDirty = AtomicBoolean(false)
 
-    // Real logcat ring buffer. Old code read logcat forever and threw it away.
     private val logcatLock = Any()
     private val logcatDeque = ArrayDeque<String>(MAX_LOGCAT_LINES)
     private val logcatDirty = AtomicBoolean(false)
@@ -108,7 +105,6 @@ object CrashReporter {
     private fun timeNow(): String =
         SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
 
-    // ---- Redaction: never persist API keys, tokens, or raw user PII ----
     private val secretPatterns = listOf(
         Regex("(?i)(api[_-]?key\\s*[:=]\\s*)[^\\s&\"']+"),
         Regex("(?i)(authorization\\s*:\\s*bearer\\s+)[^\\s\"']+"),
@@ -125,12 +121,10 @@ object CrashReporter {
                 regex.replace(out, "\$1[redacted]")
             }
         }
-        // Long bare tokens (JWT-ish) that are not normal words.
         out = Regex("\\b[A-Za-z0-9_\\-]{32,}\\.[A-Za-z0-9_\\-]{10,}").replace(out, "[token-redacted]")
         return out
     }
 
-    // ---- Debounced flush: many logs in 500ms become one file write ----
     private fun scheduleFlush(dirty: AtomicBoolean, fileName: String, snapshot: () -> List<String>) {
         if (!dirty.compareAndSet(false, true)) return
         val ctx = appContext ?: run { dirty.set(false); return }
@@ -149,7 +143,6 @@ object CrashReporter {
                 breadcrumbDeque.addLast(line)
                 while (breadcrumbDeque.size > MAX_BREADCRUMBS) breadcrumbDeque.removeFirst()
             }
-            // Keep appContext warm even if init order changes.
             if (appContext == null) appContext = context.applicationContext
             scheduleFlush(breadcrumbDirty, BREADCRUMB_FILE, ::snapshotBreadcrumbs)
         } catch (_: Exception) { }
@@ -169,7 +162,6 @@ object CrashReporter {
                 while (geminiDeque.size > MAX_GEMINI_LOGS) geminiDeque.removeFirst()
                 _geminiLogsFlow.value = geminiDeque.toList()
             }
-            // Do not recurse into breadcrumb file write storm: add directly.
             addBreadcrumbDirect("GEMINI: $clean")
             scheduleFlush(geminiDirty, GEMINI_FILE, ::snapshotGeminiLogs)
         } catch (_: Exception) { }
@@ -213,7 +205,6 @@ object CrashReporter {
         if (provider.equals("Groq", ignoreCase = true)) groqLog(message) else geminiLog(message)
     }
 
-    // ---- New: performance / mismatch / resource logging ----
     fun logPerformance(tag: String, durationMs: Long, thresholdMs: Long = SLOW_OP_MS, extra: String = "") {
         if (durationMs < thresholdMs) return
         val msg = "SLOW [$tag] ${durationMs}ms threshold=${thresholdMs}ms $extra"
@@ -221,7 +212,8 @@ object CrashReporter {
         appContext?.let { recordNonFatal(it, "Performance-$tag", RuntimeException(msg)) }
     }
 
-    inline fun <T> timed(tag: String, thresholdMs: Long = SLOW_OP_MS, block: () -> T): T {
+    // FIXED: removed 'inline' - inline cannot access private appContext
+    fun <T> timed(tag: String, thresholdMs: Long = SLOW_OP_MS, block: () -> T): T {
         val start = SystemClock.uptimeMillis()
         return try {
             block()
@@ -288,7 +280,6 @@ object CrashReporter {
     fun recordANR(mainStack: Array<StackTraceElement>, allStacks: Map<Thread, Array<StackTraceElement>>) {
         val ctx = appContext ?: return
         val now = SystemClock.uptimeMillis()
-        // Do not spam one ANR every second while main is stuck.
         if (now - lastAnrAt.get() < 30_000) return
         lastAnrAt.set(now)
         ioExecutor.execute {
@@ -442,7 +433,7 @@ object CrashReporter {
             } catch (_: Exception) { }
             oldHandler?.uncaughtException(thread, throwable)
             if (oldHandler == null) {
-                Process.killProcess(Process.myPid())
+                android.os.Process.killProcess(android.os.Process.myPid())
             }
         }
 
@@ -455,11 +446,11 @@ object CrashReporter {
         ioExecutor.execute { checkDiskAndMemory() }
     }
 
-    // ---- Logcat: keep it, do not drop it ----
+    // FIXED: java.lang.Process, not android.os.Process
     private fun startLogcatCapture() {
         if (!logcatStarted.compareAndSet(false, true)) return
         ioExecutor.execute {
-            var process: Process? = null
+            var process: java.lang.Process? = null
             try {
                 process = Runtime.getRuntime().exec("logcat -v time")
                 val reader = BufferedReader(InputStreamReader(process.inputStream))
@@ -473,7 +464,6 @@ object CrashReporter {
                     scheduleFlush(logcatDirty, LOGCAT_FILE, ::snapshotLogcat)
                 }
             } catch (_: Exception) {
-                // READ_LOGS not granted on most devices: logcat may be empty. Not fatal.
             } finally {
                 try { process?.destroy() } catch (_: Exception) { }
                 logcatStarted.set(false)
@@ -481,7 +471,6 @@ object CrashReporter {
         }
     }
 
-    // ---- ANR watchdog: posts to main, measures response time ----
     private fun startAnrWatchdog() {
         if (!anrWatchdogStarted.compareAndSet(false, true)) return
         Thread({
@@ -514,7 +503,8 @@ object CrashReporter {
         }, "CrashReporter-ANR-Watchdog").apply { isDaemon = true }.start()
     }
 
-    inline fun <T> safe(tag: String, block: () -> T): T? {
+    // FIXED: removed 'inline'
+    fun <T> safe(tag: String, block: () -> T): T? {
         return try {
             block()
         } catch (e: CancellationException) {
@@ -655,7 +645,7 @@ object CrashReporter {
             val runtime = Runtime.getRuntime()
             sb.append("Heap: used=${(runtime.totalMemory() - runtime.freeMemory()) / 1024} KB total=${runtime.totalMemory() / 1024} KB max=${runtime.maxMemory() / 1024} KB\n")
             sb.append("Native heap: allocated=${Debug.getNativeHeapAllocatedSize() / 1024} KB\n")
-            sb.append("Process PID: ${Process.myPid()}\n")
+            sb.append("Process PID: ${android.os.Process.myPid()}\n")
             val filesDir = context.filesDir
             sb.append("Disk free: ${filesDir.freeSpace / 1024 / 1024} MB | total: ${filesDir.totalSpace / 1024 / 1024} MB\n")
         } catch (e: Exception) { sb.append("Memory: unavailable (${e.message})\n") }
