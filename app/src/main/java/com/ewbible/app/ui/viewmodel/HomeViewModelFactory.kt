@@ -2,7 +2,6 @@ package com.ewbible.app.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import com.ewbible.app.data.ai.AiRepository
 import com.ewbible.app.data.database.BibleDao
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.data.sync.SyncManager
@@ -10,8 +9,7 @@ import com.ewbible.app.data.sync.SyncManager
 class HomeViewModelFactory(
     private val dao: BibleDao,
     private val preferences: AppPreferences,
-    // FIXED: AiRepository, not GeminiRepository - matches MainActivity + ChatViewModel
-    private val geminiRepository: AiRepository,
+    // FIXED: No AiRepository here - HomeViewModel does not take it
     private val syncManager: SyncManager
 ) : ViewModelProvider.Factory {
 
@@ -20,8 +18,7 @@ class HomeViewModelFactory(
         if (modelClass.isAssignableFrom(HomeViewModel::class.java)) {
             return HomeViewModel(
                 dao = dao,
-                preferences = preferences,
-                geminiRepository = geminiRepository,
+                prefs = preferences,
                 syncManager = syncManager
             ) as T
         }
