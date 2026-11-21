@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import com.ewbible.app.BuildConfig
 import com.ewbible.app.CrashReporter
 import com.ewbible.app.data.database.MessageEntity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -73,7 +74,7 @@ class AiRepository {
 
         // --- 2. Fallback to Groq ---
         if (groqKey.isNotBlank()) {
-            _lastProvider.value = "Groq"
+            // FIXED: don't set provider to Groq until it actually succeeds
             CrashReporter.groqLog("Groq trying - Gemini failed: $geminiError")
             val groqResult = tryGroq(prompt)
             if (groqResult.isSuccess) {
@@ -109,7 +110,8 @@ class AiRepository {
         if (history.isNotEmpty()) {
             sb.append("CONVERSATION HISTORY (last 6):\n")
             history.takeLast(6).forEach {
-                sb.append(if (it.isUser) "User: " else "Assistant: ").append(it.text).append("\n")
+                // FIXED: truncate each message so prompt doesn't blow up tokens
+                sb.append(if (it.isUser) "User: " else "Assistant: ").append(it.text.take(800)).append("\n")
             }
             sb.append("\n")
         }
@@ -119,10 +121,11 @@ class AiRepository {
 
     // --- Gemini ---
     private suspend fun tryGemini(prompt: String, image: Bitmap?): Result<String> = withContext(Dispatchers.IO) {
+        var conn: HttpURLConnection? = null
         try {
             if (geminiKey.isBlank()) return@withContext Result.failure(Exception("No Gemini API key"))
             val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$geminiKey")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
+            conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
                 connectTimeout = 30000
@@ -154,7 +157,7 @@ class AiRepository {
             val response = if (code in 200..299) {
                 conn.inputStream.bufferedReader().readText()
             } else {
-                val err = runCatching { conn.errorStream?.bufferedReader()?.readText() } .getOrNull() ?: ""
+                val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull() ?: ""
                 CrashReporter.geminiLog("Gemini HTTP $code: ${err.take(300)}")
                 return@withContext Result.failure(Exception("Gemini HTTP $code"))
             }
@@ -164,18 +167,24 @@ class AiRepository {
                 ?.optJSONObject(0)?.optString("text")
             if (text.isNullOrBlank()) Result.failure(Exception("Gemini empty response"))
             else Result.success(text)
+        } catch (e: CancellationException) {
+            throw e // FIXED: cancel is not an error, don't fall back to Groq on cancel
         } catch (e: Exception) {
             CrashReporter.geminiLog("Gemini exception: ${e.message}")
             Result.failure(e)
+        } finally {
+            // FIXED: always close connection, no socket leak
+            runCatching { conn?.disconnect() }
         }
     }
 
     // --- Groq ---
     private suspend fun tryGroq(prompt: String): Result<String> = withContext(Dispatchers.IO) {
+        var conn: HttpURLConnection? = null
         try {
             if (groqKey.isBlank()) return@withContext Result.failure(Exception("No Groq API key"))
             val url = URL("https://api.groq.com/openai/v1/chat/completions")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
+            conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Authorization", "Bearer $groqKey")
@@ -207,9 +216,14 @@ class AiRepository {
                 ?.optJSONObject("message")?.optString("content")
             if (text.isNullOrBlank()) Result.failure(Exception("Groq empty response"))
             else Result.success(text)
+        } catch (e: CancellationException) {
+            throw e // FIXED: cancel is not an error
         } catch (e: Exception) {
             CrashReporter.groqLog("Groq exception: ${e.message}")
             Result.failure(e)
+        } finally {
+            // FIXED: always close connection, no socket leak
+            runCatching { conn?.disconnect() }
         }
     }
 }
