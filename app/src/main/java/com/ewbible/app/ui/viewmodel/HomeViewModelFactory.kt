@@ -2,7 +2,7 @@ package com.ewbible.app.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import com.ewbible.app.data.ai.GeminiRepository
+import com.ewbible.app.data.ai.AiRepository
 import com.ewbible.app.data.database.BibleDao
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.data.sync.SyncManager
