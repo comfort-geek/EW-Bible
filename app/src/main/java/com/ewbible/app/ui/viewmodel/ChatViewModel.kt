@@ -285,9 +285,8 @@ class ChatViewModel(
                 .joinToString("\n") { "${it.verse}. ${it.text}" }
             val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
             val compressed = bibleDao.getCommentaryCompressed(bookId, chapter)
-            // FIXED: cleanCached does not exist - use decompress() like HomeViewModel does
             val commentary = runCatching {
-                if (compressed.isNullOrEmpty()) "" else CommentaryHelper.decompress(compressed)
+                if (compressed.isEmpty()) "" else CommentaryHelper.decompress(compressed)
             }.getOrDefault("").take(3000)
             val result = "USER IS READING $bookName $chapter (NKJV):\n$chapterText\n\nSUMMARY: $summary\nCOMMENTARY: $commentary\n"
             contextCache[cacheKey] = result
