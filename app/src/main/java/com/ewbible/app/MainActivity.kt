@@ -17,7 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.ewbible.app.data.ai.GeminiRepository
+import com.ewbible.app.data.ai.AiRepository
 import com.ewbible.app.data.database.AppDatabase
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.data.sync.SyncManager
@@ -32,10 +32,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // FIXED: init() already ran in EwBibleApp - don't init twice
         CrashReporter.breadcrumb(this, "MainActivity.onCreate")
 
-        // Read crash ONCE before setContent
         val savedCrash = CrashReporter.getLastCrash(this)
             ?: CrashReporter.getLastNonFatal(this)
         if (savedCrash != null) {
@@ -44,12 +42,10 @@ class MainActivity : ComponentActivity() {
         }
 
         val preferences = AppPreferences(applicationContext)
-        val geminiRepository = GeminiRepository()
-
-        // Create SyncManager ONCE here
+        // FINAL: AiRepository - matches ChatViewModel
+        val aiRepository = AiRepository()
         val syncManager = SyncManager()
 
-        // DO NOT crash here if DB is broken - catch it and show error UI instead
         var dbError: String? = null
         val dao = try {
             AppDatabase.getInstance(applicationContext).bibleDao()
@@ -73,35 +69,35 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     if (dbError != null) {
-                        // DB broken - show this instead of crash-loop
                         Box(
                             modifier = Modifier.fillMaxSize().padding(16.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                // FIXED: Share -> Copy
                                 text = "Database failed to open.\n\n$dbError\n\nTake a screenshot, or copy this from the crash report.",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
                     } else if (dao != null) {
+                        // FINAL: Home factory - NO geminiRepository
                         val homeFactory = remember(dao) {
                             HomeViewModelFactory(
                                 dao = dao,
                                 preferences = preferences,
-                                geminiRepository = geminiRepository,
                                 syncManager = syncManager
                             )
                         }
-                        // FIXED: Separate factory for ChatViewModel.
-                        // Old code used the same HomeViewModelFactory for both,
-                        // which crashes if factory only knows HomeViewModel.
-                        val chatFactory = remember(geminiRepository) {
+                        // FINAL: Chat factory - all 3 args
+                        val chatFactory = remember(dao, aiRepository) {
                             object : ViewModelProvider.Factory {
                                 @Suppress("UNCHECKED_CAST")
                                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
                                     if (modelClass.isAssignableFrom(ChatViewModel::class.java)) {
-                                        return ChatViewModel(geminiRepository) as T
+                                        return ChatViewModel(
+                                            bibleDao = dao,
+                                            geminiRepository = aiRepository,
+                                            syncManager = syncManager
+                                        ) as T
                                     }
                                     throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
                                 }
@@ -120,10 +116,8 @@ class MainActivity : ComponentActivity() {
                     if (showCrashDialog) {
                         CrashReportDialog(
                             crashText = crashText,
-                            // FIXED: onShare + shareCrashText() -> onCopy (copies full report)
                             onCopy = { /* CrashReportDialog already copies to clipboard */ },
                             onClear = {
-                                // FIXED: clearAll() already clears everything, no need for clear() too
                                 CrashReporter.clearAll(this@MainActivity)
                                 showCrashDialog = false
                             },
