@@ -40,13 +40,18 @@ class AiRepository {
             return k
         }
 
+    // --- Matched config for BOTH ---
+    private val systemPrompt = "You are a faithful Bible assistant. Answer clearly based on Scripture, keep it simple."
+    private val temperature = 0.7
+    private val maxTokens = 1024
+
     private val geminiModels = listOf(
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite"
+        "gemini-3.5-flash-lite"
     )
 
     // Groq - free, very fast
-    private val groqModel = "llama-3.3-70b-versatile"
+    private val groqTextModel = "llama-3.3-70b-versatile"
+    private val groqVisionModel = "llama-3.2-11b-vision-preview"
 
     fun askStreaming(
         question: String,
@@ -126,7 +131,7 @@ class AiRepository {
 
             // --- 2. Fallback to Groq ---
             if (groqKey.isNotBlank() && groqKey != "YOUR_API_KEY_HERE") {
-                val r = tryGroq(prompt)
+                val r = tryGroq(prompt, image)
                 if (r.isSuccess) return@withContext r
                 CrashReporter.geminiLog("Groq failed: ${r.exceptionOrNull()?.message}")
                 return@withContext Result.failure(r.exceptionOrNull() ?: Exception("Groq failed"))
@@ -137,13 +142,17 @@ class AiRepository {
             Result.failure(Exception("Both Gemini and Groq failed or have no key. Check Secrets: GEMINI_API_KEY and GROQ_API_KEY, then re-run workflow."))
         }
 
+    private fun bitmapToBase64(image: Bitmap): String {
+        val stream = ByteArrayOutputStream()
+        image.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+        return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+    }
+
     private fun tryGemini(model: String, prompt: String, image: Bitmap?): Result<String> {
         return try {
             val parts = JSONArray().put(JSONObject().put("text", prompt))
             if (image != null) {
-                val stream = ByteArrayOutputStream()
-                image.compress(Bitmap.CompressFormat.JPEG, 80, stream)
-                val b64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+                val b64 = bitmapToBase64(image)
                 parts.put(JSONObject().apply {
                     put("inline_data", JSONObject().apply {
                         put("mime_type", "image/jpeg")
@@ -152,10 +161,11 @@ class AiRepository {
                 })
             }
             val bodyJson = JSONObject().apply {
+                put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
                 put("contents", JSONArray().put(JSONObject().put("parts", parts)))
                 put("generationConfig", JSONObject().apply {
-                    put("temperature", 0.7)
-                    put("maxOutputTokens", 1024)
+                    put("temperature", temperature)
+                    put("maxOutputTokens", maxTokens)
                 })
             }
             val request = Request.Builder()
@@ -184,21 +194,34 @@ class AiRepository {
         }
     }
 
-    private fun tryGroq(prompt: String): Result<String> {
+    private fun tryGroq(prompt: String, image: Bitmap?): Result<String> {
         return try {
-            // Groq does NOT support images in this simple version - text only
+            // Use vision model if image exists, else text model - same features as Gemini
+            val model = if (image != null) groqVisionModel else groqTextModel
+
+            val userContent = JSONArray().apply {
+                put(JSONObject().put("type", "text").put("text", prompt))
+                if (image != null) {
+                    val b64 = bitmapToBase64(image)
+                    put(JSONObject().apply {
+                        put("type", "image_url")
+                        put("image_url", JSONObject().put("url", "data:image/jpeg;base64,$b64"))
+                    })
+                }
+            }
+
             val bodyJson = JSONObject().apply {
-                put("model", groqModel)
-                put("temperature", 0.7)
-                put("max_tokens", 1024)
+                put("model", model)
+                put("temperature", temperature)
+                put("max_tokens", maxTokens)
                 put("messages", JSONArray().apply {
                     put(JSONObject().apply {
                         put("role", "system")
-                        put("content", "You are a faithful Bible assistant. Answer clearly based on Scripture, keep it simple.")
+                        put("content", systemPrompt)
                     })
                     put(JSONObject().apply {
                         put("role", "user")
-                        put("content", prompt)
+                        put("content", userContent)
                     })
                 })
             }
@@ -212,7 +235,7 @@ class AiRepository {
 
             client.newCall(request).execute().use { response ->
                 val body = response.body?.string() ?: ""
-                CrashReporter.geminiLog("Groq $groqModel -> HTTP ${response.code}")
+                CrashReporter.geminiLog("Groq $model -> HTTP ${response.code}")
                 if (!response.isSuccessful) {
                     val err = runCatching {
                         JSONObject(body).getJSONObject("error").getString("message")
