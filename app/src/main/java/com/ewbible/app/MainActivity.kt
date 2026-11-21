@@ -117,8 +117,8 @@ class MainActivity : ComponentActivity() {
                             crashText = crashText,
                             onCopy = { /* CrashReportDialog already copies to clipboard */ },
                             onClear = {
-                                CrashReporter.clearLastCrash(this@MainActivity)
-                                CrashReporter.clearLastNonFatal(this@MainActivity)
+                                // FIXED: CrashReporter has clear(), not clearLastCrash() / clearLastNonFatal()
+                                CrashReporter.clear(this@MainActivity)
                                 crashText = ""
                                 showCrashDialog = false
                             },
