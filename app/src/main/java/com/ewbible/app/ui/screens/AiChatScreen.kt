@@ -120,6 +120,10 @@ fun AiChatScreen(
     val dimTextColor = remember(textColor) { textColor.copy(alpha = 0.5f) }
     val gray = remember { Color.Gray }
 
+    // Provider-aware texts: Gemini first, Groq fallback
+    val titleText = if (state.aiProvider == "Groq") "Ask Groq" else "Ask Gemini"
+    val thinkingText = if (state.aiProvider == "Groq") "Groq is connecting..." else "Gemini is thinking..."
+
     if (showHistory) {
         ModalBottomSheet(
             onDismissRequest = { showHistory = false },
@@ -167,7 +171,7 @@ fun AiChatScreen(
             IconButton(onClick = onClose, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Close, null, tint = textColor) }
             IconButton(onClick = { showHistory = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.History, null, tint = textColor) }
             Text(
-                "Ask Gemini",
+                titleText,
                 color = textColor,
                 fontWeight = FontWeight.Bold,
                 fontSize = 18.sp,
@@ -218,7 +222,7 @@ fun AiChatScreen(
             if (state.isLoading) {
                 item(key = "loading", contentType = "loading") {
                     Text(
-                        if (state.streamingText.isNotEmpty()) state.streamingText else "Gemini is thinking...",
+                        if (state.streamingText.isNotEmpty()) state.streamingText else thinkingText,
                         color = textColor, fontSize = 15.sp,
                         modifier = Modifier.fillMaxWidth(0.85f).background(panel, RoundedCornerShape(12.dp)).padding(10.dp)
                     )
