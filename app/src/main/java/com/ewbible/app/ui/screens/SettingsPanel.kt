@@ -110,8 +110,8 @@ fun SettingsPanel(
         Column(
             modifier = Modifier
                 .fillMaxHeight()
-                .fillMaxWidth(0.85f)
-                .widthIn(max = 400.dp)
+                .fillMaxWidth(0.82f)
+                .widthIn(max = 340.dp)
                 .background(background)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -120,46 +120,46 @@ fun SettingsPanel(
                 .verticalScroll(scrollState)
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(20.dp)
+                .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
             ) {
-                IconButton(onClick = onClose) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor)
+                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor, modifier = Modifier.size(18.dp))
                 }
             }
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Person,
                     contentDescription = null,
                     tint = gold,
-                    modifier = Modifier.size(48.dp)
+                    modifier = Modifier.size(32.dp)
                 )
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = if (isLoggedIn) userName.ifBlank { "My Account" } else "Guest",
-                        fontSize = 18.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
                         color = textColor
                     )
                     if (isLoggedIn && userEmail.isNotBlank()) {
-                        Text(userEmail, fontSize = 13.sp, color = textColor.copy(alpha = 0.6f))
+                        Text(userEmail, fontSize = 11.sp, color = textColor.copy(alpha = 0.6f))
                     }
                 }
                 if (isLoggedIn) {
-                    TextButton(onClick = onSignOut) {
-                        Text("Log Out", color = Color.Red, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    TextButton(onClick = onSignOut, modifier = Modifier.height(32.dp)) {
+                        Text("Log Out", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                     }
                 } else {
-                    TextButton(onClick = onGoogleSignIn) {
-                        Text("Log In", color = gold, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    TextButton(onClick = onGoogleSignIn, modifier = Modifier.height(32.dp)) {
+                        Text("Log In", color = gold, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                     }
                 }
             }
@@ -170,19 +170,19 @@ fun SettingsPanel(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { resourcesExpanded = !resourcesExpanded }
-                    .padding(vertical = 16.dp),
+                    .padding(vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Resources", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
-                Text(if (resourcesExpanded) "▲" else "▼", fontSize = 14.sp, color = textColor)
+                Text("Resources", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = textColor)
+                Text(if (resourcesExpanded) "▲" else "▼", fontSize = 11.sp, color = textColor)
             }
 
             if (resourcesExpanded) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(panel, RoundedCornerShape(12.dp))
+                        .background(panel, RoundedCornerShape(10.dp))
                         .clickable {
                             GeminiDebugTap.count++
                             if (GeminiDebugTap.count >= 5) {
@@ -193,72 +193,72 @@ fun SettingsPanel(
                                 onOpenAiChat()
                             }
                         }
-                        .padding(16.dp)
+                        .padding(10.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.ChatBubbleOutline,
                             contentDescription = null,
                             tint = gold,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Column {
-                            Text("Ask Gemini", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor)
-                            Text("Ask anything about the Bible", fontSize = 13.sp, color = textColor.copy(alpha = 0.6f))
+                            Text("Ask Gemini", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = textColor)
+                            Text("Ask anything about the Bible", fontSize = 11.sp, color = textColor.copy(alpha = 0.6f))
                         }
                     }
                 }
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(10.dp))
             }
 
             HorizontalDivider()
 
-            Spacer(modifier = Modifier.height(16.dp))
-            Text("Font Size", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = textColor)
+            Spacer(modifier = Modifier.height(10.dp))
+            Text("Font Size", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = textColor)
             Slider(
                 value = sliderValue,
                 onValueChange = { sliderValue = it },
                 onValueChangeFinished = { onFontSizeChange(sliderValue) },
                 valueRange = 12f..24f
             )
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Dark Mode", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = textColor)
+                Text("Dark Mode", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = textColor)
                 Switch(checked = darkMode, onCheckedChange = onDarkModeChange)
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(14.dp))
             HorizontalDivider()
 
             Button(
                 onClick = onDailyVerse,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(40.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = panel),
-                shape = RoundedCornerShape(24.dp)
+                shape = RoundedCornerShape(20.dp)
             ) {
-                Icon(Icons.Default.MenuBook, contentDescription = null, tint = textColor)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Daily Verse", color = textColor, fontSize = 16.sp)
+                Icon(Icons.Default.MenuBook, contentDescription = null, tint = textColor, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Daily Verse", color = textColor, fontSize = 13.sp)
             }
 
             Button(
                 onClick = onShowNotes,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(40.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = panel),
-                shape = RoundedCornerShape(24.dp)
+                shape = RoundedCornerShape(20.dp)
             ) {
-                Icon(Icons.Default.Notes, contentDescription = null, tint = textColor)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Notes ($notesCount)", color = textColor, fontSize = 16.sp)
+                Icon(Icons.Default.Notes, contentDescription = null, tint = textColor, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Notes ($notesCount)", color = textColor, fontSize = 13.sp)
             }
 
-            Spacer(modifier = Modifier.height(40.dp))
+            Spacer(modifier = Modifier.height(20.dp))
         }
     }
 }
