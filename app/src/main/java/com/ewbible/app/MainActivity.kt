@@ -38,7 +38,6 @@ class MainActivity : ComponentActivity() {
             ?: CrashReporter.getLastNonFatal(this)
         if (savedCrash != null) {
             CrashReporter.breadcrumb(this, "App restarted after crash")
-            exportCrashToDownloads(this, savedCrash)
         }
 
         val preferences = AppPreferences(applicationContext)
@@ -118,7 +117,9 @@ class MainActivity : ComponentActivity() {
                             crashText = crashText,
                             onCopy = { /* CrashReportDialog already copies to clipboard */ },
                             onClear = {
-                                CrashReporter.clearAll(this@MainActivity)
+                                CrashReporter.clearLastCrash(this@MainActivity)
+                                CrashReporter.clearLastNonFatal(this@MainActivity)
+                                crashText = ""
                                 showCrashDialog = false
                             },
                             onDismiss = { showCrashDialog = false }
