@@ -31,7 +31,8 @@ class AiRepository {
         get() = try { BuildConfig.GROQ_API_KEY } catch (_: Exception) { "" }
 
     // --- REMOTE MODELS - edit on GitHub, no app update needed ---
-    private const val REMOTE_MODELS_URL =
+    // FIXED: was `private const val` - const only allowed top-level / companion / object
+    private val REMOTE_MODELS_URL =
         "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
 
     // Fallback if offline / GitHub fails
