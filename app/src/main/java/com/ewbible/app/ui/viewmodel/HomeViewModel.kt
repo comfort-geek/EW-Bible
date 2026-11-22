@@ -83,8 +83,8 @@ class HomeViewModel(
     private var commentaryJob: Job? = null
     private var restoreDone = false
     private var cloudSyncDone = false
+    private var lastCommentaryKey = ""
 
-    private val commentaryCache = LruCache<String, String>(30)
     private val summaryCache = LruCache<String, SummaryEntity>(60)
     private val summaryMissing = Collections.synchronizedSet(mutableSetOf<String>())
     private val summaryLoadingKeys = Collections.synchronizedSet(mutableSetOf<String>())
@@ -172,16 +172,15 @@ class HomeViewModel(
             }
         }
 
+        // FIX: Single collector for book+chapter+tab - no more double loadCommentary
         viewModelScope.launch {
-            bookChapterKey.collectLatest { (bookId, chapter) ->
-                loadSummary(bookId, chapter)
-                if (selectedTab.value == "Open EW") loadCommentary(bookId, chapter)
-            }
-        }
-        viewModelScope.launch {
-            selectedTab.collectLatest { tab ->
-                if (tab == "Open EW") loadCommentary(selectedBookId.value, selectedChapter.value)
-            }
+            combine(bookChapterKey, selectedTab) { bc, tab -> bc to tab }
+                .distinctUntilChanged()
+                .collectLatest { (bc, tab) ->
+                    val (bookId, chapter) = bc
+                    loadSummary(bookId, chapter)
+                    if (tab == "Open EW") loadCommentary(bookId, chapter)
+                }
         }
 
         viewModelScope.launch {
@@ -211,19 +210,14 @@ class HomeViewModel(
                 }
         }
         loadDailyVerse()
-
-        // NEW: pull cloud once on start (after local restore). No-op if not logged in.
         viewModelScope.launch { syncFromCloud() }
     }
-
-    // --- SYNC: cloud -> local (pull) ---
 
     private suspend fun syncFromCloud() {
         val sm = syncManager ?: return
         if (cloudSyncDone) return
         cloudSyncDone = true
         try {
-            // Notes: only insert if local missing or cloud newer
             sm.getNotes().getOrNull()?.forEach { cloud ->
                 val local = runCatching { withContext(Dispatchers.IO) { dao.getNoteAtVerse(cloud.bookId, cloud.chapter, cloud.verse) } }.getOrNull()
                 if (local == null || cloud.timestamp > local.timestamp) {
@@ -233,7 +227,6 @@ class HomeViewModel(
                     }
                 }
             }
-            // Highlights: upsert - cloud wins, same key = same verse
             sm.getHighlights().getOrNull()?.forEach { cloud ->
                 val colorInt = runCatching {
                     android.graphics.Color.parseColor(cloud.color)
@@ -244,8 +237,6 @@ class HomeViewModel(
                     }
                 }
             }
-            // Progress: only if cloud is newer than local prefs - we use cloud if local is still Genesis 1:1 default
-            // or if user just logged in on a new device. Local restore already ran, so only apply if local was default.
             val cloudProgress = sm.getProgress().getOrNull()
             if (cloudProgress != null) {
                 val localBook = runCatching { prefs.getLastBookId() }.getOrDefault(1)
@@ -263,7 +254,6 @@ class HomeViewModel(
                 }
             }
         } catch (e: Exception) {
-            // Not logged in / offline - stay local, don't crash
         }
     }
 
@@ -331,7 +321,6 @@ class HomeViewModel(
     fun onUserSignedIn(name: String, email: String) {
         viewModelScope.launch {
             runCatching { prefs.saveUser(name, email) }
-            // Re-pull on sign-in: new device / re-login needs cloud data
             cloudSyncDone = false
             syncFromCloud()
         }
@@ -343,7 +332,6 @@ class HomeViewModel(
             val chapter = selectedChapter.value
             val verseNum = verse?.verse ?: (selectedVerse.value ?: 1)
             runCatching { prefs.saveLastReading(bookId = bookId, chapter = chapter, verse = verseNum, scrollIndex = scrollIndex, scrollOffset = scrollOffset) }
-            // SYNC: push progress - no-op if not logged in (NotLoggedInException swallowed by SyncManager Result)
             runCatching {
                 syncManager?.uploadProgress(
                     mode = "New King James Version",
@@ -408,29 +396,47 @@ class HomeViewModel(
 
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
-        synchronized(commentaryCache) { commentaryCache.get(key) }?.let {
-            commentaryJob?.cancel()
-            commentaryError.value = false
-            commentary.value = it
-            return
-        }
+        // Don't reload same chapter - this was causing double load + flicker
+        if (key == lastCommentaryKey && commentary.value.isNotBlank()) return
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
             try {
                 val html = withContext(Dispatchers.IO) {
                     val compressed = runCatching { dao.getCommentaryCompressed(bookId, chapter) }.getOrNull()
-                    if (compressed == null || compressed.isEmpty()) null else CommentaryHelper.decompress(compressed)
+                    if (compressed == null || compressed.isEmpty()) null
+                    // FIX: Use fast cached path in CommentaryHelper, not raw decompress()
+                    else CommentaryHelper.getHtmlCommentary(bookId, chapter, compressed)
                 }
                 val finalHtml = if (html.isNullOrBlank()) {
                     "<html><body><p><i>Commentary for ${BookCatalog.name(bookId)} $chapter is not available yet.</i></p></body></html>"
                 } else html
-                if (!html.isNullOrBlank()) synchronized(commentaryCache) { commentaryCache.put(key, html) }
-                commentary.value = finalHtml
-                commentaryError.value = false
+                // Only update if still current - prevents old chapter overwriting new one
+                if (bookId == currentBookId.value && chapter == selectedChapter.value) {
+                    lastCommentaryKey = key
+                    commentary.value = finalHtml
+                    commentaryError.value = false
+                }
+                // Preload next chapter in background - makes Next instant
+                preloadNextCommentary(bookId, chapter)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) {
-                commentary.value = "<html><body><p>Commentary error: ${e.message}</p></body></html>"
-                commentaryError.value = true
+                if (bookId == currentBookId.value && chapter == selectedChapter.value) {
+                    commentary.value = "<html><body><p>Commentary error: ${e.message}</p></body></html>"
+                    commentaryError.value = true
+                }
+            }
+        }
+    }
+
+    private fun preloadNextCommentary(bookId: Int, chapter: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val max = BookCatalog.chapters(bookId)
+                val (nextBook, nextChapter) = if (chapter < max) bookId to chapter + 1
+                else if (bookId < 66) (bookId + 1) to 1
+                else return@launch
+                val compressed = dao.getCommentaryCompressed(nextBook, nextChapter) ?: return@launch
+                CommentaryHelper.preload(nextBook, nextChapter, compressed)
             }
         }
     }
@@ -460,7 +466,6 @@ class HomeViewModel(
                 }
                 currentNoteText.value = noteText
             }
-            // SYNC: push note - CloudNote.noteText = NoteEntity.text
             runCatching { syncManager?.uploadNote(bookId, chapter, verseNum, noteText) }
         }
     }
@@ -471,7 +476,6 @@ class HomeViewModel(
             val chapter = selectedChapter.value
             val colorInt = color.toArgb()
             runCatching { withContext(Dispatchers.IO) { dao.saveHighlight(HighlightEntity(bookId = bookId, chapter = chapter, verse = verseNum, color = colorInt)) } }
-            // SYNC: push highlight - CloudHighlight.color is String "#AARRGGBB"
             val hex = "#%08X".format(colorInt)
             runCatching { syncManager?.uploadHighlight(bookId, chapter, verseNum, hex) }
         }
@@ -482,7 +486,6 @@ class HomeViewModel(
             val bookId = currentBookId.value
             val chapter = selectedChapter.value
             runCatching { withContext(Dispatchers.IO) { dao.deleteHighlight(bookId, chapter, verseNum) } }
-            // SYNC: delete highlight from cloud
             runCatching { syncManager?.deleteHighlight(bookId, chapter, verseNum) }
         }
     }
