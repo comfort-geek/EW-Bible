@@ -93,8 +93,9 @@ class HomeViewModel(
     private val summaryCache = LruCache<String, SummaryEntity>(60)
     private val summaryMissing = Collections.synchronizedSet(mutableSetOf<String>())
     private val summaryLoadingKeys = Collections.synchronizedSet(mutableSetOf<String>())
-    private val versesCache = LruCache<String, List<VerseEntity>>(30)
-    private val commentaryHtmlCache = LruCache<String, String>(60)
+    private val versesCache = LruCache<String, List<VerseEntity>>(60)
+    // INSTANT: 60 -> 120, keep more chapters in memory
+    private val commentaryHtmlCache = LruCache<String, String>(120)
 
     private val prophecyBooks = setOf(23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,66)
 
@@ -140,7 +141,6 @@ class HomeViewModel(
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
-    // FIX: Single atomic emitter. Never update commentaryHtml / book / chapter in 3 separate flows.
     private fun setCommentary(bookId: Int, chapter: Int, html: String, error: Boolean = false) {
         commentary.value = html
         commentaryBookIdFlow.value = bookId
@@ -167,8 +167,6 @@ class HomeViewModel(
         viewModelScope.launch { selectedChapter.collect { _uiState.update { s -> s.copy(selectedChapter = it) } } }
         viewModelScope.launch { selectedVerse.collect { _uiState.update { s -> s.copy(selectedVerse = it) } } }
         viewModelScope.launch { selectedTab.collect { _uiState.update { s -> s.copy(selectedTab = it) } } }
-        // FIX: REMOVED separate collectors for commentary / commentaryBookId / commentaryChapter / commentaryError
-        // They caused 1-frame mismatch. setCommentary() above is the only writer.
         viewModelScope.launch { summaryState.collect { summ ->
             _uiState.update { s -> s.copy(summary = summ, summaryText = summ?.summary ?: "", summaryWhatHappened = summ?.whatHappened ?: "", summaryApplication = summ?.application ?: "") }
         } }
@@ -279,6 +277,12 @@ class HomeViewModel(
         selectedVerse.value = null
         scrollRestoreKey.value += 1
         saveReadingProgress()
+        // INSTANT: prefetch first 3 chapters of new book in background
+        viewModelScope.launch(Dispatchers.IO) {
+            prefetchCommentary(bookId, 1)
+            prefetchCommentary(bookId, 2)
+            prefetchCommentary(bookId, 3)
+        }
     }
     fun selectBook(bookName: String) = selectBook(BookCatalog.id(bookName))
     fun selectChapter(chapter: Int) {
@@ -328,7 +332,15 @@ class HomeViewModel(
         saveReadingProgress()
     }
     fun openBook(bookName: String, chapter: Int) = openBook(BookCatalog.id(bookName), chapter)
-    fun selectTab(tab: String) { selectedTab.value = tab }
+    fun selectTab(tab: String) {
+        selectedTab.value = tab
+        // INSTANT: when user taps Open EW, preload current + next immediately
+        if (tab == "Open EW") {
+            viewModelScope.launch(Dispatchers.IO) {
+                prefetchCommentary(currentBookId.value, selectedChapter.value)
+            }
+        }
+    }
     fun searchVerses(query: String) { searchQuery.value = query }
     fun setSearchQuery(query: String) { searchQuery.value = query }
     fun setSearchFilter(filter: String) { searchFilter.value = filter }
@@ -417,8 +429,9 @@ class HomeViewModel(
                 setCommentary(bookId, chapter, cached, false)
                 lastCommentaryKey = key
             }
-            // FIX: Parsed cache was never warmed on cache-hit path either.
-            runCatching { prewarmOpenEWCache(BookCatalog.name(bookId), chapter, cached) }
+            viewModelScope.launch(Dispatchers.Default) {
+                runCatching { prewarmOpenEWCache(BookCatalog.name(bookId), chapter, cached) }
+            }
             preloadNextCommentary(bookId, chapter)
             return
         }
@@ -426,12 +439,9 @@ class HomeViewModel(
             preloadNextCommentary(bookId, chapter)
             return
         }
-        // Clear old HTML immediately - prevents Genesis 10 header + Genesis 9 text
-        if (commentaryChapterFlow.value != chapter || commentaryBookIdFlow.value != bookId) {
-            setCommentary(commentaryBookIdFlow.value, commentaryChapterFlow.value, "", false)
-            // NOTE: we intentionally keep old book/chapter in state until new HTML arrives,
-            // so HomeScreen gate (commentaryChapter == selectedChapter) knows it's loading.
-        }
+        // INSTANT FIX: DO NOT clear old HTML. Old code did setCommentary(..., "", false)
+        // That caused blank flash + crash. Now we keep old chapter on screen
+        // until new HTML arrives. OpenEWContent already keeps lastGoodParagraphs.
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
             try {
@@ -447,9 +457,10 @@ class HomeViewModel(
                 if (bookId == currentBookId.value && chapter == selectedChapter.value) {
                     lastCommentaryKey = key
                     setCommentary(bookId, chapter, finalHtml, false)
-                    // FIX: Warm parsed cache now, on IO, so OpenEWContent's
-                    // remember(cacheKey) hits instantly on revisit / swipe-back.
-                    runCatching { prewarmOpenEWCache(BookCatalog.name(bookId), chapter, finalHtml) }
+                    // Warm parsed cache on Default, NOT Main - was blocking UI before
+                    withContext(Dispatchers.Default) {
+                        runCatching { prewarmOpenEWCache(BookCatalog.name(bookId), chapter, finalHtml) }
+                    }
                 }
                 preloadNextCommentary(bookId, chapter)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -461,9 +472,6 @@ class HomeViewModel(
         }
     }
 
-    // FIX 1: Bounds check - ViewModel is last line of defense.
-    // HomeScreen + OpenEWContent already check, but prefetch must never
-    // hit DB for chapter 0 / 999 / book 0 / 67.
     fun prefetchCommentary(bookId: Int, chapter: Int) {
         if (bookId !in 1..66) return
         if (chapter !in 1..BookCatalog.chapters(bookId)) return
@@ -475,10 +483,9 @@ class HomeViewModel(
                 val html = CommentaryHelper.getHtmlCommentary(bookId, chapter, compressed)
                 if (html.isNotBlank()) {
                     synchronized(commentaryHtmlCache) { commentaryHtmlCache.put(key, html) }
-                    // FIX 2: Warm parsed cache, not just raw HTML.
-                    // Without this, swipe to next chapter still had to parse
-                    // HTML -> Spannable on first visit (~100-300ms).
-                    runCatching { prewarmOpenEWCache(BookCatalog.name(bookId), chapter, html) }
+                    withContext(Dispatchers.Default) {
+                        runCatching { prewarmOpenEWCache(BookCatalog.name(bookId), chapter, html) }
+                    }
                 }
                 CommentaryHelper.preload(bookId, chapter, compressed)
                 val max = BookCatalog.chapters(bookId)
@@ -487,7 +494,9 @@ class HomeViewModel(
                 val h2 = CommentaryHelper.getHtmlCommentary(nb, nc, c2)
                 if (h2.isNotBlank()) {
                     synchronized(commentaryHtmlCache) { commentaryHtmlCache.put("$nb-$nc", h2) }
-                    runCatching { prewarmOpenEWCache(BookCatalog.name(nb), nc, h2) }
+                    withContext(Dispatchers.Default) {
+                        runCatching { prewarmOpenEWCache(BookCatalog.name(nb), nc, h2) }
+                    }
                 }
                 CommentaryHelper.preload(nb, nc, c2)
             }
@@ -501,20 +510,26 @@ class HomeViewModel(
     private fun preloadNextCommentary(bookId: Int, chapter: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
+                // INSTANT: preload next 2 + prev 1, not just next 1
                 val max = BookCatalog.chapters(bookId)
-                val (nextBook, nextChapter) = if (chapter < max) bookId to chapter + 1
-                else if (bookId < 66) (bookId + 1) to 1
-                else return@launch
-                val key = "$nextBook-$nextChapter"
-                if (synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) } != null) return@launch
-                val compressed = dao.getCommentaryCompressed(nextBook, nextChapter) ?: return@launch
-                val html = CommentaryHelper.getHtmlCommentary(nextBook, nextChapter, compressed)
-                if (html.isNotBlank()) {
-                    synchronized(commentaryHtmlCache) { commentaryHtmlCache.put(key, html) }
-                    // FIX 2: Same here - warm parsed cache for next chapter.
-                    runCatching { prewarmOpenEWCache(BookCatalog.name(nextBook), nextChapter, html) }
+                val targets = mutableListOf<Pair<Int, Int>>()
+                if (chapter < max) targets.add(bookId to chapter + 1)
+                if (chapter + 1 < max) targets.add(bookId to chapter + 2)
+                if (chapter > 1) targets.add(bookId to chapter - 1)
+                if (chapter == max && bookId < 66) targets.add((bookId + 1) to 1)
+                for ((nb, nc) in targets) {
+                    val key = "$nb-$nc"
+                    if (synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) } != null) continue
+                    val compressed = dao.getCommentaryCompressed(nb, nc) ?: continue
+                    val html = CommentaryHelper.getHtmlCommentary(nb, nc, compressed)
+                    if (html.isNotBlank()) {
+                        synchronized(commentaryHtmlCache) { commentaryHtmlCache.put(key, html) }
+                        withContext(Dispatchers.Default) {
+                            runCatching { prewarmOpenEWCache(BookCatalog.name(nb), nc, html) }
+                        }
+                    }
+                    CommentaryHelper.preload(nb, nc, compressed)
                 }
-                CommentaryHelper.preload(nextBook, nextChapter, compressed)
             }
         }
     }
