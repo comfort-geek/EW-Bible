@@ -27,6 +27,9 @@ data class HomeUiState(
     val summaryWhatHappened: String = "",
     val summaryApplication: String = "",
     val commentaryHtml: String = "",
+    // FIX: tie HTML to its chapter. UI must never show HTML for a different chapter.
+    val commentaryBookId: Int = 1,
+    val commentaryChapter: Int = 1,
     val commentaryError: Boolean = false,
     val linkedVerseText: String = "",
     val linkedVerseRef: String = "",
@@ -69,6 +72,8 @@ class HomeViewModel(
     private val showAiChatState = MutableStateFlow(false)
     private val currentNoteText = MutableStateFlow("")
     private val commentary = MutableStateFlow("")
+    private val commentaryBookIdFlow = MutableStateFlow(1)
+    private val commentaryChapterFlow = MutableStateFlow(1)
     private val commentaryError = MutableStateFlow(false)
     private val summaryState = MutableStateFlow<SummaryEntity?>(null)
     private val _summaryLoading = MutableStateFlow(false)
@@ -89,6 +94,8 @@ class HomeViewModel(
     private val summaryMissing = Collections.synchronizedSet(mutableSetOf<String>())
     private val summaryLoadingKeys = Collections.synchronizedSet(mutableSetOf<String>())
     private val versesCache = LruCache<String, List<VerseEntity>>(30)
+    // FIX: ViewModel-level HTML cache - instant even before CommentaryHelper cache warms
+    private val commentaryHtmlCache = LruCache<String, String>(60)
 
     private val prophecyBooks = setOf(23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,66)
 
@@ -148,6 +155,8 @@ class HomeViewModel(
         viewModelScope.launch { selectedVerse.collect { _uiState.update { s -> s.copy(selectedVerse = it) } } }
         viewModelScope.launch { selectedTab.collect { _uiState.update { s -> s.copy(selectedTab = it) } } }
         viewModelScope.launch { commentary.collect { _uiState.update { s -> s.copy(commentaryHtml = it) } } }
+        viewModelScope.launch { commentaryBookIdFlow.collect { _uiState.update { s -> s.copy(commentaryBookId = it) } } }
+        viewModelScope.launch { commentaryChapterFlow.collect { _uiState.update { s -> s.copy(commentaryChapter = it) } } }
         viewModelScope.launch { commentaryError.collect { _uiState.update { s -> s.copy(commentaryError = it) } } }
         viewModelScope.launch { summaryState.collect { summ ->
             _uiState.update { s -> s.copy(summary = summ, summaryText = summ?.summary ?: "", summaryWhatHappened = summ?.whatHappened ?: "", summaryApplication = summ?.application ?: "") }
@@ -394,38 +403,88 @@ class HomeViewModel(
         }
     }
 
+    // FIXED: instant + no mismatch
     fun loadCommentary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
-        // Don't reload same chapter - this was causing double load + flicker
-        if (key == lastCommentaryKey && commentary.value.isNotBlank()) return
+        // 1. INSTANT: if we already have HTML for this exact chapter, show it NOW - no DB
+        synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) }?.let { cached ->
+            if (commentary.value != cached || commentaryChapterFlow.value != chapter || commentaryBookIdFlow.value != bookId) {
+                commentaryBookIdFlow.value = bookId
+                commentaryChapterFlow.value = chapter
+                commentary.value = cached
+                commentaryError.value = false
+                lastCommentaryKey = key
+            }
+            preloadNextCommentary(bookId, chapter)
+            return
+        }
+        // 2. Don't reload same chapter if already showing it
+        if (key == lastCommentaryKey && commentary.value.isNotBlank() && commentaryChapterFlow.value == chapter && commentaryBookIdFlow.value == bookId) {
+            preloadNextCommentary(bookId, chapter)
+            return
+        }
+        // 3. FIX MISMATCH: clear old HTML IMMEDIATELY when chapter changes.
+        // Old code left Genesis 9 HTML while header already said Genesis 10.
+        if (commentaryChapterFlow.value != chapter || commentaryBookIdFlow.value != bookId) {
+            commentary.value = ""
+            commentaryError.value = false
+            // Do NOT update commentaryChapterFlow yet - UI knows it's loading
+        }
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
             try {
                 val html = withContext(Dispatchers.IO) {
                     val compressed = runCatching { dao.getCommentaryCompressed(bookId, chapter) }.getOrNull()
                     if (compressed == null || compressed.isEmpty()) null
-                    // FIX: Use fast cached path in CommentaryHelper, not raw decompress()
                     else CommentaryHelper.getHtmlCommentary(bookId, chapter, compressed)
                 }
                 val finalHtml = if (html.isNullOrBlank()) {
                     "<html><body><p><i>Commentary for ${BookCatalog.name(bookId)} $chapter is not available yet.</i></p></body></html>"
                 } else html
+                // Cache for instant next time
+                synchronized(commentaryHtmlCache) { commentaryHtmlCache.put(key, finalHtml) }
                 // Only update if still current - prevents old chapter overwriting new one
                 if (bookId == currentBookId.value && chapter == selectedChapter.value) {
                     lastCommentaryKey = key
+                    commentaryBookIdFlow.value = bookId
+                    commentaryChapterFlow.value = chapter
                     commentary.value = finalHtml
                     commentaryError.value = false
                 }
-                // Preload next chapter in background - makes Next instant
                 preloadNextCommentary(bookId, chapter)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) {
                 if (bookId == currentBookId.value && chapter == selectedChapter.value) {
+                    commentaryBookIdFlow.value = bookId
+                    commentaryChapterFlow.value = chapter
                     commentary.value = "<html><body><p>Commentary error: ${e.message}</p></body></html>"
                     commentaryError.value = true
                 }
             }
         }
+    }
+
+    // FIX: called from OpenEWContent onPrefetchChapter - warms cache before user taps Next
+    fun prefetchCommentary(bookId: Int, chapter: Int) {
+        val key = "$bookId-$chapter"
+        if (synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) } != null) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val compressed = dao.getCommentaryCompressed(bookId, chapter) ?: return@launch
+                val html = CommentaryHelper.getHtmlCommentary(bookId, chapter, compressed)
+                if (html.isNotBlank()) synchronized(commentaryHtmlCache) { commentaryHtmlCache.put(key, html) }
+                // Also warm next-next so 2 taps ahead are instant
+                val max = BookCatalog.chapters(bookId)
+                val (nb, nc) = if (chapter < max) bookId to chapter + 1 else if (bookId < 66) (bookId + 1) to 1 else return@launch
+                val c2 = dao.getCommentaryCompressed(nb, nc) ?: return@launch
+                val h2 = CommentaryHelper.getHtmlCommentary(nb, nc, c2)
+                if (h2.isNotBlank()) synchronized(commentaryHtmlCache) { commentaryHtmlCache.put("$nb-$nc", h2) }
+            }
+        }
+    }
+
+    fun prefetchCommentary(bookName: String, chapter: Int) {
+        prefetchCommentary(BookCatalog.id(bookName), chapter)
     }
 
     private fun preloadNextCommentary(bookId: Int, chapter: Int) {
@@ -435,7 +494,12 @@ class HomeViewModel(
                 val (nextBook, nextChapter) = if (chapter < max) bookId to chapter + 1
                 else if (bookId < 66) (bookId + 1) to 1
                 else return@launch
+                val key = "$nextBook-$nextChapter"
+                if (synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) } != null) return@launch
                 val compressed = dao.getCommentaryCompressed(nextBook, nextChapter) ?: return@launch
+                val html = CommentaryHelper.getHtmlCommentary(nextBook, nextChapter, compressed)
+                if (html.isNotBlank()) synchronized(commentaryHtmlCache) { commentaryHtmlCache.put(key, html) }
+                // Also warm CommentaryHelper cache so parsing is instant
                 CommentaryHelper.preload(nextBook, nextChapter, compressed)
             }
         }
