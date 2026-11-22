@@ -212,7 +212,6 @@ object CrashReporter {
         appContext?.let { recordNonFatal(it, "Performance-$tag", RuntimeException(msg)) }
     }
 
-    // FIXED: removed 'inline' - inline cannot access private appContext
     fun <T> timed(tag: String, thresholdMs: Long = SLOW_OP_MS, block: () -> T): T {
         val start = SystemClock.uptimeMillis()
         return try {
@@ -438,7 +437,7 @@ object CrashReporter {
         }
 
         if (context is Application) {
-            context.registerActivityLifecycleCallbacks(CrashActivityTracker())
+            context.registerActivityLifecycleCallbacks(CrashActivityTracker(appCtx))
         }
 
         startLogcatCapture()
@@ -446,7 +445,6 @@ object CrashReporter {
         ioExecutor.execute { checkDiskAndMemory() }
     }
 
-    // FIXED: java.lang.Process, not android.os.Process
     private fun startLogcatCapture() {
         if (!logcatStarted.compareAndSet(false, true)) return
         ioExecutor.execute {
@@ -503,7 +501,6 @@ object CrashReporter {
         }, "CrashReporter-ANR-Watchdog").apply { isDaemon = true }.start()
     }
 
-    // FIXED: removed 'inline'
     fun <T> safe(tag: String, block: () -> T): T? {
         return try {
             block()
