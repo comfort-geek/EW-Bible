@@ -26,13 +26,13 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,7 +51,7 @@ private val BOOK_PATTERN = DISPLAY_NAMES
 private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?(?!\\d)")
 private val H1_REGEX = Regex("(?is)<h1[^>]*>.*?</h1>")
 
-private val parsedCache = LruCache<String, List<SpannableString>>(10)
+private val parsedCache = LruCache<String, List<SpannableString>>(30)
 
 private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
     if (html.isBlank()) return ""
@@ -63,8 +63,7 @@ private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
         if (bodyEnd != -1) t = t.substring(0, bodyEnd)
     }
     t = H1_REGEX.replaceFirst(t, "")
-    val titleTag = "<p"
-    val pStart = t.indexOf(titleTag, ignoreCase = true)
+    val pStart = t.indexOf("<p", ignoreCase = true)
     if (pStart != -1 && pStart < 200) {
         val pEnd = t.indexOf("</p>", pStart, ignoreCase = true)
         if (pEnd != -1) {
@@ -114,30 +113,38 @@ private fun linkifyMatch(m: MatchResult): String {
 
 private val HEADING_LINE = Regex("""^(?:[A-Z]\.|[0-9]+\.|[a-z]\.)\s+[A-Z].{0,90}$""")
 
+// FIX: No repeated substring(), single pass, correct span offsets
 private fun splitIntoParagraphs(full: SpannableString): List<SpannableString> {
     val text = full.toString()
     if (text.isBlank()) return emptyList()
     val result = ArrayList<SpannableString>()
     var start = 0
-    while (start < text.length) {
+    val len = text.length
+    while (start < len) {
+        // Skip blank lines
+        while (start < len && text[start] == '\n') start++
+        if (start >= len) break
         var end = text.indexOf("\n\n", start)
-        if (end == -1) end = text.length else end += 1
+        if (end == -1) end = len
         if (end - start > 2000) {
             val cut = text.indexOf('\n', start + 1000)
-            if (cut != -1 && cut < end) end = cut + 1
+            if (cut != -1 && cut < end) end = cut
         }
-        val chunkText = text.substring(start, end).trim()
-        if (chunkText.isNotEmpty()) {
-            val chunk = SpannableString(chunkText)
-            val chunkStart = start + (text.substring(start, end).indexOf(chunkText))
-            val chunkEnd = chunkStart + chunkText.length
-            full.getSpans(chunkStart, chunkEnd, Any::class.java).forEach { span ->
-                val s = maxOf(full.getSpanStart(span), chunkStart)
-                val e = minOf(full.getSpanEnd(span), chunkEnd)
-                if (e > s) {
-                    chunk.setSpan(span, s - chunkStart, e - chunkStart, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        // Trim without copying whole chunk twice
+        var s = start
+        var e = end
+        while (s < e && text[s].isWhitespace()) s++
+        while (e > s && text[e - 1].isWhitespace()) e--
+        if (e > s) {
+            val chunk = SpannableString(text.substring(s, e))
+            full.getSpans(s, e, Any::class.java).forEach { span ->
+                val spanS = maxOf(full.getSpanStart(span), s)
+                val spanE = minOf(full.getSpanEnd(span), e)
+                if (spanE > spanS) {
+                    chunk.setSpan(span, spanS - s, spanE - s, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
             }
+            val chunkText = chunk.toString()
             if (chunkText.length in 5..110 && HEADING_LINE.matches(chunkText)) {
                 chunk.setSpan(StyleSpan(Typeface.BOLD), 0, chunkText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 chunk.setSpan(RelativeSizeSpan(1.12f), 0, chunkText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -145,7 +152,6 @@ private fun splitIntoParagraphs(full: SpannableString): List<SpannableString> {
             result.add(chunk)
         }
         start = end + 1
-        while (start < text.length && text[start] == '\n') start++
     }
     return result
 }
@@ -167,14 +173,16 @@ fun OpenEWContent(
     val currentBookName by rememberUpdatedState(bookName)
     val currentChapter by rememberUpdatedState(chapter)
     val currentOnVerseClick by rememberUpdatedState(onVerseClick)
-    val currentOnNext by rememberUpdatedState(onNextChapter)
-    val currentOnPrev by rememberUpdatedState(onPreviousChapter)
-    val density = LocalDensity.current
     val effectiveFontSize = fontSize.coerceAtLeast(18f)
 
-    val htmlHash = commentaryHtml.hashCode()
-    val cacheKey = "$bookName-$chapter-$htmlHash"
+    // FIX 1: No hashCode() - book + chapter IS the key, instant
+    val cacheKey = "$bookName-$chapter"
     val listState = rememberLazyListState()
+
+    // FIX 2: Reset scroll when chapter changes
+    LaunchedEffect(cacheKey) {
+        listState.scrollToItem(0)
+    }
 
     val paragraphs by produceState<List<SpannableString>?>(initialValue = parsedCache.get(cacheKey), cacheKey) {
         if (commentaryHtml.isBlank()) { value = null; return@produceState }
