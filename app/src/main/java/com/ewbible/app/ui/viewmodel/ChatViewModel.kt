@@ -1,5 +1,6 @@
 package com.ewbible.app.ui.viewmodel
 
+import android.content.Context
 import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -58,6 +59,13 @@ class ChatViewModel(
             geminiRepository.lastProvider.collect { provider ->
                 _state.update { it.copy(aiProvider = provider) }
             }
+        }
+    }
+
+    // NEW: Download latest models from GitHub - call this once on app start
+    fun refreshModels(context: Context) {
+        viewModelScope.launch {
+            geminiRepository.refreshModels(context)
         }
     }
 
