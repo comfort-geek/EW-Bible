@@ -1,5 +1,6 @@
 package com.ewbible.app.ui.screens
 
+import android.graphics.Typeface
 import android.text.Spannable
 import android.text.SpannableString
 import android.text.Spanned
@@ -8,32 +9,27 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.text.style.URLSpan
-import android.graphics.Typeface
 import android.util.LruCache
 import android.util.TypedValue
-import android.view.GestureDetector
 import android.view.MotionEvent
-import android.view.View
 import android.widget.TextView
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
@@ -47,17 +43,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.URLDecoder
 import java.net.URLEncoder
-import kotlin.math.abs
 
 private val DISPLAY_NAMES: List<String> = BookCatalog.allDisplayNames()
 private val BOOK_PATTERN = DISPLAY_NAMES
     .sortedByDescending { it.length }
     .joinToString("|") { Regex.escape(it) }
 private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?(?!\\d)")
-
 private val H1_REGEX = Regex("(?is)<h1[^>]*>.*?</h1>")
 
-private val parsedCache = LruCache<String, SpannableString>(10)
+private val parsedCache = LruCache<String, List<SpannableString>>(10)
 
 private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
     if (html.isBlank()) return ""
@@ -119,19 +113,41 @@ private fun linkifyMatch(m: MatchResult): String {
 }
 
 private val HEADING_LINE = Regex("""^(?:[A-Z]\.|[0-9]+\.|[a-z]\.)\s+[A-Z].{0,90}$""")
-private fun styleHeadingLines(spannable: SpannableString) {
-    val text = spannable.toString()
+
+private fun splitIntoParagraphs(full: SpannableString): List<SpannableString> {
+    val text = full.toString()
+    if (text.isBlank()) return emptyList()
+    val result = ArrayList<SpannableString>()
     var start = 0
     while (start < text.length) {
-        val end = text.indexOf('\n', start).let { if (it == -1) text.length else it }
-        val line = text.substring(start, end).trim()
-        if (line.length in 5..110 && HEADING_LINE.matches(line)) {
-            val realStart = start + (text.substring(start, end).indexOfFirst { !it.isWhitespace() }.takeIf { it >= 0 } ?: 0)
-            spannable.setSpan(StyleSpan(Typeface.BOLD), realStart, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            spannable.setSpan(RelativeSizeSpan(1.12f), realStart, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        var end = text.indexOf("\n\n", start)
+        if (end == -1) end = text.length else end += 1
+        if (end - start > 2000) {
+            val cut = text.indexOf('\n', start + 1000)
+            if (cut != -1 && cut < end) end = cut + 1
+        }
+        val chunkText = text.substring(start, end).trim()
+        if (chunkText.isNotEmpty()) {
+            val chunk = SpannableString(chunkText)
+            val chunkStart = start + (text.substring(start, end).indexOf(chunkText))
+            val chunkEnd = chunkStart + chunkText.length
+            full.getSpans(chunkStart, chunkEnd, Any::class.java).forEach { span ->
+                val s = maxOf(full.getSpanStart(span), chunkStart)
+                val e = minOf(full.getSpanEnd(span), chunkEnd)
+                if (e > s) {
+                    chunk.setSpan(span, s - chunkStart, e - chunkStart, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            }
+            if (chunkText.length in 5..110 && HEADING_LINE.matches(chunkText)) {
+                chunk.setSpan(StyleSpan(Typeface.BOLD), 0, chunkText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                chunk.setSpan(RelativeSizeSpan(1.12f), 0, chunkText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            result.add(chunk)
         }
         start = end + 1
+        while (start < text.length && text[start] == '\n') start++
     }
+    return result
 }
 
 @Composable
@@ -158,8 +174,9 @@ fun OpenEWContent(
 
     val htmlHash = commentaryHtml.hashCode()
     val cacheKey = "$bookName-$chapter-$htmlHash"
+    val listState = rememberLazyListState()
 
-    val parsed by produceState<SpannableString?>(initialValue = parsedCache.get(cacheKey), cacheKey) {
+    val paragraphs by produceState<List<SpannableString>?>(initialValue = parsedCache.get(cacheKey), cacheKey) {
         if (commentaryHtml.isBlank()) { value = null; return@produceState }
         parsedCache.get(cacheKey)?.let { value = it; return@produceState }
         value = withContext(Dispatchers.Default) {
@@ -176,25 +193,15 @@ fun OpenEWContent(
                         Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
                     )
                 }
-                val result = if (spannable is SpannableString) spannable else SpannableString(spannable)
-                styleHeadingLines(result)
-                parsedCache.put(cacheKey, result)
-                result
+                val full = if (spannable is SpannableString) spannable else SpannableString(spannable)
+                val split = splitIntoParagraphs(full)
+                parsedCache.put(cacheKey, split)
+                split
             }.getOrNull()
         }
     }
 
-    var cachedSpanned by remember { mutableStateOf<SpannableString?>(null) }
-    var cachedKey by remember { mutableStateOf<String?>(null) }
-    if (parsed != null) {
-        if (cachedKey != cacheKey) {
-            cachedSpanned = parsed
-            cachedKey = cacheKey
-        }
-    }
-    val goldSpanned = cachedSpanned
-
-    if (hasError && goldSpanned == null) {
+    if (hasError && paragraphs == null) {
         Column(modifier = Modifier.fillMaxSize().navigationBarsPadding().padding(18.dp)) {
             Text(
                 "Could not load commentary. Please try again.",
@@ -202,15 +209,11 @@ fun OpenEWContent(
                 fontSize = effectiveFontSize.sp,
                 lineHeight = (effectiveFontSize + 8).sp
             )
-            Button(onClick = onRetry, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC9A227))) {
-                Text("Try Again", color = Color.White, fontWeight = FontWeight.Bold)
-            }
         }
         return
     }
 
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        // Header exactly like Bible: "1 Samuel 1" - nothing else
         Text(
             text = if (bookName.isNotBlank()) "$bookName $chapter" else "",
             color = textColor,
@@ -221,7 +224,7 @@ fun OpenEWContent(
                 .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp)
         )
 
-        if (goldSpanned == null) {
+        if (paragraphs == null) {
             if (!isLoading && commentaryHtml.isBlank()) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
                     Text(
@@ -235,98 +238,67 @@ fun OpenEWContent(
                 Box(modifier = Modifier.weight(1f).fillMaxWidth())
             }
         } else {
-            AndroidView(
-                modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds(),
-                factory = { ctx ->
-                    val padPx = with(density) { 16.dp.roundToPx() }
-                    val topPx = with(density) { 16.dp.roundToPx() }
-                    val bottomPx = with(density) { 120.dp.roundToPx() }
-                    val swipePx = with(density) { 80.dp.toPx() }
-                    var swipeFired = false
-                    var startX = 0f
-                    var startY = 0f
-                    lateinit var gestureDetector: GestureDetector
-                    val textView = object : TextView(ctx) {
-                        override fun onTouchEvent(event: MotionEvent): Boolean {
-                            when (event.action) {
-                                MotionEvent.ACTION_DOWN -> {
-                                    swipeFired = false
-                                    startX = event.x
-                                    startY = event.y
-                                }
-                                MotionEvent.ACTION_MOVE -> {
-                                    if (!swipeFired) {
-                                        val dx = event.x - startX
-                                        val dy = event.y - startY
-                                        if (abs(dx) > swipePx && abs(dx) > abs(dy) * 1.5f) {
-                                            swipeFired = true
-                                            if (dx < 0) currentOnNext() else currentOnPrev()
-                                            return true
-                                        }
-                                    }
-                                }
-                            }
-                            gestureDetector.onTouchEvent(event)
-                            if (swipeFired) return true
-                            return super.onTouchEvent(event)
-                        }
-                    }.apply {
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
-                        setLineSpacing(0f, 1.45f)
-                        setTextColor(textColor.toArgb())
-                        setPadding(padPx, topPx, padPx, bottomPx)
-                        isVerticalScrollBarEnabled = true
-                        scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-                        breakStrategy = android.text.Layout.BREAK_STRATEGY_HIGH_QUALITY
-                        hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NORMAL
-                        movementMethod = object : LinkMovementMethod() {
-                            override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
-                                if (event.action == MotionEvent.ACTION_UP) {
-                                    val layout = widget.layout ?: return super.onTouchEvent(widget, buffer, event)
-                                    val x = event.x.toInt() - widget.totalPaddingLeft + widget.scrollX
-                                    val y = event.y.toInt() - widget.totalPaddingTop + widget.scrollY
-                                    if (y < 0 || y > layout.height) return super.onTouchEvent(widget, buffer, event)
-                                    val line = layout.getLineForVertical(y)
-                                    val offset = layout.getOffsetForHorizontal(line, x.toFloat())
-                                    val link = buffer.getSpans(offset, offset, URLSpan::class.java).firstOrNull()
-                                    if (link != null && link.url.startsWith("ew://verse")) {
-                                        runCatching {
-                                            val query = link.url.substringAfter("?", "")
-                                            val params = query.split("&").associate {
-                                                val parts = it.split("=", limit = 2)
-                                                if (parts.size == 2) parts[0] to URLDecoder.decode(parts[1], "UTF-8") else parts[0] to ""
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 180.dp)
+            ) {
+                itemsIndexed(
+                    items = paragraphs!!,
+                    key = { index, _ -> "$cacheKey-$index" }
+                ) { _, paragraph ->
+                    AndroidView(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        factory = { ctx ->
+                            TextView(ctx).apply {
+                                setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
+                                setLineSpacing(0f, 1.45f)
+                                setTextColor(textColor.toArgb())
+                                breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
+                                hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
+                                isVerticalScrollBarEnabled = false
+                                movementMethod = object : LinkMovementMethod() {
+                                    override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
+                                        if (event.action == MotionEvent.ACTION_UP) {
+                                            val layout = widget.layout ?: return super.onTouchEvent(widget, buffer, event)
+                                            val x = event.x.toInt() - widget.totalPaddingLeft + widget.scrollX
+                                            val y = event.y.toInt() - widget.totalPaddingTop + widget.scrollY
+                                            if (y < 0 || y > layout.height) return super.onTouchEvent(widget, buffer, event)
+                                            val line = layout.getLineForVertical(y)
+                                            val offset = layout.getOffsetForHorizontal(line, x.toFloat())
+                                            val link = buffer.getSpans(offset, offset, URLSpan::class.java).firstOrNull()
+                                            if (link != null && link.url.startsWith("ew://verse")) {
+                                                runCatching {
+                                                    val query = link.url.substringAfter("?", "")
+                                                    val params = query.split("&").associate {
+                                                        val parts = it.split("=", limit = 2)
+                                                        if (parts.size == 2) parts[0] to URLDecoder.decode(parts[1], "UTF-8") else parts[0] to ""
+                                                    }
+                                                    val b = params["book"]?.takeIf { it.isNotBlank() } ?: currentBookName
+                                                    val c = params["chapter"]?.toIntOrNull() ?: currentChapter
+                                                    val v = params["verse"]?.toIntOrNull() ?: 1
+                                                    val end = params["endVerse"]?.toIntOrNull() ?: v
+                                                    currentOnVerseClick(b, c, v, end)
+                                                }
+                                                return true
                                             }
-                                            val b = params["book"]?.takeIf { it.isNotBlank() } ?: currentBookName
-                                            val c = params["chapter"]?.toIntOrNull() ?: currentChapter
-                                            val v = params["verse"]?.toIntOrNull() ?: 1
-                                            val end = params["endVerse"]?.toIntOrNull() ?: v
-                                            currentOnVerseClick(b, c, v, end)
                                         }
-                                        return true
+                                        return super.onTouchEvent(widget, buffer, event)
                                     }
                                 }
-                                return super.onTouchEvent(widget, buffer, event)
+                            }
+                        },
+                        update = { textView ->
+                            textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
+                            textView.setTextColor(textColor.toArgb())
+                            if (textView.tag !== paragraph) {
+                                textView.tag = paragraph
+                                textView.text = paragraph
                             }
                         }
-                    }
-                    gestureDetector = GestureDetector(ctx, object : GestureDetector.SimpleOnGestureListener() {
-                        override fun onDown(e: MotionEvent): Boolean = false
-                    })
-                    textView
-                },
-                update = { textView ->
-                    textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
-                    textView.setTextColor(textColor.toArgb())
-                    if (textView.tag !== goldSpanned) {
-                        textView.tag = goldSpanned
-                        textView.text = goldSpanned
-                        textView.scrollTo(0, 0)
-                    }
-                },
-                onRelease = { textView ->
-                    runCatching { textView.text = "" }
+                    )
                 }
-            )
+            }
         }
     }
 }
