@@ -22,7 +22,6 @@ import java.net.URL
 
 class AiRepository {
 
-    // --- Provider tracking for UI: "Gemini" or "Groq" ---
     private val _lastProvider = MutableStateFlow("Gemini")
     val lastProvider: StateFlow<String> = _lastProvider.asStateFlow()
 
@@ -32,12 +31,11 @@ class AiRepository {
     private val groqKey: String
         get() = try { BuildConfig.GROQ_API_KEY } catch (_: Exception) { "" }
 
-    // --- FREE $0 MODELS ---
-    // Primary: Gemini 3.8 Flash - free, modern, images ✅
-    // Fallback: Groq Llama-4 Scout - free, modern, images ✅
-    // Old models removed: gemini-1.5-flash, llama-3.3-70b-versatile (both dead for free)
+    // --- WORKING MODELS ---
+    // Gemini: gemini-2.5-flash - text + vision, free
+    // Groq vision: qwen/qwen3.8-27b - text + vision
+    // Groq text: llama-3.3-70b-versatile - text only, free + fast
 
-    // --- Public API used by ChatViewModel ---
     fun askStreaming(
         question: String,
         currentRef: String,
@@ -49,7 +47,6 @@ class AiRepository {
         val fullPrompt = buildPrompt(question, currentRef, history, bibleContext, translation)
         val result = askQuestion(fullPrompt, image)
         val text = result.getOrElse { "Sorry, I couldn't answer that. ${it.message ?: ""}" }
-        // Fake streaming - split into chunks so UI animates
         val chunkSize = 24
         var i = 0
         while (i < text.length) {
@@ -61,10 +58,9 @@ class AiRepository {
     }.flowOn(Dispatchers.IO)
 
     suspend fun askQuestion(prompt: String, image: Bitmap? = null): Result<String> {
-        // Reset to Gemini for every new question
         _lastProvider.value = "Gemini"
 
-        // --- 1. Try Gemini first ---
+        // --- 1. Try Gemini first (text + image) ---
         val geminiResult = tryGemini(prompt, image)
         if (geminiResult.isSuccess) {
             val text = geminiResult.getOrNull()
@@ -79,7 +75,7 @@ class AiRepository {
 
         // --- 2. Fallback to Groq ---
         if (groqKey.isNotBlank()) {
-            CrashReporter.groqLog("Groq trying - Gemini failed: $geminiError")
+            CrashReporter.groqLog("Groq trying - Gemini failed: $geminiError | hasImage=${image != null}")
             val groqResult = tryGroq(prompt, image)
             if (groqResult.isSuccess) {
                 val text = groqResult.getOrNull()
@@ -92,7 +88,6 @@ class AiRepository {
             val groqError = groqResult.exceptionOrNull()?.message ?: "Groq empty"
             CrashReporter.groqLog("Groq failed: $groqError")
 
-            // Both free tiers hit - friendly message
             if (geminiError.contains("429") && groqError.contains("429")) {
                 return Result.failure(Exception("Free daily limit reached for today. Please try again tomorrow - it's free, so we share a daily limit."))
             }
@@ -103,7 +98,6 @@ class AiRepository {
         return Result.failure(Exception("Gemini failed: $geminiError"))
     }
 
-    // --- Prompt ---
     private fun buildPrompt(
         question: String,
         currentRef: String,
@@ -138,12 +132,12 @@ class AiRepository {
         } catch (_: Exception) { null }
     }
 
-    // --- Gemini - FREE gemini-3.8-flash ---
+    // --- Gemini - gemini-2.5-flash (text + vision) ---
     private suspend fun tryGemini(prompt: String, image: Bitmap?): Result<String> = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
             if (geminiKey.isBlank()) return@withContext Result.failure(Exception("No Gemini API key"))
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=$geminiKey")
+            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$geminiKey")
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
@@ -173,8 +167,8 @@ class AiRepository {
                 conn.inputStream.bufferedReader().readText()
             } else {
                 val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull() ?: ""
-                CrashReporter.geminiLog("Gemini HTTP $code: ${err.take(300)}")
-                return@withContext Result.failure(Exception("Gemini HTTP $code"))
+                CrashReporter.geminiLog("Gemini HTTP $code: ${err.take(500)}")
+                return@withContext Result.failure(Exception("Gemini HTTP $code: ${err.take(200)}"))
             }
             val text = JSONObject(response)
                 .optJSONArray("candidates")?.optJSONObject(0)
@@ -192,11 +186,18 @@ class AiRepository {
         }
     }
 
-    // --- Groq - FREE llama-4-scout (vision) ---
+    // --- Groq - auto pick model ---
+    // If image != null -> qwen/qwen3.8-27b (vision)
+    // If image == null -> llama-3.3-70b-versatile (text, fast + free)
     private suspend fun tryGroq(prompt: String, image: Bitmap?): Result<String> = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
             if (groqKey.isBlank()) return@withContext Result.failure(Exception("No Groq API key"))
+
+            val hasImage = image != null
+            val model = if (hasImage) "qwen/qwen3.8-27b" else "llama-3.3-70b-versatile"
+            CrashReporter.groqLog("Groq using model: $model hasImage=$hasImage")
+
             val url = URL("https://api.groq.com/openai/v1/chat/completions")
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -207,7 +208,6 @@ class AiRepository {
                 doOutput = true
             }
 
-            // Groq OpenAI format - text + image as content array
             val userContent = JSONArray()
             userContent.put(JSONObject().put("type", "text").put("text", prompt))
             val base64 = bitmapToBase64(image)
@@ -219,7 +219,7 @@ class AiRepository {
             }
 
             val body = JSONObject()
-                .put("model", "meta-llama/llama-4-scout-17b-16e-instruct")
+                .put("model", model)
                 .put("temperature", 0.7)
                 .put("max_tokens", 1500)
                 .put(
@@ -234,8 +234,8 @@ class AiRepository {
                 conn.inputStream.bufferedReader().readText()
             } else {
                 val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull() ?: ""
-                CrashReporter.groqLog("Groq HTTP $code: ${err.take(300)}")
-                return@withContext Result.failure(Exception("Groq HTTP $code"))
+                CrashReporter.groqLog("Groq HTTP $code: ${err.take(500)}")
+                return@withContext Result.failure(Exception("Groq HTTP $code: ${err.take(200)}"))
             }
             val text = JSONObject(response)
                 .optJSONArray("choices")?.optJSONObject(0)
