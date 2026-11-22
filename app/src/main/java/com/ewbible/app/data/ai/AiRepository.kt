@@ -2,11 +2,13 @@ package com.ewbible.app.data.ai
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
 import com.ewbible.app.BuildConfig
 import com.ewbible.app.CrashReporter
 import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -23,6 +25,9 @@ import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
 
 class AiRepository {
@@ -54,6 +59,12 @@ class AiRepository {
     private var remoteGemini = FALLBACK_GEMINI
     private var remoteGroq = FALLBACK_GROQ
     private var remoteVersion = 3
+
+    // FAST: in-memory Tavily cache - repeat question = 0ms, no network
+    private var cachedQuery = ""
+    private var cachedWeb = ""
+    private var cachedAt = 0L
+    private val WEB_CACHE_MS = 10 * 60 * 1000L // 10 min
 
     suspend fun refreshModels(context: Context) {
         val prefs = context.getSharedPreferences("ew_models", Context.MODE_PRIVATE)
@@ -98,25 +109,20 @@ class AiRepository {
         } catch (_: Exception) { }
     }
 
-    // FIXED: Strong triggers win even if short. "Who is the pope?" now searches.
     private fun needsWebSearch(question: String): Boolean {
         val q = question.lowercase().trim()
-
-        // Never search - Bible is enough
         if (q.contains("what does") && q.contains("mean")) return false
         if (q.contains("explain") && (q.contains("verse") || q.contains("chapter"))) return false
         if (q.contains("pray") || q.contains("prayer")) return false
         if (q.contains("who was david") || q.contains("who is david")) return false
         if (q == "hi" || q == "hello" || q == "hey") return false
 
-        // STRONG - search even if short
         val strongTriggers = listOf(
             "pope", "president", "election", "war", "news",
             "latest", "recent", "current", "today", "what happened"
         )
         if (strongTriggers.any { q.contains(it) }) return true
 
-        // WEAK - only if long enough to be a real question
         if (q.length < 30) return false
         val weakTriggers = listOf(
             "who is", "who was", "what is happening",
@@ -125,8 +131,25 @@ class AiRepository {
         return weakTriggers.any { q.contains(it) }
     }
 
+    // FAST: single place for web. Used by BOTH Gemini + Groq via buildPrompt.
+    private suspend fun getWebContext(question: String): String {
+        if (!needsWebSearch(question)) return ""
+        val key = question.trim().lowercase()
+        if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) {
+            Log.d("TavilyDebug", "CACHE HIT len=${cachedWeb.length}")
+            return cachedWeb
+        }
+        // Hard cap 2.2s - never wait 5s, never hang on slow 4G
+        val result = withTimeoutOrNull(2200L) { searchTavily(question) } ?: ""
+        Log.d("TavilyDebug", "webLen=${result.length} q=$question")
+        return result
+    }
+
     private suspend fun searchTavily(query: String): String {
-        if (tavilyKey.isBlank()) return ""
+        if (tavilyKey.isBlank()) {
+            Log.d("TavilyDebug", "Tavily key BLANK")
+            return ""
+        }
         return try {
             var conn: HttpURLConnection? = null
             try {
@@ -134,38 +157,53 @@ class AiRepository {
                 conn = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     setRequestProperty("Content-Type", "application/json")
-                    connectTimeout = 1500
-                    readTimeout = 1500
+                    connectTimeout = 2000
+                    readTimeout = 2500
                     doOutput = true
                 }
+                // FASTEST Tavily config:
+                // - basic depth (not advanced)
+                // - max_results 2 (not 3-5)
+                // - include_answer FALSE - this was the slow part, it runs a 2nd LLM call
                 val body = JSONObject()
                     .put("api_key", tavilyKey)
                     .put("query", query)
                     .put("search_depth", "basic")
-                    .put("max_results", 3)
-                    .put("include_answer", true)
+                    .put("max_results", 2)
+                    .put("include_answer", false)
                     .toString()
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                if (conn.responseCode !in 200..299) return ""
+                if (conn.responseCode !in 200..299) {
+                    Log.d("TavilyDebug", "Tavily HTTP ${conn.responseCode}")
+                    return ""
+                }
                 val text = conn.inputStream.bufferedReader().readText()
                 val json = JSONObject(text)
                 val sb = StringBuilder()
-                val answer = json.optString("answer")
-                if (answer.isNotBlank()) sb.append("WEB ANSWER: $answer\n\n")
                 val results = json.optJSONArray("results")
                 if (results != null) {
-                    for (i in 0 until minOf(results.length(), 3)) {
+                    for (i in 0 until minOf(results.length(), 2)) {
                         val r = results.getJSONObject(i)
                         val title = r.optString("title")
                         val content = r.optString("content")
-                        if (content.isNotBlank()) sb.append("$title: ${content.take(500)}\n\n")
+                        if (content.isNotBlank()) sb.append("$title: ${content.take(350)}\n\n")
                     }
                 }
-                sb.toString().take(2500)
+                val out = sb.toString().take(1500)
+                if (out.isNotBlank()) {
+                    cachedQuery = query.trim().lowercase()
+                    cachedWeb = out
+                    cachedAt = System.currentTimeMillis()
+                }
+                Log.d("TavilyDebug", "Tavily OK len=${out.length}")
+                out
             } finally {
                 runCatching { conn?.disconnect() }
             }
-        } catch (_: Exception) { "" }
+        } catch (e: Exception) {
+            Log.d("TavilyDebug", "Tavily FAILED: ${e.message}")
+            ""
+        }
     }
 
     fun askStreaming(
@@ -176,12 +214,8 @@ class AiRepository {
         bibleContext: String,
         translation: String = "NKJV"
     ): Flow<String> = flow {
-        // FIXED: Tavily ON and actually USED. Capped at 1.5s.
-        // Bible question = 0ms, News question = max 1.5s, offline = 1.5s then AI still answers.
-        var webContext = ""
-        if (image == null && needsWebSearch(question)) {
-            webContext = withTimeoutOrNull(1500L) { searchTavily(question) } ?: ""
-        }
+        // Bible = 0ms, News = max 2.2s, repeat News = 0ms (cache)
+        val webContext = if (image == null) getWebContext(question) else ""
         val basePrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext)
 
         if (image != null) {
@@ -301,6 +335,15 @@ class AiRepository {
     }.flowOn(Dispatchers.IO)
 
     suspend fun askQuestion(prompt: String, image: Bitmap? = null): Result<String> {
+        // FIXED: askQuestion now also uses Tavily + date, same as askStreaming
+        // Otherwise any screen using this would always say "cutoff 2024"
+        val webContext = if (image == null) getWebContext(prompt) else ""
+        val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
+        val fullPrompt = if (webContext.isNotBlank()) {
+            "Today is $today. WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say cutoff/2024:\n${webContext}\n\nUser question: $prompt"
+        } else {
+            "Today is $today. User question: $prompt"
+        }
         val sb = StringBuilder()
         return try {
             var lastErr: Exception? = null
@@ -309,7 +352,7 @@ class AiRepository {
                 try {
                     sb.clear()
                     withTimeoutOrNull(15000L) {
-                        tryGeminiStreaming(model, prompt, image).collect { sb.append(it) }
+                        tryGeminiStreaming(model, fullPrompt, image).collect { sb.append(it) }
                     }
                     if (sb.isNotBlank()) return Result.success(cleanMarkdown(sb.toString()).trim())
                 } catch (e: CancellationException) { throw e }
@@ -322,7 +365,7 @@ class AiRepository {
                     try {
                         sb.clear()
                         withTimeoutOrNull(15000L) {
-                            tryGroqStreaming(model, prompt).collect { sb.append(it) }
+                            tryGroqStreaming(model, fullPrompt).collect { sb.append(it) }
                         }
                         if (sb.isNotBlank()) return Result.success(cleanMarkdown(sb.toString()).trim())
                     } catch (e: CancellationException) { throw e }
@@ -342,10 +385,13 @@ class AiRepository {
         webContext: String = ""
     ): String {
         val sb = StringBuilder()
-        sb.append("You are a helpful Bible assistant. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
+        val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
+        sb.append("You are a helpful Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
         sb.append("IMPORTANT: Do NOT use Markdown. No **, no ###, no ---, no bullet lists. Write in clean plain paragraphs only. Keep answer short, under 900 characters if possible.\n\n")
         if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(2000)}\n\n")
-        if (webContext.isNotBlank()) sb.append("WEB SEARCH RESULTS (use this for current events / real people):\n${webContext.take(2500)}\n\n")
+        if (webContext.isNotBlank()) {
+            sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say your knowledge is outdated, cut off, or up to 2024. Do NOT use old training data for current events. Answer ONLY from these results:\n${webContext.take(1500)}\n\n")
+        }
         if (history.isNotEmpty()) {
             sb.append("CONVERSATION HISTORY (last 4):\n")
             history.takeLast(4).forEach {
@@ -442,7 +488,7 @@ class AiRepository {
                 .put("max_tokens", 1000)
                 .put("stream", true)
                 .put("messages", JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", "You are a helpful Bible assistant. Answer clearly, warmly, and biblically. No Markdown."))
+                    .put(JSONObject().put("role", "system").put("content", "You are a helpful Bible assistant. Answer clearly, warmly, and biblically. No Markdown. If WEB SEARCH RESULTS are provided, you MUST use them and never say your knowledge is cut off."))
                     .put(JSONObject().put("role", "user").put("content", prompt)))
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
