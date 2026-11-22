@@ -29,9 +29,10 @@ class AiRepository {
         get() = try { BuildConfig.GEMINI_API_KEY } catch (_: Exception) { "" }
     private val groqKey: String
         get() = try { BuildConfig.GROQ_API_KEY } catch (_: Exception) { "" }
+    private val tavilyKey: String
+        get() = try { BuildConfig.TAVILY_API_KEY } catch (_: Exception) { "" }
 
     // --- REMOTE MODELS - edit on GitHub, no app update needed ---
-    // FIXED: was `private const val` - const only allowed top-level / companion / object
     private val REMOTE_MODELS_URL =
         "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
 
@@ -47,7 +48,6 @@ class AiRepository {
         "openai/gpt-oss-20b"
     )
 
-    // These start as fallback, then get replaced by GitHub list
     private var remoteGemini = FALLBACK_GEMINI
     private var remoteGroq = FALLBACK_GROQ
     private var remoteVersion = 3
@@ -101,6 +101,69 @@ class AiRepository {
         }
     }
 
+    // --- TAVILY WEB SEARCH - works for BOTH Gemini and Groq ---
+    private fun needsWebSearch(question: String): Boolean {
+        val q = question.lowercase()
+        // Don't search for pure Bible meaning questions - Bible context is enough
+        if (q.contains("what does") && q.contains("mean")) return false
+        if (q.contains("explain") && (q.contains("verse") || q.contains("chapter"))) return false
+        if (q.contains("pray") || q.contains("prayer")) return false
+
+        // Search for real-world / current / people / events
+        val triggers = listOf(
+            "who is", "who was", "what happened", "what is happening",
+            "current", "today", "news", "latest", "recent",
+            "pope", "president", "king", "war", "election",
+            "when did", "where is", "how many", "is it true"
+        )
+        return triggers.any { q.contains(it) }
+    }
+
+    private suspend fun searchTavily(query: String): String {
+        if (tavilyKey.isBlank()) return ""
+        return try {
+            var conn: HttpURLConnection? = null
+            try {
+                val url = URL("https://api.tavily.com/search")
+                conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("Content-Type", "application/json")
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                    doOutput = true
+                }
+                val body = JSONObject()
+                    .put("api_key", tavilyKey)
+                    .put("query", query)
+                    .put("search_depth", "basic")
+                    .put("max_results", 3)
+                    .put("include_answer", true)
+                    .toString()
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                if (conn.responseCode !in 200..299) return ""
+                val text = conn.inputStream.bufferedReader().readText()
+                val json = JSONObject(text)
+                val sb = StringBuilder()
+                val answer = json.optString("answer")
+                if (answer.isNotBlank()) sb.append("WEB ANSWER: $answer\n\n")
+                val results = json.optJSONArray("results")
+                if (results != null) {
+                    for (i in 0 until minOf(results.length(), 3)) {
+                        val r = results.getJSONObject(i)
+                        val title = r.optString("title")
+                        val content = r.optString("content")
+                        if (content.isNotBlank()) sb.append("$title: ${content.take(500)}\n\n")
+                    }
+                }
+                sb.toString().take(2500)
+            } finally {
+                runCatching { conn?.disconnect() }
+            }
+        } catch (_: Exception) {
+            "" // Search fails -> still answer from Bible + model knowledge
+        }
+    }
+
     // --- REAL STREAMING ---
     fun askStreaming(
         question: String,
@@ -110,11 +173,16 @@ class AiRepository {
         bibleContext: String,
         translation: String = "NKJV"
     ): Flow<String> = flow {
-        val fullPrompt = buildPrompt(question, currentRef, history, bibleContext, translation)
+        // 1. Tavily first - once, used by both Gemini and Groq
+        val webContext = if (image == null && needsWebSearch(question)) {
+            searchTavily(question)
+        } else ""
+
+        val fullPrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext)
         val errors = mutableListOf<String>()
         var gotAnything = false
 
-        // 1. Gemini streaming - uses remoteGemini now
+        // 2. Gemini streaming - uses remoteGemini now
         for (model in remoteGemini) {
             _lastProvider.value = "Gemini"
             try {
@@ -140,7 +208,7 @@ class AiRepository {
             return@flow
         }
 
-        // 2. Groq streaming - uses remoteGroq now
+        // 3. Groq streaming - uses remoteGroq now, same prompt with web results
         if (groqKey.isNotBlank()) {
             for (model in remoteGroq) {
                 _lastProvider.value = "Groq"
@@ -208,12 +276,14 @@ class AiRepository {
         currentRef: String,
         history: List<MessageEntity>,
         bibleContext: String,
-        translation: String
+        translation: String,
+        webContext: String = ""
     ): String {
         val sb = StringBuilder()
         sb.append("You are a helpful Bible assistant. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
         sb.append("IMPORTANT: Do NOT use Markdown. No **, no ###, no ---, no bullet lists. Write in clean plain paragraphs only. Keep answer short, under 900 characters if possible.\n\n")
         if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(2000)}\n\n")
+        if (webContext.isNotBlank()) sb.append("WEB SEARCH RESULTS (use this for current events / real people):\n${webContext.take(2500)}\n\n")
         if (history.isNotEmpty()) {
             sb.append("CONVERSATION HISTORY (last 4):\n")
             history.takeLast(4).forEach {
