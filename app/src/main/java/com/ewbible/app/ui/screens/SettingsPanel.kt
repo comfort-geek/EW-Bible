@@ -1,264 +1,514 @@
-package com.ewbible.app.ui.screens
+package com.ewbible.app.data.ai
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChatBubbleOutline
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.MenuBook
-import androidx.compose.material.icons.filled.Notes
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.ewbible.app.CrashReportDialog
+import android.content.Context
+import android.graphics.Bitmap
+import android.util.Log
+import com.ewbible.app.BuildConfig
+import com.ewbible.app.CrashReporter
+import com.ewbible.app.data.database.MessageEntity
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun SettingsPanel(
-    visible: Boolean,
-    isLoggedIn: Boolean,
-    userName: String,
-    userEmail: String,
-    fontSize: Float,
-    darkMode: Boolean,
-    notesCount: Int,
-    background: Color,
-    panel: Color,
-    textColor: Color,
-    gold: Color,
-    onClose: () -> Unit,
-    onFontSizeChange: (Float) -> Unit,
-    onDarkModeChange: (Boolean) -> Unit,
-    onDailyVerse: () -> Unit,
-    onShowNotes: () -> Unit,
-    onGoogleSignIn: () -> Unit,
-    onSignOut: () -> Unit,
-    onOpenAiChat: () -> Unit = {},
-) {
-    var resourcesExpanded by rememberSaveable { mutableStateOf(false) }
-    // FIX 1: Reduced slider - was 12f..24f, now 12f..20f
-    var sliderValue by remember(fontSize) { mutableFloatStateOf(fontSize.coerceIn(12f, 20f)) }
-    var showLogs by remember { mutableStateOf(false) }
+class AiRepository {
 
-    if (!visible && !showLogs) return
+    private val _lastProvider = MutableStateFlow("Gemini")
+    val lastProvider: StateFlow<String> = _lastProvider.asStateFlow()
 
-    val scrollState = rememberScrollState()
+    private val geminiKey: String
+        get() = try { BuildConfig.GEMINI_API_KEY } catch (_: Exception) { "" }
+    private val groqKey: String
+        get() = try { BuildConfig.GROQ_API_KEY } catch (_: Exception) { "" }
+    private val tavilyKey: String
+        get() = try { BuildConfig.TAVILY_API_KEY } catch (_: Exception) { "" }
 
-    if (showLogs) {
-        CrashReportDialog(
-            crashText = "",
-            onCopy = {},
-            onClear = {},
-            onDismiss = { showLogs = false }
+    private val REMOTE_MODELS_URL =
+        "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
+
+    private val FALLBACK_GEMINI = listOf(
+        "gemini-4-hydrogen",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+    )
+    private val FALLBACK_GROQ = listOf(
+        "openai/gpt-oss-120b",
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-20b"
+    )
+
+    private var remoteGemini = FALLBACK_GEMINI
+    private var remoteGroq = FALLBACK_GROQ
+    private var remoteVersion = 3
+
+    // MODERATE: Full but not wasteful. 1000 = cut, 3000 = quota dies fast, 1800 = sweet spot.
+    private val STREAM_TIMEOUT_MS = 45000L
+    private val MAX_TOKENS = 1800
+
+    private var cachedQuery = ""
+    private var cachedWeb = ""
+    private var cachedAt = 0L
+    private val WEB_CACHE_MS = 10 * 60 * 1000L
+
+    suspend fun refreshModels(context: Context) {
+        val prefs = context.getSharedPreferences("ew_models", Context.MODE_PRIVATE)
+        try {
+            val savedVersion = prefs.getInt("version", 3)
+            val savedGemini = prefs.getString("gemini", null)
+            val savedGroq = prefs.getString("groq", null)
+            if (savedGemini != null) {
+                val arr = JSONArray(savedGemini)
+                if (arr.length() > 0) remoteGemini = (0 until arr.length()).map { arr.getString(it) }
+            }
+            if (savedGroq != null) {
+                val arr = JSONArray(savedGroq)
+                if (arr.length() > 0) remoteGroq = (0 until arr.length()).map { arr.getString(it) }
+            }
+            remoteVersion = savedVersion
+        } catch (_: Exception) { }
+
+        try {
+            val conn = URL(REMOTE_MODELS_URL).openConnection() as HttpURLConnection
+            conn.connectTimeout = 3000
+            conn.readTimeout = 3000
+            conn.requestMethod = "GET"
+            if (conn.responseCode == 200) {
+                val text = conn.inputStream.bufferedReader().readText()
+                val json = JSONObject(text)
+                val newVersion = json.optInt("version", 0)
+                if (newVersion > remoteVersion) {
+                    val g = json.optJSONArray("gemini")
+                    val q = json.optJSONArray("groq")
+                    if (g != null && g.length() > 0) remoteGemini = (0 until g.length()).map { g.getString(it) }
+                    if (q != null && q.length() > 0) remoteGroq = (0 until q.length()).map { q.getString(it) }
+                    remoteVersion = newVersion
+                    prefs.edit()
+                        .putInt("version", newVersion)
+                        .putString("gemini", JSONArray(remoteGemini).toString())
+                        .putString("groq", JSONArray(remoteGroq).toString())
+                        .apply()
+                }
+            }
+            conn.disconnect()
+        } catch (_: Exception) { }
+    }
+
+    private fun needsWebSearch(question: String): Boolean {
+        val q = question.lowercase().trim()
+        if (q.contains("what does") && q.contains("mean")) return false
+        if (q.contains("explain") && (q.contains("verse") || q.contains("chapter"))) return false
+        if (q.contains("pray") || q.contains("prayer")) return false
+        if (q.contains("who was david") || q.contains("who is david")) return false
+        if (q == "hi" || q == "hello" || q == "hey") return false
+        val strongTriggers = listOf(
+            "pope", "president", "election", "war", "news",
+            "latest", "recent", "current", "today", "what happened"
         )
+        if (strongTriggers.any { q.contains(it) }) return true
+        if (q.length < 30) return false
+        val weakTriggers = listOf(
+            "who is", "who was", "what is happening",
+            "king", "when did", "where is", "how many", "is it true"
+        )
+        return weakTriggers.any { q.contains(it) }
     }
 
-    if (!visible) return
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.4f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) { onClose() },
-        contentAlignment = Alignment.TopEnd
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxHeight()
-                .fillMaxWidth(0.82f)
-                .widthIn(max = 340.dp)
-                .background(background)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) {}
-                .verticalScroll(scrollState)
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", tint = textColor, modifier = Modifier.size(18.dp))
-                }
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Person,
-                    contentDescription = null,
-                    tint = gold,
-                    modifier = Modifier.size(32.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (isLoggedIn) userName.ifBlank { "My Account" } else "Guest",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = textColor
-                    )
-                    if (isLoggedIn && userEmail.isNotBlank()) {
-                        Text(userEmail, fontSize = 11.sp, color = textColor.copy(alpha = 0.6f))
-                    }
-                }
-                if (isLoggedIn) {
-                    TextButton(onClick = onSignOut, modifier = Modifier.height(32.dp)) {
-                        Text("Log Out", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    }
-                } else {
-                    TextButton(onClick = onGoogleSignIn, modifier = Modifier.height(32.dp)) {
-                        Text("Log In", color = gold, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    }
-                }
-            }
-
-            HorizontalDivider()
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { resourcesExpanded = !resourcesExpanded }
-                    .padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Resources", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = textColor)
-                Text(if (resourcesExpanded) "▲" else "▼", fontSize = 11.sp, color = textColor)
-            }
-
-            if (resourcesExpanded) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(panel, RoundedCornerShape(10.dp))
-                        // FIX 2: Tap = Chat, Hold = Crash Report
-                        // Old code: tap 5 times = logs (deleted)
-                        .combinedClickable(
-                            onClick = {
-                                onClose()
-                                onOpenAiChat()
-                            },
-                            onLongClick = {
-                                showLogs = true
-                            }
-                        )
-                        .padding(10.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.ChatBubbleOutline,
-                            contentDescription = null,
-                            tint = gold,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text("Ask Gemini", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = textColor)
-                            Text("Ask anything about the Bible", fontSize = 11.sp, color = textColor.copy(alpha = 0.6f))
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-            }
-
-            HorizontalDivider()
-
-            Spacer(modifier = Modifier.height(10.dp))
-            Text("Font Size", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = textColor)
-            Slider(
-                value = sliderValue,
-                onValueChange = { sliderValue = it },
-                onValueChangeFinished = { onFontSizeChange(sliderValue) },
-                valueRange = 12f..20f // FIX 1: was 12f..24f
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Dark Mode", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = textColor)
-                Switch(checked = darkMode, onCheckedChange = onDarkModeChange)
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-            HorizontalDivider()
-
-            Button(
-                onClick = onDailyVerse,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(40.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = panel),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Icon(Icons.Default.MenuBook, contentDescription = null, tint = textColor, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Daily Verse", color = textColor, fontSize = 13.sp)
-            }
-
-            Button(
-                onClick = onShowNotes,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(40.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = panel),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Icon(Icons.Default.Notes, contentDescription = null, tint = textColor, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Notes ($notesCount)", color = textColor, fontSize = 13.sp)
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
+    private suspend fun getWebContext(question: String): String {
+        if (!needsWebSearch(question)) return ""
+        val key = question.trim().lowercase()
+        if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) {
+            return cachedWeb
         }
+        val result = withTimeoutOrNull(2200L) { searchTavily(question) } ?: ""
+        return result
     }
+
+    private suspend fun searchTavily(query: String): String {
+        if (tavilyKey.isBlank()) return ""
+        return try {
+            var conn: HttpURLConnection? = null
+            try {
+                val url = URL("https://api.tavily.com/search")
+                conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("Content-Type", "application/json")
+                    connectTimeout = 2000
+                    readTimeout = 2500
+                    doOutput = true
+                }
+                val body = JSONObject()
+                    .put("api_key", tavilyKey)
+                    .put("query", query)
+                    .put("search_depth", "basic")
+                    .put("max_results", 2)
+                    .put("include_answer", false)
+                    .toString()
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                if (conn.responseCode !in 200..299) return ""
+                val text = conn.inputStream.bufferedReader().readText()
+                val json = JSONObject(text)
+                val sb = StringBuilder()
+                val results = json.optJSONArray("results")
+                if (results != null) {
+                    for (i in 0 until minOf(results.length(), 2)) {
+                        val r = results.getJSONObject(i)
+                        val title = r.optString("title")
+                        val content = r.optString("content")
+                        if (content.isNotBlank()) sb.append("$title: ${content.take(350)}\n\n")
+                    }
+                }
+                val out = sb.toString().take(1200)
+                if (out.isNotBlank()) {
+                    cachedQuery = query.trim().lowercase()
+                    cachedWeb = out
+                    cachedAt = System.currentTimeMillis()
+                }
+                out
+            } finally {
+                runCatching { conn?.disconnect() }
+            }
+        } catch (e: Exception) { "" }
+    }
+
+    fun askStreaming(
+        question: String,
+        currentRef: String,
+        history: List<MessageEntity>,
+        image: Bitmap?,
+        bibleContext: String,
+        translation: String = "NKJV"
+    ): Flow<String> = flow {
+        val webContext = if (image == null) getWebContext(question) else ""
+        val basePrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext)
+
+        if (image != null) {
+            for (model in remoteGemini) {
+                _lastProvider.value = "Gemini"
+                var gotAnything = false
+                try {
+                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                        tryGeminiStreaming(model, basePrompt, image).collect { chunk ->
+                            if (chunk.isNotEmpty()) { gotAnything = true; emit(chunk) }
+                        }
+                        true
+                    } ?: false
+                    if (gotAnything && completed) return@flow
+                    if (gotAnything && !completed) return@flow
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
+                }
+            }
+            emit("Could not read the image. Please try again - Gemini is busy right now.")
+            return@flow
+        }
+
+        val errors = mutableListOf<String>()
+
+        coroutineScope {
+            val channel = Channel<Pair<String, String>>(Channel.UNLIMITED)
+            val winner = AtomicReference<String?>(null)
+            val winnerFinished = AtomicBoolean(false)
+            val winnerGotAnything = AtomicBoolean(false)
+
+            val geminiJob = launch {
+                for (model in remoteGemini) {
+                    if (winner.get() != null && winner.get() != "Gemini") break
+                    try {
+                        var gotChunkFromThisModel = false
+                        val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                            tryGeminiStreaming(model, basePrompt, null).collect { chunk ->
+                                if (chunk.isNotEmpty()) {
+                                    gotChunkFromThisModel = true
+                                    winnerGotAnything.set(true)
+                                    winner.compareAndSet(null, "Gemini")
+                                    if (winner.get() == "Gemini") channel.send("Gemini" to chunk)
+                                }
+                            }
+                            true
+                        } ?: false
+                        if (winner.get() == "Gemini") {
+                            if (completed) winnerFinished.set(true)
+                            break
+                        }
+                        if (gotChunkFromThisModel) break
+                        if (!completed) continue
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) {
+                        errors.add("Gemini $model: ${e.message}")
+                        CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
+                    }
+                }
+            }
+
+            val groqJob = launch {
+                if (groqKey.isBlank()) return@launch
+                for (model in remoteGroq) {
+                    // Groq gets ALL his chances: if Gemini already won, stop. Otherwise keep trying.
+                    if (winner.get() != null && winner.get() != "Groq") break
+                    try {
+                        var gotChunkFromThisModel = false
+                        val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                            tryGroqStreaming(model, basePrompt).collect { chunk ->
+                                if (chunk.isNotEmpty()) {
+                                    gotChunkFromThisModel = true
+                                    winnerGotAnything.set(true)
+                                    winner.compareAndSet(null, "Groq")
+                                    if (winner.get() == "Groq") channel.send("Groq" to chunk)
+                                }
+                            }
+                            true
+                        } ?: false
+                        if (winner.get() == "Groq") {
+                            if (completed) winnerFinished.set(true)
+                            break
+                        }
+                        if (gotChunkFromThisModel) break
+                        if (!completed) continue
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) {
+                        errors.add("Groq $model: ${e.message}")
+                        CrashReporter.groqLog("Groq $model failed: ${e.message}")
+                    }
+                }
+            }
+
+            var gotAnything = false
+            var loserCancelled = false
+
+            while (true) {
+                if (geminiJob.isCompleted && groqJob.isCompleted && channel.isEmpty) break
+                if (geminiJob.isCompleted && groqJob.isCompleted) {
+                    val drained = channel.tryReceive().getOrNull()
+                    if (drained == null) break
+                    if (!loserCancelled) {
+                        loserCancelled = true
+                        _lastProvider.value = drained.first
+                    }
+                    gotAnything = true
+                    emit(drained.second)
+                    continue
+                }
+                val result = withTimeoutOrNull(STREAM_TIMEOUT_MS + 5000L) { channel.receiveCatching() }
+                val item = result?.getOrNull() ?: break
+                if (!loserCancelled) {
+                    loserCancelled = true
+                    _lastProvider.value = item.first
+                    if (item.first == "Gemini") groqJob.cancel() else geminiJob.cancel()
+                }
+                gotAnything = true
+                emit(item.second)
+            }
+
+            channel.close()
+            geminiJob.join()
+            groqJob.join()
+
+            if (!gotAnything) {
+                if (errors.isNotEmpty() && errors.all { it.contains("429") }) {
+                    emit("Free daily limit reached for today. Please try again tomorrow.")
+                } else {
+                    emit("All AI models are busy right now. Please try again in a minute.")
+                }
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    suspend fun askQuestion(prompt: String, image: Bitmap? = null): Result<String> {
+        val webContext = if (image == null) getWebContext(prompt) else ""
+        val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
+        val fullPrompt = if (webContext.isNotBlank()) {
+            "Today is $today. WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say cutoff/2024:\n${webContext}\n\nUser question: $prompt"
+        } else {
+            "Today is $today. User question: $prompt"
+        }
+        val sb = StringBuilder()
+        return try {
+            var lastErr: Exception? = null
+            for (model in remoteGemini) {
+                _lastProvider.value = "Gemini"
+                try {
+                    sb.clear()
+                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                        tryGeminiStreaming(model, fullPrompt, image).collect { sb.append(it) }
+                        true
+                    } ?: false
+                    if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                    if (sb.isNotBlank() && !completed) continue
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { lastErr = e; sb.clear() }
+            }
+            if (image != null) return Result.failure(Exception("Could not read the image. Please try again - Gemini is busy right now."))
+            if (groqKey.isNotBlank()) {
+                for (model in remoteGroq) {
+                    _lastProvider.value = "Groq"
+                    try {
+                        sb.clear()
+                        val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                            tryGroqStreaming(model, fullPrompt).collect { sb.append(it) }
+                            true
+                        } ?: false
+                        if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                        if (sb.isNotBlank() && !completed) continue
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) { lastErr = e; sb.clear() }
+                }
+            }
+            Result.failure(lastErr ?: Exception("All AI models are busy right now."))
+        } catch (e: CancellationException) { throw e }
+    }
+
+    private fun buildPrompt(
+        question: String,
+        currentRef: String,
+        history: List<MessageEntity>,
+        bibleContext: String,
+        translation: String,
+        webContext: String = ""
+    ): String {
+        val sb = StringBuilder()
+        val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
+        sb.append("You are a helpful Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
+        // MODERATE: Complete but not essay. 2-3 short paragraphs, ~1200 chars.
+        sb.append("IMPORTANT: Do NOT use Markdown. No **, no ###, no ---, no bullet lists. Write in clean plain paragraphs only. Keep answer complete but moderate - 2 to 3 short paragraphs, around 1200 characters max. Always finish your answer fully. Never stop mid-sentence or mid-verse.\n\n")
+        if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
+        if (webContext.isNotBlank()) {
+            sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say your knowledge is outdated, cut off, or up to 2024. Do NOT use old training data for current events. Answer ONLY from these results:\n${webContext.take(1200)}\n\n")
+        }
+        if (history.isNotEmpty()) {
+            sb.append("CONVERSATION HISTORY (last 4):\n")
+            history.takeLast(4).forEach {
+                sb.append(if (it.isUser) "User: " else "Assistant: ").append(it.text.take(400)).append("\n")
+            }
+            sb.append("\n")
+        }
+        sb.append("User question: $question")
+        return sb.toString()
+    }
+
+    private fun cleanMarkdown(text: String): String {
+        return text.replace("**", "").replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "").trim()
+    }
+
+    private fun bitmapToBase64(image: Bitmap?): String? {
+        if (image == null) return null
+        return try {
+            val scaled = if (image.width > 1024) {
+                val ratio = 1024f / image.width
+                Bitmap.createScaledBitmap(image, 1024, (image.height * ratio).toInt(), true)
+            } else image
+            val bytes = ByteArrayOutputStream().use { out ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, 70, out)
+                out.toByteArray()
+            }
+            android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        } catch (_: Exception) { null }
+    }
+
+    private fun tryGeminiStreaming(model: String, prompt: String, image: Bitmap?): Flow<String> = flow {
+        var conn: HttpURLConnection? = null
+        try {
+            if (geminiKey.isBlank()) throw Exception("No Gemini API key")
+            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?alt=sse&key=$geminiKey")
+            conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                connectTimeout = 5000
+                readTimeout = 45000
+                doOutput = true
+            }
+            val parts = JSONArray().put(JSONObject().put("text", prompt))
+            val base64 = bitmapToBase64(image)
+            if (base64 != null) parts.put(JSONObject().put("inlineData", JSONObject().put("mimeType", "image/jpeg").put("data", base64)))
+            val genConfig = JSONObject().put("maxOutputTokens", MAX_TOKENS)
+            if (model == "gemini-4-hydrogen") {
+                genConfig.put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
+            }
+            val body = JSONObject()
+                .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
+                .put("generationConfig", genConfig)
+                .toString()
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode !in 200..299) {
+                val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull() ?: ""
+                throw Exception("Gemini HTTP ${conn.responseCode}: ${err.take(200)}")
+            }
+            val reader: BufferedReader = conn.inputStream.bufferedReader()
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                val l = line!!.trim()
+                if (!l.startsWith("data:")) continue
+                val jsonStr = l.removePrefix("data:").trim()
+                if (jsonStr.isEmpty() || jsonStr == "[DONE]") continue
+                val text = JSONObject(jsonStr)
+                    .optJSONArray("candidates")?.optJSONObject(0)
+                    ?.optJSONObject("content")?.optJSONArray("parts")
+                    ?.optJSONObject(0)?.optString("text")
+                if (!text.isNullOrEmpty()) emit(text)
+            }
+        } catch (e: CancellationException) { throw e }
+        finally { runCatching { conn?.disconnect() } }
+    }.flowOn(Dispatchers.IO)
+
+    private fun tryGroqStreaming(model: String, prompt: String): Flow<String> = flow {
+        var conn: HttpURLConnection? = null
+        try {
+            if (groqKey.isBlank()) throw Exception("No Groq API key")
+            val url = URL("https://api.groq.com/openai/v1/chat/completions")
+            conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Authorization", "Bearer $groqKey")
+                connectTimeout = 5000
+                readTimeout = 45000
+                doOutput = true
+            }
+            val body = JSONObject()
+                .put("model", model)
+                .put("temperature", 0.7)
+                .put("max_tokens", MAX_TOKENS)
+                .put("stream", true)
+                .put("messages", JSONArray()
+                    .put(JSONObject().put("role", "system").put("content", "You are a helpful Bible assistant. Answer clearly, warmly, and biblically. No Markdown. Keep answer complete but moderate - 2 to 3 short paragraphs, around 1200 characters max. Always finish your answer fully, never stop mid-sentence. If WEB SEARCH RESULTS are provided, you MUST use them and never say your knowledge is cut off."))
+                    .put(JSONObject().put("role", "user").put("content", prompt)))
+                .toString()
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode !in 200..299) {
+                val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull() ?: ""
+                throw Exception("Groq HTTP ${conn.responseCode}: ${err.take(200)}")
+            }
+            val reader: BufferedReader = conn.inputStream.bufferedReader()
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                val l = line!!.trim()
+                if (!l.startsWith("data:")) continue
+                val data = l.removePrefix("data:").trim()
+                if (data.isEmpty() || data == "[DONE]") continue
+                val delta = JSONObject(data)
+                    .optJSONArray("choices")?.optJSONObject(0)
+                    ?.optJSONObject("delta")?.optString("content")
+                if (!delta.isNullOrEmpty()) emit(delta)
+            }
+        } catch (e: CancellationException) { throw e }
+        finally { runCatching { conn?.disconnect() } }
+    }.flowOn(Dispatchers.IO)
 }
