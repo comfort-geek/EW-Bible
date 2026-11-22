@@ -60,7 +60,8 @@ object CommentaryHelper {
         val hasHead = t.contains("<head", ignoreCase = true)
         val hasBody = t.contains("<body", ignoreCase = true)
         if (!hasScript && !hasStyle && !hasHead && !hasBody) {
-            return if (t.isNotEmpty() && (t[0].isWhitespace() || t[t.length - 1].isWhitespace())) t.trim() else t
+            val cleaned = if (t.isNotEmpty() && (t[0].isWhitespace() || t[t.length - 1].isWhitespace())) t.trim() else t
+            return startFromA(cleaned)
         }
         if (hasScript) t = removeTag(t, "script")
         if (hasStyle) t = removeTag(t, "style")
@@ -71,7 +72,7 @@ object CommentaryHelper {
             val end = t.lastIndexOf("</body>", ignoreCase = true)
             if (end != -1) t = t.substring(0, end)
         }
-        return t.trim()
+        return startFromA(t).trim()
     }
 
     private fun removeTag(html: String, tag: String): String {
@@ -94,6 +95,24 @@ object CommentaryHelper {
         }
         sb.append(html, pos, html.length)
         return sb.toString()
+    }
+
+    // RULE: Every chapter must start with "A."
+    // e.g. Genesis 1 -> "A. Thoughts to begin..."
+    //      Genesis 4 -> "A. Cain's murder of Abel."
+    // "A." is already bold in the data, so we don't touch it.
+    private fun startFromA(html: String): String {
+        // Find the first "A." heading
+        // Matches: <h2>A. ...</h2> / <p><b>A. ...</b></p> / <p><b>A.</b> Thoughts...</p>
+        val aHeading = Regex(
+            """(?i)<(h[1-6]|p|div)[^>]*>(?:\s*<[^>]+>)*\s*A\.(?:\s|&nbsp;|<)"""
+        )
+        val match = aHeading.find(html)
+        if (match != null) {
+            // Start the chapter here — everything before A. is ignored
+            return html.substring(match.range.first)
+        }
+        return html
     }
 
     fun getHtmlCommentary(compressed: ByteArray?): String {
