@@ -9,6 +9,11 @@ import java.util.zip.Inflater
 object CommentaryHelper {
 
     private val htmlCache = LruCache<Long, String>(60)
+    // FIX: LruCache is NOT thread-safe. ViewModel calls this from Main + IO.
+    // All get/put must be locked.
+    private val htmlCacheLock = Any()
+    private fun getHtmlCached(k: Long): String? = synchronized(htmlCacheLock) { htmlCache.get(k) }
+    private fun putHtmlCached(k: Long, html: String) = synchronized(htmlCacheLock) { htmlCache.put(k, html) }
 
     private val bufferPool = ThreadLocal.withInitial { ByteArray(65536) }
     private val outPool = ThreadLocal.withInitial { ByteArray(262144) }
@@ -99,33 +104,31 @@ object CommentaryHelper {
     fun getHtmlCommentary(bookId: Int, chapter: Int, compressed: ByteArray?): String {
         if (compressed == null || compressed.isEmpty()) return ""
         val k = key(bookId, chapter)
-        htmlCache.get(k)?.let { return it }
+        getHtmlCached(k)?.let { return it }
         val html = cleanHtml(decompress(compressed))
-        htmlCache.put(k, html)
+        putHtmlCached(k, html)
         return html
     }
 
     // FIX 1: Check cache without hitting DB - for instant Next
     fun getCached(bookId: Int, chapter: Int): String? {
-        return htmlCache.get(key(bookId, chapter))
+        return getHtmlCached(key(bookId, chapter))
     }
 
     fun hasCached(bookId: Int, chapter: Int): Boolean {
-        return htmlCache.get(key(bookId, chapter)) != null
+        return getHtmlCached(key(bookId, chapter)) != null
     }
 
     // FIX 2: Preload from bytes (your old version - keep it)
     fun preload(bookId: Int, chapter: Int, compressed: ByteArray?) {
         if (compressed == null || compressed.isEmpty()) return
         val k = key(bookId, chapter)
-        if (htmlCache.get(k) != null) return
+        if (getHtmlCached(k) != null) return
         val html = cleanHtml(decompress(compressed))
-        htmlCache.put(k, html)
+        putHtmlCached(k, html)
     }
 
     // FIX 3: THE INSTANT FIX - preload NEXT chapter by loading from DB in background
-    // Call this when user opens a chapter. It fetches next chapter's bytes itself.
-    // loader: suspend (bookId, chapter) -> ByteArray?  = your DAO call
     fun preloadNext(
         scope: CoroutineScope,
         currentBookId: Int,
@@ -133,18 +136,15 @@ object CommentaryHelper {
         loader: suspend (bookId: Int, chapter: Int) -> ByteArray?
     ) {
         scope.launch(Dispatchers.IO) {
-            // Next chapter in same book
             val total = BookCatalog.chapters(currentBookId)
             if (currentChapter < total) {
                 preloadOne(currentBookId, currentChapter + 1, loader)
             } else {
-                // First chapter of next book - so Next at end of book is also instant
                 val nextBookId = currentBookId + 1
                 if (nextBookId <= 66) {
                     preloadOne(nextBookId, 1, loader)
                 }
             }
-            // Also preload previous, so Back is instant too
             if (currentChapter > 1) {
                 preloadOne(currentBookId, currentChapter - 1, loader)
             }
@@ -156,16 +156,19 @@ object CommentaryHelper {
         chapter: Int,
         loader: suspend (bookId: Int, chapter: Int) -> ByteArray?
     ) {
+        // FIX: bounds check - never ask DAO for chapter 0 or > max
+        if (bookId !in 1..66) return
+        if (chapter !in 1..BookCatalog.chapters(bookId)) return
         val k = key(bookId, chapter)
-        if (htmlCache.get(k) != null) return
+        if (getHtmlCached(k) != null) return
         runCatching {
             val compressed = loader(bookId, chapter) ?: return
             val html = cleanHtml(decompress(compressed))
-            if (html.isNotBlank()) htmlCache.put(k, html)
+            if (html.isNotBlank()) putHtmlCached(k, html)
         }
     }
 
     fun clearCache() {
-        htmlCache.evictAll()
+        synchronized(htmlCacheLock) { htmlCache.evictAll() }
     }
 }
