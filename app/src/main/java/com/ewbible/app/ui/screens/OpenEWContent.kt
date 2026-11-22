@@ -56,7 +56,8 @@ private val BOOK_PATTERN = DISPLAY_NAMES
 private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?(?!\\d)")
 private val H1_REGEX = Regex("(?is)<h1[^>]*>.*?</h1>")
 
-private val parsedCache = LruCache<String, List<SpannableString>>(30)
+// INSTANT: bigger cache = 100 chapters, not 30. Revisiting a book is instant.
+private val parsedCache = LruCache<String, List<SpannableString>>(100)
 private val parsedCacheLock = Any()
 private fun getParsedCached(key: String): List<SpannableString>? =
     synchronized(parsedCacheLock) { parsedCache.get(key) }
@@ -211,6 +212,7 @@ fun OpenEWContent(
     val listState = rememberLazyListState()
 
     LaunchedEffect(cacheKey) {
+        if (bookName.isBlank() || chapter < 1) return@LaunchedEffect
         listState.scrollToItem(0)
         val bookId = BookCatalog.id(bookName)
         val total = BookCatalog.chapters(bookId)
@@ -253,14 +255,26 @@ fun OpenEWContent(
         }
     }
 
-    // SWIPE: horizontal-only, on the outer Column - NOT detectDragGestures.
-    // detectDragGestures consumed ALL drags and blocked vertical scroll.
-    // detectHorizontalDragGestures only claims the gesture when horizontal
-    // movement wins, so vertical scroll in LazyColumn still works.
-    // Swipe left = Next, Swipe right = Prev. Threshold 120px = no accidental taps.
-    // This is connected to HomeScreen: HomeScreen passes
-    // onNextChapter = { viewModel.nextChapter() } / onPreviousChapter = { viewModel.previousChapter() }
-    // No buttons needed - swipe IS the navigation.
+    // INSTANT FIX 1: Keep last good chapter on screen.
+    // When you switch book, paragraphs becomes null for a moment.
+    // Instead of showing blank, keep showing old chapter until new one is ready.
+    // User sees NO blank, NO flicker.
+    var lastGoodParagraphs by remember { mutableStateOf<List<SpannableString>?>(null) }
+    var lastGoodKey by remember { mutableStateOf("") }
+    if (paragraphs != null) {
+        lastGoodParagraphs = paragraphs
+        lastGoodKey = cacheKey
+    }
+    // Show new if ready, else show old. Never show null.
+    val displayParagraphs = paragraphs ?: lastGoodParagraphs ?: emptyList()
+    val displayKey = if (paragraphs != null) cacheKey else lastGoodKey
+    val displayTitle = if (paragraphs != null) {
+        if (bookName.isNotBlank()) "$bookName $chapter" else ""
+    } else {
+        // Keep old title while loading, so header does not flash to empty
+        lastGoodKey
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -283,7 +297,7 @@ fun OpenEWContent(
             }
     ) {
         Text(
-            text = if (bookName.isNotBlank()) "$bookName $chapter" else "",
+            text = displayTitle,
             color = textColor,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
@@ -292,12 +306,7 @@ fun OpenEWContent(
                 .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp)
         )
 
-        if (hasError && paragraphs == null && !isLoading) {
-            // No Retry button - tap anywhere to retry is confusing.
-            // Swipe still works on error screen, and HomeScreen retry is via onRetry
-            // if you want it: long-press is NOT used. Keep error text only,
-            // user can swipe to next/prev or switch tab and back to retry.
-            // If you DO want tap-to-retry, uncomment the clickable below.
+        if (hasError && displayParagraphs.isEmpty() && !isLoading) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(18.dp)) {
                 Text(
                     "Could not load commentary. Swipe to try another chapter.",
@@ -306,8 +315,8 @@ fun OpenEWContent(
                     lineHeight = (effectiveFontSize + 8).sp
                 )
             }
-        } else if (paragraphs == null) {
-            if (!isLoading && commentaryHtml.isBlank() && cachedInstant == null) {
+        } else if (displayParagraphs.isEmpty()) {
+            if (!isLoading && commentaryHtml.isBlank() && cachedInstant == null && lastGoodParagraphs == null) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
                     Text(
                         "No commentary available for this chapter.",
@@ -326,8 +335,8 @@ fun OpenEWContent(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)
             ) {
                 itemsIndexed(
-                    items = paragraphs!!,
-                    key = { index, _ -> "$cacheKey-$index" }
+                    items = displayParagraphs,
+                    key = { index, _ -> "$displayKey-$index" }
                 ) { _, paragraph ->
                     AndroidView(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
