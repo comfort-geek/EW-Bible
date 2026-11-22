@@ -1,5 +1,6 @@
 package com.ewbible.app.data.ai
 
+import android.content.Context
 import android.graphics.Bitmap
 import com.ewbible.app.BuildConfig
 import com.ewbible.app.CrashReporter
@@ -29,19 +30,82 @@ class AiRepository {
     private val groqKey: String
         get() = try { BuildConfig.GROQ_API_KEY } catch (_: Exception) { "" }
 
-    // --- UPDATED 22 NOV 2026 ---
-    // Gemini: Hydrogen = newest, free. 3.8 Flash = fast/cheap. Lite = fastest fallback.
-    // Groq: 120b = best Production. Qwen 3.8 = smartest but Preview. 20b = fastest fallback.
-    private val GEMINI_MODELS = listOf(
+    // --- REMOTE MODELS - Edit on GitHub, no app update needed ---
+    private val REMOTE_MODELS_URL =
+        "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
+
+    // Fallback - used if offline or GitHub fails
+    private val FALLBACK_GEMINI = listOf(
         "gemini-4-hydrogen",
         "gemini-3.8-flash",
         "gemini-3.5-flash-lite"
     )
-    private val GROQ_MODELS = listOf(
+    private val FALLBACK_GROQ = listOf(
         "openai/gpt-oss-120b",
         "qwen/qwen3.8-27b",
         "openai/gpt-oss-20b"
     )
+
+    // These start as fallback, then get replaced by GitHub list
+    private var remoteGemini = FALLBACK_GEMINI
+    private var remoteGroq = FALLBACK_GROQ
+    private var remoteVersion = 3
+
+    // Call this once when app starts
+    suspend fun refreshModels(context: Context) {
+        val prefs = context.getSharedPreferences("ew_models", Context.MODE_PRIVATE)
+
+        // 1. Load saved list first (for offline)
+        try {
+            val savedVersion = prefs.getInt("version", 3)
+            val savedGemini = prefs.getString("gemini", null)
+            val savedGroq = prefs.getString("groq", null)
+            if (savedGemini != null && savedGroq != null) {
+                val g = JSONArray(savedGemini)
+                val q = JSONArray(savedGroq)
+                if (g.length() > 0) remoteGemini = (0 until g.length()).map { g.getString(it) }
+                if (q.length() > 0) remoteGroq = (0 until q.length()).map { q.getString(it) }
+                remoteVersion = savedVersion
+            }
+        } catch (_: Exception) { }
+
+        // 2. Try to download new list from GitHub
+        try {
+            val url = URL(REMOTE_MODELS_URL)
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            conn.requestMethod = "GET"
+            if (conn.responseCode == 200) {
+                val text = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                val json = JSONObject(text)
+                val newVersion = json.optInt("version", 0)
+
+                // Only update if GitHub version is NEWER
+                if (newVersion > remoteVersion) {
+                    val g = json.optJSONArray("gemini")
+                    val q = json.optJSONArray("groq")
+                    if (g != null && g.length() > 0) {
+                        remoteGemini = (0 until g.length()).map { g.getString(it) }
+                    }
+                    if (q != null && q.length() > 0) {
+                        remoteGroq = (0 until q.length()).map { q.getString(it) }
+                    }
+                    remoteVersion = newVersion
+
+                    // Save for offline next time
+                    prefs.edit()
+                        .putInt("version", newVersion)
+                        .putString("gemini", JSONArray(remoteGemini).toString())
+                        .putString("groq", JSONArray(remoteGroq).toString())
+                        .apply()
+                }
+            }
+        } catch (_: Exception) {
+            // Offline / GitHub down -> keep fallback, app still works
+        }
+    }
 
     // --- REAL STREAMING ---
     fun askStreaming(
@@ -57,7 +121,7 @@ class AiRepository {
         var gotAnything = false
 
         // 1. Gemini streaming
-        for (model in GEMINI_MODELS) {
+        for (model in remoteGemini) {
             _lastProvider.value = "Gemini"
             try {
                 tryGeminiStreaming(model, fullPrompt, image).collect { chunk ->
@@ -84,7 +148,7 @@ class AiRepository {
 
         // 2. Groq streaming
         if (groqKey.isNotBlank()) {
-            for (model in GROQ_MODELS) {
+            for (model in remoteGroq) {
                 _lastProvider.value = "Groq"
                 try {
                     tryGroqStreaming(model, fullPrompt).collect { chunk ->
@@ -120,7 +184,7 @@ class AiRepository {
         val sb = StringBuilder()
         return try {
             var lastErr: Exception? = null
-            for (model in GEMINI_MODELS) {
+            for (model in remoteGemini) {
                 _lastProvider.value = "Gemini"
                 try {
                     sb.clear()
@@ -131,7 +195,7 @@ class AiRepository {
             }
             if (image != null) return Result.failure(Exception("Could not read the image. Please try again - Gemini is busy right now."))
             if (groqKey.isNotBlank()) {
-                for (model in GROQ_MODELS) {
+                for (model in remoteGroq) {
                     _lastProvider.value = "Groq"
                     try {
                         sb.clear()
