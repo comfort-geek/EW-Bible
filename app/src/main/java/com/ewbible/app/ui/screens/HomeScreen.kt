@@ -4,13 +4,11 @@ import android.app.Activity
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -50,14 +48,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.data.auth.GoogleAuth
 import com.ewbible.app.data.database.BookCatalog
-import com.ewbible.app.data.database.CommentaryHelper
 import com.ewbible.app.data.database.NoteEntity
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.ui.viewmodel.ChatViewModel
@@ -153,53 +149,28 @@ fun HomeScreen(
     val ntBooks = remember(state.books) { state.books.filter { it.id >= 40 }.sortedBy { it.id } }
     val tabs = remember { listOf("Bible", "Open EW", "Search") }
 
-    // FIX 1: BLANK ON FIRST OPEN
-    // When user switches to Open EW, force load if commentary is blank.
-    // Before, Open EW just showed whatever state.commentaryHtml was (blank) and waited
-    // for a tab switch to trigger a recomposition.
-    LaunchedEffect(state.selectedTab, state.currentBookId, state.selectedChapter) {
-        if (state.selectedTab == "Open EW" && state.commentaryHtml.isBlank() && !state.commentaryError) {
-            viewModel.loadCommentary()
-        }
-    }
+    // FIX: MISMATCH + BLANK - single source of truth is ViewModel.
+    // Do NOT keep a local copy of commentary HTML in HomeScreen.
+    // If ViewModel HTML is not for the current chapter, show "" (loading)
+    // instead of old chapter HTML under new header.
+    val isCommentaryForCurrent = state.commentaryBookId == state.currentBookId &&
+        state.commentaryChapter == state.selectedChapter
+    val effectiveCommentaryHtml = if (isCommentaryForCurrent) state.commentaryHtml else ""
+    val isCommentaryLoading = state.selectedTab == "Open EW" &&
+        effectiveCommentaryHtml.isBlank() && !state.commentaryError
 
-    // FIX 2: MISMATCH - Genesis 10 header + Genesis 9 content
-    // When chapter changes, the old HTML must NOT be shown under the new header.
-    // We track which chapter the currently displayed HTML belongs to.
-    // If it doesn't match the selected chapter, we show "" (loading) instead of old HTML.
-    var displayedCommentaryChapter by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    var displayedCommentaryHtml by remember { mutableStateOf("") }
-
-    LaunchedEffect(state.currentBookId, state.selectedChapter) {
-        // Chapter changed -> clear instantly, don't wait for DB
-        if (displayedCommentaryChapter != (state.currentBookId to state.selectedChapter)) {
-            displayedCommentaryHtml = ""
-        }
-    }
-    LaunchedEffect(state.commentaryHtml, state.currentBookId, state.selectedChapter) {
-        // Only accept new HTML if ViewModel has already moved to this chapter.
-        // This prevents old-chapter HTML arriving late and overwriting new chapter.
-        if (state.commentaryHtml.isNotBlank()) {
-            displayedCommentaryChapter = state.currentBookId to state.selectedChapter
-            displayedCommentaryHtml = state.commentaryHtml
-        }
-    }
-    // Effective HTML to show - blank while new chapter loads = no mismatch
-    val effectiveCommentaryHtml = if (displayedCommentaryChapter == (state.currentBookId to state.selectedChapter)) {
-        displayedCommentaryHtml
-    } else {
-        ""
-    }
-    val isCommentaryLoading = state.selectedTab == "Open EW" && effectiveCommentaryHtml.isBlank() && !state.commentaryError
-
-    // FIX 3: INSTANT NEXT CHAPTER - prefetch
-    // When Open EW is visible, prefetch next + previous in background via CommentaryHelper cache.
-    // ViewModel.loadCommentary() should also call CommentaryHelper.preload() - see note below.
-    // Here we trigger prefetch through ViewModel so DB access stays in ViewModel.
+    // FIX: INSTANT NEXT CHAPTER - prefetch with bounds check.
+    // No duplicate loadCommentary() here - ViewModel already loads on
+    // combine(bookChapterKey, selectedTab). Calling it here caused cancel loop.
     LaunchedEffect(state.selectedTab, state.currentBookId, state.selectedChapter) {
         if (state.selectedTab == "Open EW") {
-            viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter + 1)
-            viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter - 1)
+            val max = BookCatalog.chapters(state.currentBookId)
+            if (state.selectedChapter < max) {
+                viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter + 1)
+            }
+            if (state.selectedChapter > 1) {
+                viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter - 1)
+            }
         }
     }
 
@@ -291,51 +262,30 @@ fun HomeScreen(
                         )
                     }
                     "Open EW" -> {
-                        // FIX: SWIPE - use detectHorizontalDragGestures, NOT detectDragGestures
-                        // Old code used detectDragGestures which consumed ALL drags, blocking
-                        // LazyColumn vertical scroll and making taps feel stuck.
-                        // Horizontal-only lets vertical scroll pass through to OpenEWContent.
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(Unit) {
-                                    detectHorizontalDragGestures(
-                                        onDragEnd = { },
-                                        onHorizontalDrag = { _, dragAmount ->
-                                            // Threshold check happens on end - we accumulate here
-                                            // Simple instant swipe: if drag > 120, go next/prev
-                                            // We use a local accumulator via closure
-                                        }
-                                    )
-                                }
-                        ) {
-                            // NOTE: Swipe is handled by buttons / onNextChapter in OpenEWContent
-                            // for reliability. The Box above is kept for layout only.
-                            // If you want swipe, add it in OpenEWContent's LazyColumn instead.
-                            // Keeping swipe OUT of here fixes the blank / stuck scroll bug.
-                            OpenEWContent(
-                                commentaryHtml = effectiveCommentaryHtml,
-                                fontSize = state.fontSize,
-                                textColor = textColor,
-                                hasError = state.commentaryError,
-                                isLoading = isCommentaryLoading,
-                                bookName = currentBookName,
-                                chapter = state.selectedChapter,
-                                onVerseClick = { book, chapter, verse, endVerse ->
-                                    linkedVerseBook = book; linkedVerseChapter = chapter
-                                    linkedVerseNum = verse; linkedVerseEnd = endVerse
-                                    viewModel.loadLinkedVerse(book, chapter, verse, endVerse)
-                                    showLinkedVerseSheet = true
-                                },
-                                onNextChapter = { viewModel.nextChapter() },
-                                onPreviousChapter = { viewModel.previousChapter() },
-                                onRetry = { viewModel.loadCommentary() },
-                                onPrefetchChapter = { book, chapter ->
-                                    // Prefetch next chapter so tapping Next is instant
-                                    viewModel.prefetchCommentary(BookCatalog.id(book), chapter)
-                                }
-                            )
-                        }
+                        // FIX: No swipe wrapper here. The old detectDragGestures /
+                        // detectHorizontalDragGestures Box consumed drags and blocked
+                        // LazyColumn vertical scroll. Swipe lives in OpenEWContent if needed.
+                        OpenEWContent(
+                            commentaryHtml = effectiveCommentaryHtml,
+                            fontSize = state.fontSize,
+                            textColor = textColor,
+                            hasError = state.commentaryError,
+                            isLoading = isCommentaryLoading,
+                            bookName = currentBookName,
+                            chapter = state.selectedChapter,
+                            onVerseClick = { book, chapter, verse, endVerse ->
+                                linkedVerseBook = book; linkedVerseChapter = chapter
+                                linkedVerseNum = verse; linkedVerseEnd = endVerse
+                                viewModel.loadLinkedVerse(book, chapter, verse, endVerse)
+                                showLinkedVerseSheet = true
+                            },
+                            onNextChapter = { viewModel.nextChapter() },
+                            onPreviousChapter = { viewModel.previousChapter() },
+                            onRetry = { viewModel.loadCommentary() },
+                            onPrefetchChapter = { book, chapter ->
+                                viewModel.prefetchCommentary(BookCatalog.id(book), chapter)
+                            }
+                        )
                     }
                     "Search" -> {
                         SearchContent(
