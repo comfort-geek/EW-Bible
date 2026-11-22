@@ -29,6 +29,7 @@ android {
         versionName = "1.2"
         buildConfigField("String", "GEMINI_API_KEY", "\"${System.getenv("GEMINI_API_KEY") ?: ""}\"")
         buildConfigField("String", "GROQ_API_KEY", "\"${System.getenv("GROQ_API_KEY") ?: ""}\"")
+        buildConfigField("String", "TAVILY_API_KEY", "\"${System.getenv("TAVILY_API_KEY") ?: ""}\"")
     }
     buildTypes {
         debug {
