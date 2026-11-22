@@ -29,8 +29,19 @@ class AiRepository {
     private val groqKey: String
         get() = try { BuildConfig.GROQ_API_KEY } catch (_: Exception) { "" }
 
-    private val GEMINI_MODELS = listOf("gemini-3.8-flash", "gemini-3.5-flash-lite")
-    private val GROQ_MODELS = listOf("openai/gpt-oss-120b", "openai/gpt-oss-20b")
+    // --- UPDATED 22 NOV 2026 ---
+    // Gemini: Hydrogen = newest, free. 3.8 Flash = fast/cheap. Lite = fastest fallback.
+    // Groq: 120b = best Production. Qwen 3.8 = smartest but Preview. 20b = fastest fallback.
+    private val GEMINI_MODELS = listOf(
+        "gemini-4-hydrogen",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+    )
+    private val GROQ_MODELS = listOf(
+        "openai/gpt-oss-120b",
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-20b"
+    )
 
     // --- REAL STREAMING ---
     fun askStreaming(
@@ -59,7 +70,6 @@ class AiRepository {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // FIX 1: If we already emitted anything, KEEP it. Don't mix models.
                 if (gotAnything) return@flow
                 errors.add("Gemini $model: ${e.message}")
                 CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
@@ -87,7 +97,6 @@ class AiRepository {
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    // FIX 1: Same here - partial Groq answer is better than mixed answer
                     if (gotAnything) return@flow
                     errors.add("Groq $model: ${e.message}")
                     CrashReporter.groqLog("Groq $model failed: ${e.message}")
@@ -99,7 +108,6 @@ class AiRepository {
         }
 
         if (!gotAnything) {
-            // FIX: errors.isNotEmpty() check - empty list would wrongly say "limit reached"
             if (errors.isNotEmpty() && errors.all { it.contains("429") }) {
                 emit("Free daily limit reached for today. Please try again tomorrow.")
             } else {
@@ -194,9 +202,17 @@ class AiRepository {
             val parts = JSONArray().put(JSONObject().put("text", prompt))
             val base64 = bitmapToBase64(image)
             if (base64 != null) parts.put(JSONObject().put("inlineData", JSONObject().put("mimeType", "image/jpeg").put("data", base64)))
+
+            // Hydrogen defaults to thinking=high (slow). Force low for Bible answers.
+            // Do NOT send thinkingConfig to 3.8 / Lite - can cause 400.
+            val genConfig = JSONObject().put("maxOutputTokens", 1000)
+            if (model == "gemini-4-hydrogen") {
+                genConfig.put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
+            }
+
             val body = JSONObject()
                 .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
-                .put("generationConfig", JSONObject().put("maxOutputTokens", 1000))
+                .put("generationConfig", genConfig)
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             if (conn.responseCode !in 200..299) {
