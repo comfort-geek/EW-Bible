@@ -91,6 +91,7 @@ fun AiChatScreen(
     }
 
     LaunchedEffect(Unit) {
+        viewModel.refreshModels(context)
         viewModel.loadChats()
         delay(350)
         val s = viewModel.state.value
