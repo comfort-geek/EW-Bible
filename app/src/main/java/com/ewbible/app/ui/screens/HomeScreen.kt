@@ -4,6 +4,7 @@ import android.app.Activity
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -60,6 +62,7 @@ import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.ui.viewmodel.ChatViewModel
 import com.ewbible.app.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 @Composable
 private fun TopBar(
@@ -240,20 +243,45 @@ fun HomeScreen(
                         )
                     }
                     "Open EW" -> {
-                        OpenEWContent(
-                            commentaryHtml = state.commentaryHtml, fontSize = state.fontSize,
-                            textColor = textColor, hasError = state.commentaryError,
-                            isLoading = state.commentaryHtml.isBlank() && !state.commentaryError,
-                            bookName = currentBookName, chapter = state.selectedChapter,
-                            onVerseClick = { book, chapter, verse, endVerse ->
-                                linkedVerseBook = book; linkedVerseChapter = chapter
-                                linkedVerseNum = verse; linkedVerseEnd = endVerse
-                                viewModel.loadLinkedVerse(book, chapter, verse, endVerse)
-                                showLinkedVerseSheet = true
-                            },
-                            onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() },
-                            onRetry = { viewModel.loadCommentary() }
-                        )
+                        // SWIPE ADDED: outer Box watches horizontal drag, does NOT consume it
+                        // so LazyColumn vertical scroll + verse link taps still work
+                        var swipeX by remember { mutableStateOf(0f) }
+                        var swipeY by remember { mutableStateOf(0f) }
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(Unit) {
+                                    detectDragGestures(
+                                        onDragStart = { swipeX = 0f; swipeY = 0f },
+                                        onDragEnd = {
+                                            if (abs(swipeX) > 120 && abs(swipeX) > abs(swipeY) * 2) {
+                                                if (swipeX < 0) viewModel.nextChapter()
+                                                else viewModel.previousChapter()
+                                            }
+                                        },
+                                        onDrag = { _, amount ->
+                                            swipeX += amount.x
+                                            swipeY += amount.y
+                                        }
+                                    )
+                                }
+                        ) {
+                            OpenEWContent(
+                                commentaryHtml = state.commentaryHtml, fontSize = state.fontSize,
+                                textColor = textColor, hasError = state.commentaryError,
+                                isLoading = state.commentaryHtml.isBlank() && !state.commentaryError,
+                                bookName = currentBookName, chapter = state.selectedChapter,
+                                onVerseClick = { book, chapter, verse, endVerse ->
+                                    linkedVerseBook = book; linkedVerseChapter = chapter
+                                    linkedVerseNum = verse; linkedVerseEnd = endVerse
+                                    viewModel.loadLinkedVerse(book, chapter, verse, endVerse)
+                                    showLinkedVerseSheet = true
+                                },
+                                onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() },
+                                onRetry = { viewModel.loadCommentary() }
+                            )
+                        }
                     }
                     "Search" -> {
                         SearchContent(
