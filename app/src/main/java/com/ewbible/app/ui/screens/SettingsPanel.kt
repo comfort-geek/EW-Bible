@@ -2,6 +2,7 @@ package com.ewbible.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalFoundationApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -51,11 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.CrashReportDialog
 
-// FIXED: Persists even when Settings closes, so 5 taps across opens still count
-private object GeminiDebugTap {
-    var count = 0
-}
-
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SettingsPanel(
     visible: Boolean,
@@ -79,7 +77,8 @@ fun SettingsPanel(
     onOpenAiChat: () -> Unit = {},
 ) {
     var resourcesExpanded by rememberSaveable { mutableStateOf(false) }
-    var sliderValue by remember(fontSize) { mutableFloatStateOf(fontSize.coerceIn(12f, 24f)) }
+    // FIX 1: Reduced slider - was 12f..24f, now 12f..20f
+    var sliderValue by remember(fontSize) { mutableFloatStateOf(fontSize.coerceIn(12f, 20f)) }
     var showLogs by remember { mutableStateOf(false) }
 
     if (!visible && !showLogs) return
@@ -183,16 +182,17 @@ fun SettingsPanel(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(panel, RoundedCornerShape(10.dp))
-                        .clickable {
-                            GeminiDebugTap.count++
-                            if (GeminiDebugTap.count >= 5) {
-                                GeminiDebugTap.count = 0
-                                showLogs = true
-                            } else {
+                        // FIX 2: Tap = Chat, Hold = Crash Report
+                        // Old code: tap 5 times = logs (deleted)
+                        .combinedClickable(
+                            onClick = {
                                 onClose()
                                 onOpenAiChat()
+                            },
+                            onLongClick = {
+                                showLogs = true
                             }
-                        }
+                        )
                         .padding(10.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -220,7 +220,7 @@ fun SettingsPanel(
                 value = sliderValue,
                 onValueChange = { sliderValue = it },
                 onValueChangeFinished = { onFontSizeChange(sliderValue) },
-                valueRange = 12f..24f
+                valueRange = 12f..20f // FIX 1: was 12f..24f
             )
             Spacer(modifier = Modifier.height(8.dp))
 
