@@ -94,7 +94,6 @@ class HomeViewModel(
     private val summaryMissing = Collections.synchronizedSet(mutableSetOf<String>())
     private val summaryLoadingKeys = Collections.synchronizedSet(mutableSetOf<String>())
     private val versesCache = LruCache<String, List<VerseEntity>>(60)
-    // INSTANT: 60 -> 120, keep more chapters in memory
     private val commentaryHtmlCache = LruCache<String, String>(120)
 
     private val prophecyBooks = setOf(23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,66)
@@ -183,7 +182,8 @@ class HomeViewModel(
         viewModelScope.launch { currentNoteText.collect { _uiState.update { s -> s.copy(currentNoteText = it) } } }
         viewModelScope.launch { isReadingRestored.collect { _uiState.update { s -> s.copy(isReadingRestored = it) } } }
         viewModelScope.launch { prefs.isDarkMode.collect { _uiState.update { s -> s.copy(darkMode = it) } } }
-        viewModelScope.launch { prefs.fontSize.collect { _uiState.update { s -> s.copy(fontSize = it.coerceAtLeast(18f)) } } }
+        // FIX: was coerceAtLeast(18f) - blocked 12-17, now matches SettingsPanel 12..20
+        viewModelScope.launch { prefs.fontSize.collect { _uiState.update { s -> s.copy(fontSize = it.coerceIn(12f, 20f)) } } }
         viewModelScope.launch {
             combine(prefs.userName, prefs.userEmail) { n, e -> n to e }.collect { (n, e) ->
                 _uiState.update { s -> s.copy(userName = n, userEmail = e, isLoggedIn = n != "Guest" && e.isNotBlank()) }
@@ -277,7 +277,6 @@ class HomeViewModel(
         selectedVerse.value = null
         scrollRestoreKey.value += 1
         saveReadingProgress()
-        // INSTANT: prefetch first 3 chapters of new book in background
         viewModelScope.launch(Dispatchers.IO) {
             prefetchCommentary(bookId, 1)
             prefetchCommentary(bookId, 2)
@@ -334,7 +333,6 @@ class HomeViewModel(
     fun openBook(bookName: String, chapter: Int) = openBook(BookCatalog.id(bookName), chapter)
     fun selectTab(tab: String) {
         selectedTab.value = tab
-        // INSTANT: when user taps Open EW, preload current + next immediately
         if (tab == "Open EW") {
             viewModelScope.launch(Dispatchers.IO) {
                 prefetchCommentary(currentBookId.value, selectedChapter.value)
@@ -345,7 +343,8 @@ class HomeViewModel(
     fun setSearchQuery(query: String) { searchQuery.value = query }
     fun setSearchFilter(filter: String) { searchFilter.value = filter }
     fun setDarkMode(enabled: Boolean) { viewModelScope.launch { runCatching { prefs.setDarkMode(enabled) } } }
-    fun setFontSize(size: Float) { viewModelScope.launch { runCatching { prefs.setFontSize(size.coerceAtLeast(18f)) } } }
+    // FIX: was coerceAtLeast(18f) - now matches SettingsPanel 12..20
+    fun setFontSize(size: Float) { viewModelScope.launch { runCatching { prefs.setFontSize(size.coerceIn(12f, 20f)) } } }
     fun onUserSignedIn(name: String, email: String) {
         viewModelScope.launch {
             runCatching { prefs.saveUser(name, email) }
@@ -439,9 +438,6 @@ class HomeViewModel(
             preloadNextCommentary(bookId, chapter)
             return
         }
-        // INSTANT FIX: DO NOT clear old HTML. Old code did setCommentary(..., "", false)
-        // That caused blank flash + crash. Now we keep old chapter on screen
-        // until new HTML arrives. OpenEWContent already keeps lastGoodParagraphs.
         commentaryJob?.cancel()
         commentaryJob = viewModelScope.launch {
             try {
@@ -457,7 +453,6 @@ class HomeViewModel(
                 if (bookId == currentBookId.value && chapter == selectedChapter.value) {
                     lastCommentaryKey = key
                     setCommentary(bookId, chapter, finalHtml, false)
-                    // Warm parsed cache on Default, NOT Main - was blocking UI before
                     withContext(Dispatchers.Default) {
                         runCatching { prewarmOpenEWCache(BookCatalog.name(bookId), chapter, finalHtml) }
                     }
@@ -510,7 +505,6 @@ class HomeViewModel(
     private fun preloadNextCommentary(bookId: Int, chapter: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                // INSTANT: preload next 2 + prev 1, not just next 1
                 val max = BookCatalog.chapters(bookId)
                 val targets = mutableListOf<Pair<Int, Int>>()
                 if (chapter < max) targets.add(bookId to chapter + 1)
