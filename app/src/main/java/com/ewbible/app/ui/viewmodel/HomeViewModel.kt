@@ -182,7 +182,6 @@ class HomeViewModel(
         viewModelScope.launch { currentNoteText.collect { _uiState.update { s -> s.copy(currentNoteText = it) } } }
         viewModelScope.launch { isReadingRestored.collect { _uiState.update { s -> s.copy(isReadingRestored = it) } } }
         viewModelScope.launch { prefs.isDarkMode.collect { _uiState.update { s -> s.copy(darkMode = it) } } }
-        // FIX: was coerceAtLeast(18f) - blocked 12-17, now matches SettingsPanel 12..20
         viewModelScope.launch { prefs.fontSize.collect { _uiState.update { s -> s.copy(fontSize = it.coerceIn(12f, 20f)) } } }
         viewModelScope.launch {
             combine(prefs.userName, prefs.userEmail) { n, e -> n to e }.collect { (n, e) ->
@@ -190,13 +189,16 @@ class HomeViewModel(
             }
         }
 
+        // FIX: NO SPINNER, JUST FASTER - always load commentary, even on Bible tab.
+        // Old code: if (tab == "Open EW") loadCommentary(...)
+        // That meant first tap waited for DB + decompress + parse.
+        // Now it loads in background while user reads Bible, so tap is instant.
         viewModelScope.launch {
-            combine(bookChapterKey, selectedTab) { bc, tab -> bc to tab }
+            bookChapterKey
                 .distinctUntilChanged()
-                .collectLatest { (bc, tab) ->
-                    val (bookId, chapter) = bc
+                .collectLatest { (bookId, chapter) ->
                     loadSummary(bookId, chapter)
-                    if (tab == "Open EW") loadCommentary(bookId, chapter)
+                    loadCommentary(bookId, chapter)
                 }
         }
 
@@ -333,17 +335,13 @@ class HomeViewModel(
     fun openBook(bookName: String, chapter: Int) = openBook(BookCatalog.id(bookName), chapter)
     fun selectTab(tab: String) {
         selectedTab.value = tab
-        if (tab == "Open EW") {
-            viewModelScope.launch(Dispatchers.IO) {
-                prefetchCommentary(currentBookId.value, selectedChapter.value)
-            }
-        }
+        // FIX: No duplicate load here - init {} collectLatest on bookChapterKey
+        // already loads commentary in background. Old code re-loaded on tap.
     }
     fun searchVerses(query: String) { searchQuery.value = query }
     fun setSearchQuery(query: String) { searchQuery.value = query }
     fun setSearchFilter(filter: String) { searchFilter.value = filter }
     fun setDarkMode(enabled: Boolean) { viewModelScope.launch { runCatching { prefs.setDarkMode(enabled) } } }
-    // FIX: was coerceAtLeast(18f) - now matches SettingsPanel 12..20
     fun setFontSize(size: Float) { viewModelScope.launch { runCatching { prefs.setFontSize(size.coerceIn(12f, 20f)) } } }
     fun onUserSignedIn(name: String, email: String) {
         viewModelScope.launch {
@@ -471,7 +469,15 @@ class HomeViewModel(
         if (bookId !in 1..66) return
         if (chapter !in 1..BookCatalog.chapters(bookId)) return
         val key = "$bookId-$chapter"
-        if (synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) } != null) return
+        // FIX: Even if HTML is cached, still prewarm parsed cache.
+        // Old code returned early here, so tap still had to do HtmlCompat.fromHtml + linkify.
+        val cachedHtml = synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) }
+        if (cachedHtml != null) {
+            viewModelScope.launch(Dispatchers.Default) {
+                runCatching { prewarmOpenEWCache(BookCatalog.name(bookId), chapter, cachedHtml) }
+            }
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val compressed = dao.getCommentaryCompressed(bookId, chapter) ?: return@launch
@@ -483,17 +489,6 @@ class HomeViewModel(
                     }
                 }
                 CommentaryHelper.preload(bookId, chapter, compressed)
-                val max = BookCatalog.chapters(bookId)
-                val (nb, nc) = if (chapter < max) bookId to chapter + 1 else if (bookId < 66) (bookId + 1) to 1 else return@launch
-                val c2 = dao.getCommentaryCompressed(nb, nc) ?: return@launch
-                val h2 = CommentaryHelper.getHtmlCommentary(nb, nc, c2)
-                if (h2.isNotBlank()) {
-                    synchronized(commentaryHtmlCache) { commentaryHtmlCache.put("$nb-$nc", h2) }
-                    withContext(Dispatchers.Default) {
-                        runCatching { prewarmOpenEWCache(BookCatalog.name(nb), nc, h2) }
-                    }
-                }
-                CommentaryHelper.preload(nb, nc, c2)
             }
         }
     }
@@ -513,7 +508,14 @@ class HomeViewModel(
                 if (chapter == max && bookId < 66) targets.add((bookId + 1) to 1)
                 for ((nb, nc) in targets) {
                     val key = "$nb-$nc"
-                    if (synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) } != null) continue
+                    if (synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) } != null) {
+                        // Still ensure parsed cache is warm
+                        val html = synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) }!!
+                        withContext(Dispatchers.Default) {
+                            runCatching { prewarmOpenEWCache(BookCatalog.name(nb), nc, html) }
+                        }
+                        continue
+                    }
                     val compressed = dao.getCommentaryCompressed(nb, nc) ?: continue
                     val html = CommentaryHelper.getHtmlCommentary(nb, nc, compressed)
                     if (html.isNotBlank()) {
