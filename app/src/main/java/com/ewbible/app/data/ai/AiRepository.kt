@@ -8,7 +8,6 @@ import com.ewbible.app.CrashReporter
 import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -28,6 +27,7 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 class AiRepository {
@@ -60,11 +60,14 @@ class AiRepository {
     private var remoteGroq = FALLBACK_GROQ
     private var remoteVersion = 3
 
-    // FAST: in-memory Tavily cache - repeat question = 0ms, no network
+    // MODERATE: Full but not wasteful. 1000 = cut, 3000 = quota dies fast, 1800 = sweet spot.
+    private val STREAM_TIMEOUT_MS = 45000L
+    private val MAX_TOKENS = 1800
+
     private var cachedQuery = ""
     private var cachedWeb = ""
     private var cachedAt = 0L
-    private val WEB_CACHE_MS = 10 * 60 * 1000L // 10 min
+    private val WEB_CACHE_MS = 10 * 60 * 1000L
 
     suspend fun refreshModels(context: Context) {
         val prefs = context.getSharedPreferences("ew_models", Context.MODE_PRIVATE)
@@ -116,13 +119,11 @@ class AiRepository {
         if (q.contains("pray") || q.contains("prayer")) return false
         if (q.contains("who was david") || q.contains("who is david")) return false
         if (q == "hi" || q == "hello" || q == "hey") return false
-
         val strongTriggers = listOf(
             "pope", "president", "election", "war", "news",
             "latest", "recent", "current", "today", "what happened"
         )
         if (strongTriggers.any { q.contains(it) }) return true
-
         if (q.length < 30) return false
         val weakTriggers = listOf(
             "who is", "who was", "what is happening",
@@ -131,25 +132,18 @@ class AiRepository {
         return weakTriggers.any { q.contains(it) }
     }
 
-    // FAST: single place for web. Used by BOTH Gemini + Groq via buildPrompt.
     private suspend fun getWebContext(question: String): String {
         if (!needsWebSearch(question)) return ""
         val key = question.trim().lowercase()
         if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) {
-            Log.d("TavilyDebug", "CACHE HIT len=${cachedWeb.length}")
             return cachedWeb
         }
-        // Hard cap 2.2s - never wait 5s, never hang on slow 4G
         val result = withTimeoutOrNull(2200L) { searchTavily(question) } ?: ""
-        Log.d("TavilyDebug", "webLen=${result.length} q=$question")
         return result
     }
 
     private suspend fun searchTavily(query: String): String {
-        if (tavilyKey.isBlank()) {
-            Log.d("TavilyDebug", "Tavily key BLANK")
-            return ""
-        }
+        if (tavilyKey.isBlank()) return ""
         return try {
             var conn: HttpURLConnection? = null
             try {
@@ -161,10 +155,6 @@ class AiRepository {
                     readTimeout = 2500
                     doOutput = true
                 }
-                // FASTEST Tavily config:
-                // - basic depth (not advanced)
-                // - max_results 2 (not 3-5)
-                // - include_answer FALSE - this was the slow part, it runs a 2nd LLM call
                 val body = JSONObject()
                     .put("api_key", tavilyKey)
                     .put("query", query)
@@ -173,10 +163,7 @@ class AiRepository {
                     .put("include_answer", false)
                     .toString()
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                if (conn.responseCode !in 200..299) {
-                    Log.d("TavilyDebug", "Tavily HTTP ${conn.responseCode}")
-                    return ""
-                }
+                if (conn.responseCode !in 200..299) return ""
                 val text = conn.inputStream.bufferedReader().readText()
                 val json = JSONObject(text)
                 val sb = StringBuilder()
@@ -189,21 +176,17 @@ class AiRepository {
                         if (content.isNotBlank()) sb.append("$title: ${content.take(350)}\n\n")
                     }
                 }
-                val out = sb.toString().take(1500)
+                val out = sb.toString().take(1200)
                 if (out.isNotBlank()) {
                     cachedQuery = query.trim().lowercase()
                     cachedWeb = out
                     cachedAt = System.currentTimeMillis()
                 }
-                Log.d("TavilyDebug", "Tavily OK len=${out.length}")
                 out
             } finally {
                 runCatching { conn?.disconnect() }
             }
-        } catch (e: Exception) {
-            Log.d("TavilyDebug", "Tavily FAILED: ${e.message}")
-            ""
-        }
+        } catch (e: Exception) { "" }
     }
 
     fun askStreaming(
@@ -214,7 +197,6 @@ class AiRepository {
         bibleContext: String,
         translation: String = "NKJV"
     ): Flow<String> = flow {
-        // Bible = 0ms, News = max 2.2s, repeat News = 0ms (cache)
         val webContext = if (image == null) getWebContext(question) else ""
         val basePrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext)
 
@@ -223,12 +205,14 @@ class AiRepository {
                 _lastProvider.value = "Gemini"
                 var gotAnything = false
                 try {
-                    withTimeoutOrNull(15000L) {
+                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                         tryGeminiStreaming(model, basePrompt, image).collect { chunk ->
                             if (chunk.isNotEmpty()) { gotAnything = true; emit(chunk) }
                         }
-                    }
-                    if (gotAnything) return@flow
+                        true
+                    } ?: false
+                    if (gotAnything && completed) return@flow
+                    if (gotAnything && !completed) return@flow
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
                     CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
@@ -243,23 +227,31 @@ class AiRepository {
         coroutineScope {
             val channel = Channel<Pair<String, String>>(Channel.UNLIMITED)
             val winner = AtomicReference<String?>(null)
+            val winnerFinished = AtomicBoolean(false)
+            val winnerGotAnything = AtomicBoolean(false)
 
             val geminiJob = launch {
                 for (model in remoteGemini) {
-                    if (winner.get() != null) break
+                    if (winner.get() != null && winner.get() != "Gemini") break
                     try {
                         var gotChunkFromThisModel = false
-                        withTimeoutOrNull(15000L) {
+                        val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                             tryGeminiStreaming(model, basePrompt, null).collect { chunk ->
                                 if (chunk.isNotEmpty()) {
                                     gotChunkFromThisModel = true
+                                    winnerGotAnything.set(true)
                                     winner.compareAndSet(null, "Gemini")
                                     if (winner.get() == "Gemini") channel.send("Gemini" to chunk)
                                 }
                             }
+                            true
+                        } ?: false
+                        if (winner.get() == "Gemini") {
+                            if (completed) winnerFinished.set(true)
+                            break
                         }
-                        if (winner.get() == "Gemini") break
                         if (gotChunkFromThisModel) break
+                        if (!completed) continue
                     } catch (e: CancellationException) { throw e }
                     catch (e: Exception) {
                         errors.add("Gemini $model: ${e.message}")
@@ -271,20 +263,27 @@ class AiRepository {
             val groqJob = launch {
                 if (groqKey.isBlank()) return@launch
                 for (model in remoteGroq) {
-                    if (winner.get() != null) break
+                    // Groq gets ALL his chances: if Gemini already won, stop. Otherwise keep trying.
+                    if (winner.get() != null && winner.get() != "Groq") break
                     try {
                         var gotChunkFromThisModel = false
-                        withTimeoutOrNull(15000L) {
+                        val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                             tryGroqStreaming(model, basePrompt).collect { chunk ->
                                 if (chunk.isNotEmpty()) {
                                     gotChunkFromThisModel = true
+                                    winnerGotAnything.set(true)
                                     winner.compareAndSet(null, "Groq")
                                     if (winner.get() == "Groq") channel.send("Groq" to chunk)
                                 }
                             }
+                            true
+                        } ?: false
+                        if (winner.get() == "Groq") {
+                            if (completed) winnerFinished.set(true)
+                            break
                         }
-                        if (winner.get() == "Groq") break
                         if (gotChunkFromThisModel) break
+                        if (!completed) continue
                     } catch (e: CancellationException) { throw e }
                     catch (e: Exception) {
                         errors.add("Groq $model: ${e.message}")
@@ -309,7 +308,7 @@ class AiRepository {
                     emit(drained.second)
                     continue
                 }
-                val result = withTimeoutOrNull(16000L) { channel.receiveCatching() }
+                val result = withTimeoutOrNull(STREAM_TIMEOUT_MS + 5000L) { channel.receiveCatching() }
                 val item = result?.getOrNull() ?: break
                 if (!loserCancelled) {
                     loserCancelled = true
@@ -335,8 +334,6 @@ class AiRepository {
     }.flowOn(Dispatchers.IO)
 
     suspend fun askQuestion(prompt: String, image: Bitmap? = null): Result<String> {
-        // FIXED: askQuestion now also uses Tavily + date, same as askStreaming
-        // Otherwise any screen using this would always say "cutoff 2024"
         val webContext = if (image == null) getWebContext(prompt) else ""
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
         val fullPrompt = if (webContext.isNotBlank()) {
@@ -351,10 +348,12 @@ class AiRepository {
                 _lastProvider.value = "Gemini"
                 try {
                     sb.clear()
-                    withTimeoutOrNull(15000L) {
+                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                         tryGeminiStreaming(model, fullPrompt, image).collect { sb.append(it) }
-                    }
-                    if (sb.isNotBlank()) return Result.success(cleanMarkdown(sb.toString()).trim())
+                        true
+                    } ?: false
+                    if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                    if (sb.isNotBlank() && !completed) continue
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { lastErr = e; sb.clear() }
             }
@@ -364,10 +363,12 @@ class AiRepository {
                     _lastProvider.value = "Groq"
                     try {
                         sb.clear()
-                        withTimeoutOrNull(15000L) {
+                        val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                             tryGroqStreaming(model, fullPrompt).collect { sb.append(it) }
-                        }
-                        if (sb.isNotBlank()) return Result.success(cleanMarkdown(sb.toString()).trim())
+                            true
+                        } ?: false
+                        if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                        if (sb.isNotBlank() && !completed) continue
                     } catch (e: CancellationException) { throw e }
                     catch (e: Exception) { lastErr = e; sb.clear() }
                 }
@@ -387,10 +388,11 @@ class AiRepository {
         val sb = StringBuilder()
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
         sb.append("You are a helpful Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
-        sb.append("IMPORTANT: Do NOT use Markdown. No **, no ###, no ---, no bullet lists. Write in clean plain paragraphs only. Keep answer short, under 900 characters if possible.\n\n")
-        if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(2000)}\n\n")
+        // MODERATE: Complete but not essay. 2-3 short paragraphs, ~1200 chars.
+        sb.append("IMPORTANT: Do NOT use Markdown. No **, no ###, no ---, no bullet lists. Write in clean plain paragraphs only. Keep answer complete but moderate - 2 to 3 short paragraphs, around 1200 characters max. Always finish your answer fully. Never stop mid-sentence or mid-verse.\n\n")
+        if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
         if (webContext.isNotBlank()) {
-            sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say your knowledge is outdated, cut off, or up to 2024. Do NOT use old training data for current events. Answer ONLY from these results:\n${webContext.take(1500)}\n\n")
+            sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say your knowledge is outdated, cut off, or up to 2024. Do NOT use old training data for current events. Answer ONLY from these results:\n${webContext.take(1200)}\n\n")
         }
         if (history.isNotEmpty()) {
             sb.append("CONVERSATION HISTORY (last 4):\n")
@@ -431,18 +433,16 @@ class AiRepository {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
                 connectTimeout = 5000
-                readTimeout = 15000
+                readTimeout = 45000
                 doOutput = true
             }
             val parts = JSONArray().put(JSONObject().put("text", prompt))
             val base64 = bitmapToBase64(image)
             if (base64 != null) parts.put(JSONObject().put("inlineData", JSONObject().put("mimeType", "image/jpeg").put("data", base64)))
-
-            val genConfig = JSONObject().put("maxOutputTokens", 1000)
+            val genConfig = JSONObject().put("maxOutputTokens", MAX_TOKENS)
             if (model == "gemini-4-hydrogen") {
                 genConfig.put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
             }
-
             val body = JSONObject()
                 .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
                 .put("generationConfig", genConfig)
@@ -479,16 +479,16 @@ class AiRepository {
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Authorization", "Bearer $groqKey")
                 connectTimeout = 5000
-                readTimeout = 15000
+                readTimeout = 45000
                 doOutput = true
             }
             val body = JSONObject()
                 .put("model", model)
                 .put("temperature", 0.7)
-                .put("max_tokens", 1000)
+                .put("max_tokens", MAX_TOKENS)
                 .put("stream", true)
                 .put("messages", JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", "You are a helpful Bible assistant. Answer clearly, warmly, and biblically. No Markdown. If WEB SEARCH RESULTS are provided, you MUST use them and never say your knowledge is cut off."))
+                    .put(JSONObject().put("role", "system").put("content", "You are a helpful Bible assistant. Answer clearly, warmly, and biblically. No Markdown. Keep answer complete but moderate - 2 to 3 short paragraphs, around 1200 characters max. Always finish your answer fully, never stop mid-sentence. If WEB SEARCH RESULTS are provided, you MUST use them and never say your knowledge is cut off."))
                     .put(JSONObject().put("role", "user").put("content", prompt)))
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
