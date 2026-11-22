@@ -149,28 +149,28 @@ fun HomeScreen(
     val ntBooks = remember(state.books) { state.books.filter { it.id >= 40 }.sortedBy { it.id } }
     val tabs = remember { listOf("Bible", "Open EW", "Search") }
 
-    // FIX: MISMATCH + BLANK - single source of truth is ViewModel.
-    // Do NOT keep a local copy of commentary HTML in HomeScreen.
-    // If ViewModel HTML is not for the current chapter, show "" (loading)
-    // instead of old chapter HTML under new header.
-    val isCommentaryForCurrent = state.commentaryBookId == state.currentBookId &&
-        state.commentaryChapter == state.selectedChapter
-    val effectiveCommentaryHtml = if (isCommentaryForCurrent) state.commentaryHtml else ""
-    val isCommentaryLoading = state.selectedTab == "Open EW" &&
-        effectiveCommentaryHtml.isBlank() && !state.commentaryError
+    // FIX: NO BLANKING - keep ViewModel HTML even if it's for previous chapter.
+    // OpenEWContent keeps lastGoodParagraphs, blanking to "" forced re-parse from empty.
+    // ViewModel preloads new chapter in background, it will swap when ready.
+    val effectiveCommentaryHtml = state.commentaryHtml
+    val isCommentaryLoading = false // No spinner - preload makes it instant, isLoading ignored in OpenEWContent
 
-    // FIX: INSTANT NEXT CHAPTER - prefetch with bounds check.
-    // No duplicate loadCommentary() here - ViewModel already loads on
-    // combine(bookChapterKey, selectedTab). Calling it here caused cancel loop.
-    LaunchedEffect(state.selectedTab, state.currentBookId, state.selectedChapter) {
-        if (state.selectedTab == "Open EW") {
-            val max = BookCatalog.chapters(state.currentBookId)
-            if (state.selectedChapter < max) {
-                viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter + 1)
-            }
-            if (state.selectedChapter > 1) {
-                viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter - 1)
-            }
+    // FIX: PRELOAD ALWAYS - no more if (tab == "Open EW")
+    // Old code only prefetched after tap, so first tap waited seconds.
+    // Now while user reads Bible, current + next + prev commentary are already parsed.
+    LaunchedEffect(state.currentBookId, state.selectedChapter) {
+        // Current - so tap on Open EW is instant
+        viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter)
+        // Next - so swipe forward is instant
+        val max = BookCatalog.chapters(state.currentBookId)
+        if (state.selectedChapter < max) {
+            viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter + 1)
+        } else if (state.currentBookId < 66) {
+            viewModel.prefetchCommentary(state.currentBookId + 1, 1)
+        }
+        // Prev - so swipe back is instant
+        if (state.selectedChapter > 1) {
+            viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter - 1)
         }
     }
 
@@ -263,9 +263,6 @@ fun HomeScreen(
                         )
                     }
                     "Open EW" -> {
-                        // FIX: No swipe wrapper here. The old detectDragGestures /
-                        // detectHorizontalDragGestures Box consumed drags and blocked
-                        // LazyColumn vertical scroll. Swipe lives in OpenEWContent if needed.
                         OpenEWContent(
                             commentaryHtml = effectiveCommentaryHtml,
                             fontSize = state.fontSize,
