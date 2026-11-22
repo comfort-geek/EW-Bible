@@ -9,5 +9,5 @@
     "qwen/qwen3.8-27b",
     "openai/gpt-oss-20b"
   ],
-  "version": 3
+  "version": 4
 }
