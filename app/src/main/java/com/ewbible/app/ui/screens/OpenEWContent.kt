@@ -34,6 +34,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -56,7 +57,6 @@ private val BOOK_PATTERN = DISPLAY_NAMES
 private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?(?!\\d)")
 private val H1_REGEX = Regex("(?is)<h1[^>]*>.*?</h1>")
 
-// INSTANT: bigger cache = 100 chapters, not 30. Revisiting a book is instant.
 private val parsedCache = LruCache<String, List<SpannableString>>(100)
 private val parsedCacheLock = Any()
 private fun getParsedCached(key: String): List<SpannableString>? =
@@ -192,7 +192,7 @@ fun OpenEWContent(
     fontSize: Float,
     textColor: Color,
     hasError: Boolean = false,
-    isLoading: Boolean = false,
+    isLoading: Boolean = false, // kept for API compat, ignored - no spinner anymore
     bookName: String = "",
     chapter: Int = 1,
     onVerseClick: (book: String, chapter: Int, verse: Int, endVerse: Int) -> Unit = { _, _, _, _ -> },
@@ -206,7 +206,7 @@ fun OpenEWContent(
     val currentOnVerseClick by rememberUpdatedState(onVerseClick)
     val currentOnNext by rememberUpdatedState(onNextChapter)
     val currentOnPrev by rememberUpdatedState(onPreviousChapter)
-    val effectiveFontSize = fontSize.coerceAtLeast(18f)
+    val effectiveFontSize = fontSize.coerceIn(12f, 20f)
 
     val cacheKey = "$bookName-$chapter"
     val listState = rememberLazyListState()
@@ -255,25 +255,18 @@ fun OpenEWContent(
         }
     }
 
-    // INSTANT FIX 1: Keep last good chapter on screen.
-    // When you switch book, paragraphs becomes null for a moment.
-    // Instead of showing blank, keep showing old chapter until new one is ready.
-    // User sees NO blank, NO flicker.
+    // NO SPINNER: Keep last good chapter on screen while new one loads.
+    // User never sees blank / spinner, just old content then instant swap.
     var lastGoodParagraphs by remember { mutableStateOf<List<SpannableString>?>(null) }
     var lastGoodKey by remember { mutableStateOf("") }
     if (paragraphs != null) {
         lastGoodParagraphs = paragraphs
         lastGoodKey = cacheKey
     }
-    // Show new if ready, else show old. Never show null.
     val displayParagraphs = paragraphs ?: lastGoodParagraphs ?: emptyList()
     val displayKey = if (paragraphs != null) cacheKey else lastGoodKey
-    val displayTitle = if (paragraphs != null) {
-        if (bookName.isNotBlank()) "$bookName $chapter" else ""
-    } else {
-        // Keep old title while loading, so header does not flash to empty
-        lastGoodKey
-    }
+    // Always show NEW title immediately, even if content is still old - feels instant
+    val displayTitle = if (bookName.isNotBlank()) "$bookName $chapter" else lastGoodKey
 
     Column(
         modifier = Modifier
@@ -306,7 +299,7 @@ fun OpenEWContent(
                 .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp)
         )
 
-        if (hasError && displayParagraphs.isEmpty() && !isLoading) {
+        if (hasError && displayParagraphs.isEmpty()) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(18.dp)) {
                 Text(
                     "Could not load commentary. Swipe to try another chapter.",
@@ -316,18 +309,10 @@ fun OpenEWContent(
                 )
             }
         } else if (displayParagraphs.isEmpty()) {
-            if (!isLoading && commentaryHtml.isBlank() && cachedInstant == null && lastGoodParagraphs == null) {
-                Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
-                    Text(
-                        "No commentary available for this chapter.",
-                        color = textColor.copy(alpha = 0.6f),
-                        fontSize = effectiveFontSize.sp,
-                        lineHeight = (effectiveFontSize + 8).sp
-                    )
-                }
-            } else {
-                Box(modifier = Modifier.weight(1f).fillMaxWidth())
-            }
+            // NO SPINNER: First-ever load with nothing cached yet.
+            // Just show empty space - preload (below) means this almost never happens.
+            // If it does, content pops in when ready, no spinner flash.
+            Box(modifier = Modifier.weight(1f).fillMaxWidth())
         } else {
             LazyColumn(
                 state = listState,
