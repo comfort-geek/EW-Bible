@@ -30,11 +30,11 @@ class AiRepository {
     private val groqKey: String
         get() = try { BuildConfig.GROQ_API_KEY } catch (_: Exception) { "" }
 
-    // --- REMOTE MODELS - Edit on GitHub, no app update needed ---
-    private val REMOTE_MODELS_URL =
+    // --- REMOTE MODELS - edit on GitHub, no app update needed ---
+    private const val REMOTE_MODELS_URL =
         "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
 
-    // Fallback - used if offline or GitHub fails
+    // Fallback if offline / GitHub fails
     private val FALLBACK_GEMINI = listOf(
         "gemini-4-hydrogen",
         "gemini-3.8-flash",
@@ -51,50 +51,42 @@ class AiRepository {
     private var remoteGroq = FALLBACK_GROQ
     private var remoteVersion = 3
 
-    // Call this once when app starts
+    // Call once on app start
     suspend fun refreshModels(context: Context) {
         val prefs = context.getSharedPreferences("ew_models", Context.MODE_PRIVATE)
 
-        // 1. Load saved list first (for offline)
+        // 1. Load saved list for offline
         try {
             val savedVersion = prefs.getInt("version", 3)
             val savedGemini = prefs.getString("gemini", null)
             val savedGroq = prefs.getString("groq", null)
-            if (savedGemini != null && savedGroq != null) {
-                val g = JSONArray(savedGemini)
-                val q = JSONArray(savedGroq)
-                if (g.length() > 0) remoteGemini = (0 until g.length()).map { g.getString(it) }
-                if (q.length() > 0) remoteGroq = (0 until q.length()).map { q.getString(it) }
-                remoteVersion = savedVersion
+            if (savedGemini != null) {
+                val arr = JSONArray(savedGemini)
+                if (arr.length() > 0) remoteGemini = (0 until arr.length()).map { arr.getString(it) }
             }
+            if (savedGroq != null) {
+                val arr = JSONArray(savedGroq)
+                if (arr.length() > 0) remoteGroq = (0 until arr.length()).map { arr.getString(it) }
+            }
+            remoteVersion = savedVersion
         } catch (_: Exception) { }
 
-        // 2. Try to download new list from GitHub
+        // 2. Try download new list from GitHub
         try {
-            val url = URL(REMOTE_MODELS_URL)
-            val conn = url.openConnection() as HttpURLConnection
+            val conn = URL(REMOTE_MODELS_URL).openConnection() as HttpURLConnection
             conn.connectTimeout = 5000
             conn.readTimeout = 5000
             conn.requestMethod = "GET"
             if (conn.responseCode == 200) {
                 val text = conn.inputStream.bufferedReader().readText()
-                conn.disconnect()
                 val json = JSONObject(text)
                 val newVersion = json.optInt("version", 0)
-
-                // Only update if GitHub version is NEWER
                 if (newVersion > remoteVersion) {
                     val g = json.optJSONArray("gemini")
                     val q = json.optJSONArray("groq")
-                    if (g != null && g.length() > 0) {
-                        remoteGemini = (0 until g.length()).map { g.getString(it) }
-                    }
-                    if (q != null && q.length() > 0) {
-                        remoteGroq = (0 until q.length()).map { q.getString(it) }
-                    }
+                    if (g != null && g.length() > 0) remoteGemini = (0 until g.length()).map { g.getString(it) }
+                    if (q != null && q.length() > 0) remoteGroq = (0 until q.length()).map { q.getString(it) }
                     remoteVersion = newVersion
-
-                    // Save for offline next time
                     prefs.edit()
                         .putInt("version", newVersion)
                         .putString("gemini", JSONArray(remoteGemini).toString())
@@ -102,8 +94,9 @@ class AiRepository {
                         .apply()
                 }
             }
+            conn.disconnect()
         } catch (_: Exception) {
-            // Offline / GitHub down -> keep fallback, app still works
+            // Offline -> keep fallback / saved, app still works
         }
     }
 
@@ -120,7 +113,7 @@ class AiRepository {
         val errors = mutableListOf<String>()
         var gotAnything = false
 
-        // 1. Gemini streaming
+        // 1. Gemini streaming - uses remoteGemini now
         for (model in remoteGemini) {
             _lastProvider.value = "Gemini"
             try {
@@ -146,7 +139,7 @@ class AiRepository {
             return@flow
         }
 
-        // 2. Groq streaming
+        // 2. Groq streaming - uses remoteGroq now
         if (groqKey.isNotBlank()) {
             for (model in remoteGroq) {
                 _lastProvider.value = "Groq"
@@ -267,8 +260,6 @@ class AiRepository {
             val base64 = bitmapToBase64(image)
             if (base64 != null) parts.put(JSONObject().put("inlineData", JSONObject().put("mimeType", "image/jpeg").put("data", base64)))
 
-            // Hydrogen defaults to thinking=high (slow). Force low for Bible answers.
-            // Do NOT send thinkingConfig to 3.8 / Lite - can cause 400.
             val genConfig = JSONObject().put("maxOutputTokens", 1000)
             if (model == "gemini-4-hydrogen") {
                 genConfig.put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
