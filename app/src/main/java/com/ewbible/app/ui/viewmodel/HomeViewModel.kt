@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.ewbible.app.data.database.*
 import com.ewbible.app.data.preferences.AppPreferences
 import com.ewbible.app.data.sync.SyncManager
+import com.ewbible.app.ui.screens.prewarmOpenEWCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -416,6 +417,8 @@ class HomeViewModel(
                 setCommentary(bookId, chapter, cached, false)
                 lastCommentaryKey = key
             }
+            // FIX: Parsed cache was never warmed on cache-hit path either.
+            runCatching { prewarmOpenEWCache(BookCatalog.name(bookId), chapter, cached) }
             preloadNextCommentary(bookId, chapter)
             return
         }
@@ -444,6 +447,9 @@ class HomeViewModel(
                 if (bookId == currentBookId.value && chapter == selectedChapter.value) {
                     lastCommentaryKey = key
                     setCommentary(bookId, chapter, finalHtml, false)
+                    // FIX: Warm parsed cache now, on IO, so OpenEWContent's
+                    // remember(cacheKey) hits instantly on revisit / swipe-back.
+                    runCatching { prewarmOpenEWCache(BookCatalog.name(bookId), chapter, finalHtml) }
                 }
                 preloadNextCommentary(bookId, chapter)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -455,20 +461,34 @@ class HomeViewModel(
         }
     }
 
+    // FIX 1: Bounds check - ViewModel is last line of defense.
+    // HomeScreen + OpenEWContent already check, but prefetch must never
+    // hit DB for chapter 0 / 999 / book 0 / 67.
     fun prefetchCommentary(bookId: Int, chapter: Int) {
+        if (bookId !in 1..66) return
+        if (chapter !in 1..BookCatalog.chapters(bookId)) return
         val key = "$bookId-$chapter"
         if (synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) } != null) return
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val compressed = dao.getCommentaryCompressed(bookId, chapter) ?: return@launch
                 val html = CommentaryHelper.getHtmlCommentary(bookId, chapter, compressed)
-                if (html.isNotBlank()) synchronized(commentaryHtmlCache) { commentaryHtmlCache.put(key, html) }
+                if (html.isNotBlank()) {
+                    synchronized(commentaryHtmlCache) { commentaryHtmlCache.put(key, html) }
+                    // FIX 2: Warm parsed cache, not just raw HTML.
+                    // Without this, swipe to next chapter still had to parse
+                    // HTML -> Spannable on first visit (~100-300ms).
+                    runCatching { prewarmOpenEWCache(BookCatalog.name(bookId), chapter, html) }
+                }
                 CommentaryHelper.preload(bookId, chapter, compressed)
                 val max = BookCatalog.chapters(bookId)
                 val (nb, nc) = if (chapter < max) bookId to chapter + 1 else if (bookId < 66) (bookId + 1) to 1 else return@launch
                 val c2 = dao.getCommentaryCompressed(nb, nc) ?: return@launch
                 val h2 = CommentaryHelper.getHtmlCommentary(nb, nc, c2)
-                if (h2.isNotBlank()) synchronized(commentaryHtmlCache) { commentaryHtmlCache.put("$nb-$nc", h2) }
+                if (h2.isNotBlank()) {
+                    synchronized(commentaryHtmlCache) { commentaryHtmlCache.put("$nb-$nc", h2) }
+                    runCatching { prewarmOpenEWCache(BookCatalog.name(nb), nc, h2) }
+                }
                 CommentaryHelper.preload(nb, nc, c2)
             }
         }
@@ -489,7 +509,11 @@ class HomeViewModel(
                 if (synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) } != null) return@launch
                 val compressed = dao.getCommentaryCompressed(nextBook, nextChapter) ?: return@launch
                 val html = CommentaryHelper.getHtmlCommentary(nextBook, nextChapter, compressed)
-                if (html.isNotBlank()) synchronized(commentaryHtmlCache) { commentaryHtmlCache.put(key, html) }
+                if (html.isNotBlank()) {
+                    synchronized(commentaryHtmlCache) { commentaryHtmlCache.put(key, html) }
+                    // FIX 2: Same here - warm parsed cache for next chapter.
+                    runCatching { prewarmOpenEWCache(BookCatalog.name(nextBook), nextChapter, html) }
+                }
                 CommentaryHelper.preload(nextBook, nextChapter, compressed)
             }
         }
