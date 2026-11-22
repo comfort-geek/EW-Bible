@@ -37,9 +37,9 @@ private fun MessageBubble(
     gold: Color,
     panel: Color,
 ) {
-    Box(
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
         Text(
             text,
@@ -90,11 +90,9 @@ fun AiChatScreen(
         }
     }
 
-    // ✅ FIXED: Single init - no double-chat race
-    // Old code: loadChats() + startNewChat() fired at same time = 2 empty chats
     LaunchedEffect(Unit) {
         viewModel.loadChats()
-        delay(350) // let loadChats() finish
+        delay(350)
         val s = viewModel.state.value
         if (s.currentChatId == null) {
             if (s.chats.isNotEmpty()) {
@@ -117,17 +115,17 @@ fun AiChatScreen(
         }
     }
 
-    val dimTextColor = remember(textColor) { textColor.copy(alpha = 0.5f) }
     val gray = remember { Color.Gray }
 
-    // Provider-aware texts: Gemini first, Groq fallback
     val titleText = if (state.aiProvider == "Groq") "Ask Groq" else "Ask Gemini"
     val thinkingText = if (state.aiProvider == "Groq") "Groq is connecting..." else "Gemini is thinking..."
 
     if (showHistory) {
+        // FIXED: No navigationBarsPadding() here.
+        // ModalBottomSheet already handles system bars itself.
+        // Adding it again pushed the sheet up / cut off the last chat.
         ModalBottomSheet(
-            onDismissRequest = { showHistory = false },
-            modifier = Modifier.navigationBarsPadding()
+            onDismissRequest = { showHistory = false }
         ) {
             Text("Chat History", fontWeight = FontWeight.Bold, modifier = Modifier.padding(16.dp))
             LazyColumn(
@@ -155,17 +153,15 @@ fun AiChatScreen(
         }
     }
 
-    // ✅ FIXED: Root handles system bars ONCE, input handles IME
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(background)
             .statusBarsPadding()
-            .navigationBarsPadding()
     ) {
-        // --- Top bar: fixed height, no wrap / overlap ---
+        // --- Top bar ---
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onClose, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Close, null, tint = textColor) }
@@ -209,23 +205,26 @@ fun AiChatScreen(
             }
         }
 
-        // --- Messages: weight(1f) so input never overlaps ---
+        // --- Messages ---
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(top = 4.dp, bottom = 8.dp)
+            // FIXED: bottom 8.dp -> 16.dp, last bubble never touches the input bar
+            contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp)
         ) {
             items(state.messages, key = { it.id }, contentType = { if (it.isUser) "user" else "ai" }) { msg ->
                 MessageBubble(text = msg.text, isUser = msg.isUser, textColor = textColor, gold = gold, panel = panel)
             }
             if (state.isLoading) {
                 item(key = "loading", contentType = "loading") {
-                    Text(
-                        if (state.streamingText.isNotEmpty()) state.streamingText else thinkingText,
-                        color = textColor, fontSize = 15.sp,
-                        modifier = Modifier.fillMaxWidth(0.85f).background(panel, RoundedCornerShape(12.dp)).padding(10.dp)
-                    )
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                        Text(
+                            if (state.streamingText.isNotEmpty()) state.streamingText else thinkingText,
+                            color = textColor, fontSize = 15.sp,
+                            modifier = Modifier.fillMaxWidth(0.85f).background(panel, RoundedCornerShape(12.dp)).padding(10.dp)
+                        )
+                    }
                 }
             }
         }
@@ -233,7 +232,7 @@ fun AiChatScreen(
         // --- Image attached banner ---
         if (selectedImage != null) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                modifier = Modifier.fillMaxWidth().background(background).padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Image attached ✓", color = gold, fontSize = 13.sp, modifier = Modifier.weight(1f))
@@ -241,10 +240,12 @@ fun AiChatScreen(
             }
         }
 
-        // --- Input: imePadding() is the KEY fix - keyboard pushes it up, never overlaps ---
+        // --- Input ---
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(background)
+                .navigationBarsPadding()
                 .imePadding()
                 .padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -268,6 +269,5 @@ fun AiChatScreen(
                 modifier = Modifier.size(40.dp)
             ) { Icon(Icons.Default.Send, null, tint = gold) }
         }
-        // ❌ FOOTER REMOVED - was: "Daily: ... • No login needed..."
     }
 }
