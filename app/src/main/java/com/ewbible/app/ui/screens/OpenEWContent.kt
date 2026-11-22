@@ -21,15 +21,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.Text
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -52,6 +55,30 @@ private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?
 private val H1_REGEX = Regex("(?is)<h1[^>]*>.*?</h1>")
 
 private val parsedCache = LruCache<String, List<SpannableString>>(30)
+
+// FIX: expose this so parent ViewModel can prefetch raw HTML into same cache
+// Parent should call this when it loads HTML, so next chapter is already parsed
+fun prewarmOpenEWCache(bookName: String, chapter: Int, html: String) {
+    if (html.isBlank()) return
+    val key = "$bookName-$chapter"
+    if (parsedCache.get(key) != null) return
+    runCatching {
+        val parsedHtml = HtmlCompat.fromHtml(
+            linkifyForHtml(cleanForHtml(html, bookName, chapter)),
+            HtmlCompat.FROM_HTML_MODE_LEGACY, null, null
+        )
+        val spannable = parsedHtml as? Spannable ?: SpannableString(parsedHtml)
+        spannable.getSpans(0, spannable.length, URLSpan::class.java).forEach { span ->
+            spannable.setSpan(
+                ForegroundColorSpan(0xFFC9A227.toInt()),
+                spannable.getSpanStart(span), spannable.getSpanEnd(span),
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+        }
+        val full = if (spannable is SpannableString) spannable else SpannableString(spannable)
+        parsedCache.put(key, splitIntoParagraphs(full))
+    }
+}
 
 private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
     if (html.isBlank()) return ""
@@ -113,7 +140,6 @@ private fun linkifyMatch(m: MatchResult): String {
 
 private val HEADING_LINE = Regex("""^(?:[A-Z]\.|[0-9]+\.|[a-z]\.)\s+[A-Z].{0,90}$""")
 
-// FIX: No repeated substring(), single pass, correct span offsets
 private fun splitIntoParagraphs(full: SpannableString): List<SpannableString> {
     val text = full.toString()
     if (text.isBlank()) return emptyList()
@@ -121,7 +147,6 @@ private fun splitIntoParagraphs(full: SpannableString): List<SpannableString> {
     var start = 0
     val len = text.length
     while (start < len) {
-        // Skip blank lines
         while (start < len && text[start] == '\n') start++
         if (start >= len) break
         var end = text.indexOf("\n\n", start)
@@ -130,7 +155,6 @@ private fun splitIntoParagraphs(full: SpannableString): List<SpannableString> {
             val cut = text.indexOf('\n', start + 1000)
             if (cut != -1 && cut < end) end = cut
         }
-        // Trim without copying whole chunk twice
         var s = start
         var e = end
         while (s < e && text[s].isWhitespace()) s++
@@ -169,24 +193,46 @@ fun OpenEWContent(
     onNextChapter: () -> Unit = {},
     onPreviousChapter: () -> Unit = {},
     onRetry: () -> Unit = {},
+    // NEW: parent uses this to prefetch next chapter HTML in background
+    onPrefetchChapter: (book: String, chapter: Int) -> Unit = { _, _ -> },
 ) {
     val currentBookName by rememberUpdatedState(bookName)
     val currentChapter by rememberUpdatedState(chapter)
     val currentOnVerseClick by rememberUpdatedState(onVerseClick)
     val effectiveFontSize = fontSize.coerceAtLeast(18f)
 
-    // FIX 1: No hashCode() - book + chapter IS the key, instant
     val cacheKey = "$bookName-$chapter"
     val listState = rememberLazyListState()
 
-    // FIX 2: Reset scroll when chapter changes
+    // FIX 1: Instant scroll + instant prefetch when chapter changes
     LaunchedEffect(cacheKey) {
         listState.scrollToItem(0)
+        // Prefetch next + previous so tapping Next is instant next time
+        val bookId = BookCatalog.id(bookName)
+        val total = BookCatalog.chapters(bookId)
+        if (chapter < total) onPrefetchChapter(bookName, chapter + 1)
+        if (chapter > 1) onPrefetchChapter(bookName, chapter - 1)
+        // Also prefetch first chapter of next book
+        if (chapter == total) {
+            val all = BookCatalog.allDisplayNames()
+            val idx = all.indexOfFirst { BookCatalog.canonicalName(it) == BookCatalog.canonicalName(bookName) }
+            if (idx != -1 && idx + 1 < all.size) onPrefetchChapter(all[idx + 1], 1)
+        }
     }
 
-    val paragraphs by produceState<List<SpannableString>?>(initialValue = parsedCache.get(cacheKey), cacheKey) {
-        if (commentaryHtml.isBlank()) { value = null; return@produceState }
+    // FIX 2: INSTANT - read cache synchronously, don't wait for produceState
+    // If user visited this chapter before, show it in 0ms
+    val cachedInstant = remember(cacheKey) { parsedCache.get(cacheKey) }
+
+    val paragraphs by produceState<List<SpannableString>?>(initialValue = cachedInstant, cacheKey, commentaryHtml) {
+        // If we already have it cached, done - instant
         parsedCache.get(cacheKey)?.let { value = it; return@produceState }
+        if (commentaryHtml.isBlank()) {
+            // Don't set null and flash "No commentary" - keep previous value (cachedInstant)
+            // Parent is still loading new HTML, keep showing loading state
+            value = null
+            return@produceState
+        }
         value = withContext(Dispatchers.Default) {
             runCatching {
                 val parsedHtml = HtmlCompat.fromHtml(
@@ -209,7 +255,12 @@ fun OpenEWContent(
         }
     }
 
-    if (hasError && paragraphs == null) {
+    // FIX 3: Header + content are tied to SAME cacheKey.
+    // Never show Genesis 10 header with Genesis 9 content.
+    // If paragraphs is null but we are loading, show blank loading, NOT old chapter content.
+    // If paragraphs != null, it is guaranteed to be for THIS cacheKey.
+
+    if (hasError && paragraphs == null && !isLoading) {
         Column(modifier = Modifier.fillMaxSize().navigationBarsPadding().padding(18.dp)) {
             Text(
                 "Could not load commentary. Please try again.",
@@ -233,7 +284,7 @@ fun OpenEWContent(
         )
 
         if (paragraphs == null) {
-            if (!isLoading && commentaryHtml.isBlank()) {
+            if (!isLoading && commentaryHtml.isBlank() && cachedInstant == null) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
                     Text(
                         "No commentary available for this chapter.",
@@ -243,6 +294,8 @@ fun OpenEWContent(
                     )
                 }
             } else {
+                // Loading new chapter - show empty space, NOT old chapter, NOT "No commentary"
+                // This prevents the Genesis 10 header + Genesis 9 content mismatch
                 Box(modifier = Modifier.weight(1f).fillMaxWidth())
             }
         } else {
