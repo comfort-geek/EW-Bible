@@ -7,18 +7,23 @@ import com.ewbible.app.CrashReporter
 import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.atomic.AtomicReference
 
 class AiRepository {
 
@@ -32,11 +37,9 @@ class AiRepository {
     private val tavilyKey: String
         get() = try { BuildConfig.TAVILY_API_KEY } catch (_: Exception) { "" }
 
-    // --- REMOTE MODELS - edit on GitHub, no app update needed ---
     private val REMOTE_MODELS_URL =
         "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
 
-    // Fallback if offline / GitHub fails
     private val FALLBACK_GEMINI = listOf(
         "gemini-4-hydrogen",
         "gemini-3.8-flash",
@@ -52,11 +55,8 @@ class AiRepository {
     private var remoteGroq = FALLBACK_GROQ
     private var remoteVersion = 3
 
-    // Call once on app start
     suspend fun refreshModels(context: Context) {
         val prefs = context.getSharedPreferences("ew_models", Context.MODE_PRIVATE)
-
-        // 1. Load saved list for offline
         try {
             val savedVersion = prefs.getInt("version", 3)
             val savedGemini = prefs.getString("gemini", null)
@@ -72,11 +72,10 @@ class AiRepository {
             remoteVersion = savedVersion
         } catch (_: Exception) { }
 
-        // 2. Try download new list from GitHub
         try {
             val conn = URL(REMOTE_MODELS_URL).openConnection() as HttpURLConnection
-            conn.connectTimeout = 5000
-            conn.readTimeout = 5000
+            conn.connectTimeout = 3000
+            conn.readTimeout = 3000
             conn.requestMethod = "GET"
             if (conn.responseCode == 200) {
                 val text = conn.inputStream.bufferedReader().readText()
@@ -96,27 +95,34 @@ class AiRepository {
                 }
             }
             conn.disconnect()
-        } catch (_: Exception) {
-            // Offline -> keep fallback / saved, app still works
-        }
+        } catch (_: Exception) { }
     }
 
-    // --- TAVILY WEB SEARCH - works for BOTH Gemini and Groq ---
+    // FIXED: Strong triggers win even if short. "Who is the pope?" now searches.
     private fun needsWebSearch(question: String): Boolean {
-        val q = question.lowercase()
-        // Don't search for pure Bible meaning questions - Bible context is enough
+        val q = question.lowercase().trim()
+
+        // Never search - Bible is enough
         if (q.contains("what does") && q.contains("mean")) return false
         if (q.contains("explain") && (q.contains("verse") || q.contains("chapter"))) return false
         if (q.contains("pray") || q.contains("prayer")) return false
+        if (q.contains("who was david") || q.contains("who is david")) return false
+        if (q == "hi" || q == "hello" || q == "hey") return false
 
-        // Search for real-world / current / people / events
-        val triggers = listOf(
-            "who is", "who was", "what happened", "what is happening",
-            "current", "today", "news", "latest", "recent",
-            "pope", "president", "king", "war", "election",
-            "when did", "where is", "how many", "is it true"
+        // STRONG - search even if short
+        val strongTriggers = listOf(
+            "pope", "president", "election", "war", "news",
+            "latest", "recent", "current", "today", "what happened"
         )
-        return triggers.any { q.contains(it) }
+        if (strongTriggers.any { q.contains(it) }) return true
+
+        // WEAK - only if long enough to be a real question
+        if (q.length < 30) return false
+        val weakTriggers = listOf(
+            "who is", "who was", "what is happening",
+            "king", "when did", "where is", "how many", "is it true"
+        )
+        return weakTriggers.any { q.contains(it) }
     }
 
     private suspend fun searchTavily(query: String): String {
@@ -128,8 +134,8 @@ class AiRepository {
                 conn = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     setRequestProperty("Content-Type", "application/json")
-                    connectTimeout = 8000
-                    readTimeout = 8000
+                    connectTimeout = 1500
+                    readTimeout = 1500
                     doOutput = true
                 }
                 val body = JSONObject()
@@ -159,12 +165,9 @@ class AiRepository {
             } finally {
                 runCatching { conn?.disconnect() }
             }
-        } catch (_: Exception) {
-            "" // Search fails -> still answer from Bible + model knowledge
-        }
+        } catch (_: Exception) { "" }
     }
 
-    // --- REAL STREAMING ---
     fun askStreaming(
         question: String,
         currentRef: String,
@@ -173,71 +176,126 @@ class AiRepository {
         bibleContext: String,
         translation: String = "NKJV"
     ): Flow<String> = flow {
-        // 1. Tavily first - once, used by both Gemini and Groq
-        val webContext = if (image == null && needsWebSearch(question)) {
-            searchTavily(question)
-        } else ""
-
-        val fullPrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext)
-        val errors = mutableListOf<String>()
-        var gotAnything = false
-
-        // 2. Gemini streaming - uses remoteGemini now
-        for (model in remoteGemini) {
-            _lastProvider.value = "Gemini"
-            try {
-                tryGeminiStreaming(model, fullPrompt, image).collect { chunk ->
-                    if (chunk.isNotEmpty()) {
-                        gotAnything = true
-                        emit(chunk)
-                    }
-                }
-                if (gotAnything) return@flow
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (gotAnything) return@flow
-                errors.add("Gemini $model: ${e.message}")
-                CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
-            }
-            if (gotAnything) return@flow
+        // FIXED: Tavily ON and actually USED. Capped at 1.5s.
+        // Bible question = 0ms, News question = max 1.5s, offline = 1.5s then AI still answers.
+        var webContext = ""
+        if (image == null && needsWebSearch(question)) {
+            webContext = withTimeoutOrNull(1500L) { searchTavily(question) } ?: ""
         }
+        val basePrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext)
 
         if (image != null) {
+            for (model in remoteGemini) {
+                _lastProvider.value = "Gemini"
+                var gotAnything = false
+                try {
+                    withTimeoutOrNull(15000L) {
+                        tryGeminiStreaming(model, basePrompt, image).collect { chunk ->
+                            if (chunk.isNotEmpty()) { gotAnything = true; emit(chunk) }
+                        }
+                    }
+                    if (gotAnything) return@flow
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
+                }
+            }
             emit("Could not read the image. Please try again - Gemini is busy right now.")
             return@flow
         }
 
-        // 3. Groq streaming - uses remoteGroq now, same prompt with web results
-        if (groqKey.isNotBlank()) {
-            for (model in remoteGroq) {
-                _lastProvider.value = "Groq"
-                try {
-                    tryGroqStreaming(model, fullPrompt).collect { chunk ->
-                        if (chunk.isNotEmpty()) {
-                            gotAnything = true
-                            emit(chunk)
-                        }
-                    }
-                    if (gotAnything) return@flow
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    if (gotAnything) return@flow
-                    errors.add("Groq $model: ${e.message}")
-                    CrashReporter.groqLog("Groq $model failed: ${e.message}")
-                }
-                if (gotAnything) return@flow
-            }
-        } else {
-            CrashReporter.groqLog("Groq skipped - no API key")
-        }
+        val errors = mutableListOf<String>()
 
-        if (!gotAnything) {
-            if (errors.isNotEmpty() && errors.all { it.contains("429") }) {
-                emit("Free daily limit reached for today. Please try again tomorrow.")
-            } else {
-                emit("All AI models are busy right now. Please try again in a minute.")
+        coroutineScope {
+            val channel = Channel<Pair<String, String>>(Channel.UNLIMITED)
+            val winner = AtomicReference<String?>(null)
+
+            val geminiJob = launch {
+                for (model in remoteGemini) {
+                    if (winner.get() != null) break
+                    try {
+                        var gotChunkFromThisModel = false
+                        withTimeoutOrNull(15000L) {
+                            tryGeminiStreaming(model, basePrompt, null).collect { chunk ->
+                                if (chunk.isNotEmpty()) {
+                                    gotChunkFromThisModel = true
+                                    winner.compareAndSet(null, "Gemini")
+                                    if (winner.get() == "Gemini") channel.send("Gemini" to chunk)
+                                }
+                            }
+                        }
+                        if (winner.get() == "Gemini") break
+                        if (gotChunkFromThisModel) break
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) {
+                        errors.add("Gemini $model: ${e.message}")
+                        CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
+                    }
+                }
+            }
+
+            val groqJob = launch {
+                if (groqKey.isBlank()) return@launch
+                for (model in remoteGroq) {
+                    if (winner.get() != null) break
+                    try {
+                        var gotChunkFromThisModel = false
+                        withTimeoutOrNull(15000L) {
+                            tryGroqStreaming(model, basePrompt).collect { chunk ->
+                                if (chunk.isNotEmpty()) {
+                                    gotChunkFromThisModel = true
+                                    winner.compareAndSet(null, "Groq")
+                                    if (winner.get() == "Groq") channel.send("Groq" to chunk)
+                                }
+                            }
+                        }
+                        if (winner.get() == "Groq") break
+                        if (gotChunkFromThisModel) break
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) {
+                        errors.add("Groq $model: ${e.message}")
+                        CrashReporter.groqLog("Groq $model failed: ${e.message}")
+                    }
+                }
+            }
+
+            var gotAnything = false
+            var loserCancelled = false
+
+            while (true) {
+                if (geminiJob.isCompleted && groqJob.isCompleted && channel.isEmpty) break
+                if (geminiJob.isCompleted && groqJob.isCompleted) {
+                    val drained = channel.tryReceive().getOrNull()
+                    if (drained == null) break
+                    if (!loserCancelled) {
+                        loserCancelled = true
+                        _lastProvider.value = drained.first
+                    }
+                    gotAnything = true
+                    emit(drained.second)
+                    continue
+                }
+                val result = withTimeoutOrNull(16000L) { channel.receiveCatching() }
+                val item = result?.getOrNull() ?: break
+                if (!loserCancelled) {
+                    loserCancelled = true
+                    _lastProvider.value = item.first
+                    if (item.first == "Gemini") groqJob.cancel() else geminiJob.cancel()
+                }
+                gotAnything = true
+                emit(item.second)
+            }
+
+            channel.close()
+            geminiJob.join()
+            groqJob.join()
+
+            if (!gotAnything) {
+                if (errors.isNotEmpty() && errors.all { it.contains("429") }) {
+                    emit("Free daily limit reached for today. Please try again tomorrow.")
+                } else {
+                    emit("All AI models are busy right now. Please try again in a minute.")
+                }
             }
         }
     }.flowOn(Dispatchers.IO)
@@ -250,7 +308,9 @@ class AiRepository {
                 _lastProvider.value = "Gemini"
                 try {
                     sb.clear()
-                    tryGeminiStreaming(model, prompt, image).collect { sb.append(it) }
+                    withTimeoutOrNull(15000L) {
+                        tryGeminiStreaming(model, prompt, image).collect { sb.append(it) }
+                    }
                     if (sb.isNotBlank()) return Result.success(cleanMarkdown(sb.toString()).trim())
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { lastErr = e; sb.clear() }
@@ -261,7 +321,9 @@ class AiRepository {
                     _lastProvider.value = "Groq"
                     try {
                         sb.clear()
-                        tryGroqStreaming(model, prompt).collect { sb.append(it) }
+                        withTimeoutOrNull(15000L) {
+                            tryGroqStreaming(model, prompt).collect { sb.append(it) }
+                        }
                         if (sb.isNotBlank()) return Result.success(cleanMarkdown(sb.toString()).trim())
                     } catch (e: CancellationException) { throw e }
                     catch (e: Exception) { lastErr = e; sb.clear() }
@@ -314,7 +376,6 @@ class AiRepository {
         } catch (_: Exception) { null }
     }
 
-    // --- Gemini STREAMING ---
     private fun tryGeminiStreaming(model: String, prompt: String, image: Bitmap?): Flow<String> = flow {
         var conn: HttpURLConnection? = null
         try {
@@ -323,8 +384,8 @@ class AiRepository {
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
-                connectTimeout = 10000
-                readTimeout = 60000
+                connectTimeout = 5000
+                readTimeout = 15000
                 doOutput = true
             }
             val parts = JSONArray().put(JSONObject().put("text", prompt))
@@ -362,7 +423,6 @@ class AiRepository {
         finally { runCatching { conn?.disconnect() } }
     }.flowOn(Dispatchers.IO)
 
-    // --- Groq STREAMING ---
     private fun tryGroqStreaming(model: String, prompt: String): Flow<String> = flow {
         var conn: HttpURLConnection? = null
         try {
@@ -372,8 +432,8 @@ class AiRepository {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Authorization", "Bearer $groqKey")
-                connectTimeout = 10000
-                readTimeout = 60000
+                connectTimeout = 5000
+                readTimeout = 15000
                 doOutput = true
             }
             val body = JSONObject()
