@@ -13,6 +13,7 @@ import android.util.LruCache
 import android.util.TypedValue
 import android.view.MotionEvent
 import android.widget.TextView
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -36,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -55,13 +57,16 @@ private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?
 private val H1_REGEX = Regex("(?is)<h1[^>]*>.*?</h1>")
 
 private val parsedCache = LruCache<String, List<SpannableString>>(30)
+private val parsedCacheLock = Any()
+private fun getParsedCached(key: String): List<SpannableString>? =
+    synchronized(parsedCacheLock) { parsedCache.get(key) }
+private fun putParsedCached(key: String, value: List<SpannableString>) =
+    synchronized(parsedCacheLock) { parsedCache.put(key, value) }
 
-// FIX: expose this so parent ViewModel can prefetch raw HTML into same cache
-// Parent should call this when it loads HTML, so next chapter is already parsed
 fun prewarmOpenEWCache(bookName: String, chapter: Int, html: String) {
     if (html.isBlank()) return
     val key = "$bookName-$chapter"
-    if (parsedCache.get(key) != null) return
+    if (getParsedCached(key) != null) return
     runCatching {
         val parsedHtml = HtmlCompat.fromHtml(
             linkifyForHtml(cleanForHtml(html, bookName, chapter)),
@@ -76,7 +81,7 @@ fun prewarmOpenEWCache(bookName: String, chapter: Int, html: String) {
             )
         }
         val full = if (spannable is SpannableString) spannable else SpannableString(spannable)
-        parsedCache.put(key, splitIntoParagraphs(full))
+        putParsedCached(key, splitIntoParagraphs(full))
     }
 }
 
@@ -193,26 +198,24 @@ fun OpenEWContent(
     onNextChapter: () -> Unit = {},
     onPreviousChapter: () -> Unit = {},
     onRetry: () -> Unit = {},
-    // NEW: parent uses this to prefetch next chapter HTML in background
     onPrefetchChapter: (book: String, chapter: Int) -> Unit = { _, _ -> },
 ) {
     val currentBookName by rememberUpdatedState(bookName)
     val currentChapter by rememberUpdatedState(chapter)
     val currentOnVerseClick by rememberUpdatedState(onVerseClick)
+    val currentOnNext by rememberUpdatedState(onNextChapter)
+    val currentOnPrev by rememberUpdatedState(onPreviousChapter)
     val effectiveFontSize = fontSize.coerceAtLeast(18f)
 
     val cacheKey = "$bookName-$chapter"
     val listState = rememberLazyListState()
 
-    // FIX 1: Instant scroll + instant prefetch when chapter changes
     LaunchedEffect(cacheKey) {
         listState.scrollToItem(0)
-        // Prefetch next + previous so tapping Next is instant next time
         val bookId = BookCatalog.id(bookName)
         val total = BookCatalog.chapters(bookId)
         if (chapter < total) onPrefetchChapter(bookName, chapter + 1)
         if (chapter > 1) onPrefetchChapter(bookName, chapter - 1)
-        // Also prefetch first chapter of next book
         if (chapter == total) {
             val all = BookCatalog.allDisplayNames()
             val idx = all.indexOfFirst { BookCatalog.canonicalName(it) == BookCatalog.canonicalName(bookName) }
@@ -220,16 +223,11 @@ fun OpenEWContent(
         }
     }
 
-    // FIX 2: INSTANT - read cache synchronously, don't wait for produceState
-    // If user visited this chapter before, show it in 0ms
-    val cachedInstant = remember(cacheKey) { parsedCache.get(cacheKey) }
+    val cachedInstant = remember(cacheKey) { getParsedCached(cacheKey) }
 
     val paragraphs by produceState<List<SpannableString>?>(initialValue = cachedInstant, cacheKey, commentaryHtml) {
-        // If we already have it cached, done - instant
-        parsedCache.get(cacheKey)?.let { value = it; return@produceState }
+        getParsedCached(cacheKey)?.let { value = it; return@produceState }
         if (commentaryHtml.isBlank()) {
-            // Don't set null and flash "No commentary" - keep previous value (cachedInstant)
-            // Parent is still loading new HTML, keep showing loading state
             value = null
             return@produceState
         }
@@ -249,30 +247,41 @@ fun OpenEWContent(
                 }
                 val full = if (spannable is SpannableString) spannable else SpannableString(spannable)
                 val split = splitIntoParagraphs(full)
-                parsedCache.put(cacheKey, split)
+                putParsedCached(cacheKey, split)
                 split
             }.getOrNull()
         }
     }
 
-    // FIX 3: Header + content are tied to SAME cacheKey.
-    // Never show Genesis 10 header with Genesis 9 content.
-    // If paragraphs is null but we are loading, show blank loading, NOT old chapter content.
-    // If paragraphs != null, it is guaranteed to be for THIS cacheKey.
-
-    if (hasError && paragraphs == null && !isLoading) {
-        Column(modifier = Modifier.fillMaxSize().navigationBarsPadding().padding(18.dp)) {
-            Text(
-                "Could not load commentary. Please try again.",
-                color = textColor.copy(alpha = 0.6f),
-                fontSize = effectiveFontSize.sp,
-                lineHeight = (effectiveFontSize + 8).sp
-            )
-        }
-        return
-    }
-
-    Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+    // SWIPE: horizontal-only, on the outer Column - NOT detectDragGestures.
+    // detectDragGestures consumed ALL drags and blocked vertical scroll.
+    // detectHorizontalDragGestures only claims the gesture when horizontal
+    // movement wins, so vertical scroll in LazyColumn still works.
+    // Swipe left = Next, Swipe right = Prev. Threshold 120px = no accidental taps.
+    // This is connected to HomeScreen: HomeScreen passes
+    // onNextChapter = { viewModel.nextChapter() } / onPreviousChapter = { viewModel.previousChapter() }
+    // No buttons needed - swipe IS the navigation.
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .pointerInput(cacheKey) {
+                var totalDrag = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { totalDrag = 0f },
+                    onDragCancel = { totalDrag = 0f },
+                    onDragEnd = {
+                        when {
+                            totalDrag < -120f -> currentOnNext()
+                            totalDrag > 120f -> currentOnPrev()
+                        }
+                        totalDrag = 0f
+                    },
+                    onHorizontalDrag = { _, dragAmount -> totalDrag += dragAmount }
+                )
+            }
+    ) {
         Text(
             text = if (bookName.isNotBlank()) "$bookName $chapter" else "",
             color = textColor,
@@ -283,7 +292,21 @@ fun OpenEWContent(
                 .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp)
         )
 
-        if (paragraphs == null) {
+        if (hasError && paragraphs == null && !isLoading) {
+            // No Retry button - tap anywhere to retry is confusing.
+            // Swipe still works on error screen, and HomeScreen retry is via onRetry
+            // if you want it: long-press is NOT used. Keep error text only,
+            // user can swipe to next/prev or switch tab and back to retry.
+            // If you DO want tap-to-retry, uncomment the clickable below.
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(18.dp)) {
+                Text(
+                    "Could not load commentary. Swipe to try another chapter.",
+                    color = textColor.copy(alpha = 0.6f),
+                    fontSize = effectiveFontSize.sp,
+                    lineHeight = (effectiveFontSize + 8).sp
+                )
+            }
+        } else if (paragraphs == null) {
             if (!isLoading && commentaryHtml.isBlank() && cachedInstant == null) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
                     Text(
@@ -294,15 +317,13 @@ fun OpenEWContent(
                     )
                 }
             } else {
-                // Loading new chapter - show empty space, NOT old chapter, NOT "No commentary"
-                // This prevents the Genesis 10 header + Genesis 9 content mismatch
                 Box(modifier = Modifier.weight(1f).fillMaxWidth())
             }
         } else {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 180.dp)
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)
             ) {
                 itemsIndexed(
                     items = paragraphs!!,
