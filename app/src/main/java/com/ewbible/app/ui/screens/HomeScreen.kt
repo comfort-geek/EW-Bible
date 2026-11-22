@@ -143,7 +143,7 @@ fun HomeScreen(
 
     val currentBookId = state.currentBookId
     val currentBookName = BookCatalog.name(currentBookId)
-    val effectiveFontSize = state.fontSize.coerceAtLeast(18f)
+    val effectiveFontSize = state.fontSize.coerceIn(12f, 20f)
 
     val otBooks = remember(state.books) { state.books.filter { it.id <= 39 }.sortedBy { it.id } }
     val ntBooks = remember(state.books) { state.books.filter { it.id >= 40 }.sortedBy { it.id } }
@@ -230,6 +230,7 @@ fun HomeScreen(
                 expandedBookId = expandedBook,
                 background = background, textColor = textColor, panel = panel, gold = gold,
                 secondaryText = secondaryText,
+                onClose = { scope.launch { drawerState.close() } },
                 onOpenBook = openBookStable,
                 onSelectBook = { bookId -> viewModel.selectBook(bookId) },
                 onToggleBook = { bookId -> expandedBook = if (expandedBook == bookId) null else bookId }
