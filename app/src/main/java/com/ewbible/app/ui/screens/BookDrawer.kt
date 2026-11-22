@@ -78,7 +78,7 @@ fun BookDrawer(
             if (otBookEntities.isEmpty() && ntBookEntities.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = gold) }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 100.dp)) {
                     item(contentType = "header") { Text("Old Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp); Spacer(Modifier.height(8.dp)) }
                     items(otBookEntities, key = { it.id }, contentType = { "book" }) { book ->
                         BookDrawerRow(
@@ -163,9 +163,10 @@ private fun BookDrawerRow(
     val isSelected = selectedBookId == book.id
     val isExpanded = expandedBookId == book.id
     val chapters = remember(chapterCount) { (1..chapterCount.coerceAtLeast(1)).toList() }
-    // FIXED: 40dp chip + 8dp spacing, was 48dp per row which clipped last row for Psalms
+    // FIXED: 40dp chip + 8dp spacing + 8dp vertical padding (4dp top + 4dp bottom)
+    // Without the +8, last row was clipped by 8dp - Ruth 1-4 and Deut 31-34 looked cut
     val rows = (chapterCount + 4) / 5
-    val gridHeight = remember(chapterCount) { (rows * 40 + (rows - 1).coerceAtLeast(0) * 8).dp }
+    val gridHeight = remember(chapterCount) { (rows * 40 + (rows - 1).coerceAtLeast(0) * 8 + 8).dp }
 
     Column {
         Row(
