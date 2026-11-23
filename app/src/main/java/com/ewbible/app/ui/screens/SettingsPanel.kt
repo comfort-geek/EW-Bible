@@ -48,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.CrashReportDialog
@@ -139,24 +140,33 @@ fun SettingsPanel(
                     modifier = Modifier.size(32.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Column(modifier = Modifier.weight(1f)) {
+                Column(modifier = Modifier.weight(1f, fill = false)) {
                     Text(
                         text = if (isLoggedIn) userName.ifBlank { "My Account" } else "Guest",
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
-                        color = textColor
+                        color = textColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (isLoggedIn && userEmail.isNotBlank()) {
-                        Text(userEmail, fontSize = 11.sp, color = textColor.copy(alpha = 0.6f))
+                        Text(
+                            text = userEmail,
+                            fontSize = 11.sp,
+                            color = textColor.copy(alpha = 0.6f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            softWrap = false
+                        )
                     }
                 }
                 if (isLoggedIn) {
                     TextButton(onClick = onSignOut, modifier = Modifier.height(32.dp)) {
-                        Text("Log Out", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Text("Log Out", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                     }
                 } else {
                     TextButton(onClick = onGoogleSignIn, modifier = Modifier.height(32.dp)) {
-                        Text("Log In", color = gold, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Text("Log In", color = gold, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                     }
                 }
             }
