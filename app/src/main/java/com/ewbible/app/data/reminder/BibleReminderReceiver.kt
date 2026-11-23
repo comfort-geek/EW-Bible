@@ -9,19 +9,25 @@ import android.content.Intent
 import android.media.RingtoneManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import com.ewbible.app.MainActivity
-import com.ewbible.app.R
 
 class BibleReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        // After reboot, re-schedule
+        // Reschedule FIRST - even if notification fails, tomorrow still works
+        val saved = ReminderManager.getReminder(context)
+        if (saved != null) {
+            try {
+                ReminderManager.schedule(context, saved.first, saved.second)
+            } catch (e: Exception) { /* don't crash receiver */ }
+        }
+
         if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
-            val r = ReminderManager.getReminder(context)
-            if (r != null) ReminderManager.schedule(context, r.first, r.second)
             return
         }
 
-        // Show notification with sound
+        if (saved == null) return
+
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channelId = "bible_reminder"
 
@@ -33,7 +39,6 @@ class BibleReminderReceiver : BroadcastReceiver() {
             ).apply {
                 description = "Daily Bible reading reminder"
                 enableVibration(true)
-                setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION), null)
             }
             manager.createNotificationChannel(channel)
         }
@@ -47,7 +52,7 @@ class BibleReminderReceiver : BroadcastReceiver() {
         )
 
         val notification = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(android.R.drawable.ic_dialog_info) // TEST ICON - always works
             .setContentTitle("📖 Time to read the Bible")
             .setContentText("Your daily Bible reading time is now. Open EW Bible.")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -57,10 +62,12 @@ class BibleReminderReceiver : BroadcastReceiver() {
             .setContentIntent(pending)
             .build()
 
-        manager.notify(1001, notification)
-
-        // Re-schedule for tomorrow — so it repeats every day automatically
-        val r = ReminderManager.getReminder(context)
-        if (r != null) ReminderManager.schedule(context, r.first, r.second)
+        try {
+            NotificationManagerCompat.from(context).notify(1001, notification)
+        } catch (e: SecurityException) {
+            // User denied POST_NOTIFICATIONS
+        } catch (e: Exception) {
+            // Bad icon / other OEM issue
+        }
     }
 }
