@@ -52,7 +52,8 @@ data class HomeUiState(
     val showNoteDialog: Boolean = false,
     val showAiChat: Boolean = false,
     val currentNoteText: String = "",
-    val isReadingRestored: Boolean = false
+    val isReadingRestored: Boolean = false,
+    val lastSyncMillis: Long? = null // NEW: drives "Synced now / 5s ago" in Settings
 )
 
 @OptIn(FlowPreview::class)
@@ -86,23 +87,15 @@ class HomeViewModel(
     private val linkedVerseText = MutableStateFlow("")
     private val linkedVerseRef = MutableStateFlow("")
 
-    // FAST 1: Cancellable jobs. Before: loadSummary() launched a new
-    // coroutine every swipe that could NOT be cancelled, so 5 fast swipes
-    // = 5 DB reads racing, last one to finish won (often the OLD chapter).
     private var commentaryJob: Job? = null
     private var summaryJob: Job? = null
     private var restoreDone = false
     private var cloudSyncDone = false
     private var lastCommentaryKey = ""
 
-    // FAST 2: Smaller caches. 60 summaries + 120 commentaries of full HTML
-    // = GC pressure on every swipe. 30 / 40 is current + neighbours + history.
     private val summaryCache = LruCache<String, SummaryEntity>(30)
     private val versesCache = LruCache<String, List<VerseEntity>>(30)
     private val commentaryHtmlCache = LruCache<String, String>(40)
-    // DELETED: summaryMissing + summaryLoadingKeys
-    // summaryMissing was permanent - one transient null (DB not seeded yet,
-    // race with restore) = chapter never retried until restart. That's the lock.
 
     private val prophecyBooks = setOf(23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,66)
 
@@ -147,6 +140,11 @@ class HomeViewModel(
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+
+    // NEW: Single place to record a successful sync
+    private fun markSynced() {
+        _uiState.update { s -> s.copy(lastSyncMillis = System.currentTimeMillis()) }
+    }
 
     private fun setCommentary(bookId: Int, chapter: Int, html: String, error: Boolean = false) {
         commentary.value = html
@@ -197,10 +195,6 @@ class HomeViewModel(
             }
         }
 
-        // Single source of truth: ViewModel owns loading.
-        // HomeScreen LaunchedEffect also calls loadSummary/loadCommentary,
-        // but both are now idempotent + cancellable, so double-call is cheap
-        // (cache hit returns instantly, no second DB read).
         viewModelScope.launch {
             bookChapterKey
                 .distinctUntilChanged()
@@ -278,6 +272,8 @@ class HomeViewModel(
                     }
                 }
             }
+            // FIXED: Sync finished (even if cloud was empty) -> show Synced now
+            markSynced()
         } catch (e: Exception) { }
     }
 
@@ -287,9 +283,6 @@ class HomeViewModel(
         selectedVerse.value = null
         scrollRestoreKey.value += 1
         saveReadingProgress()
-        // FAST 3: Don't prefetch 1,2,3 here. init{} already loads ch.1,
-        // HomeScreen already prefetches ch.2. The old 3x prefetch was
-        // 3 extra DB + decompress + parse competing with the current chapter.
     }
     fun selectBook(bookName: String) = selectBook(BookCatalog.id(bookName))
     fun selectChapter(chapter: Int) {
@@ -368,6 +361,8 @@ class HomeViewModel(
                     scrollIndex = scrollIndex,
                     scrollOffset = scrollOffset
                 )
+                // FIXED: Progress uploaded -> Synced now
+                if (syncManager != null) markSynced()
             }
         }
     }
@@ -387,10 +382,6 @@ class HomeViewModel(
         }
     }
 
-    // FAST 4: loadSummary rewritten - cancellable + re-checks current AFTER DB.
-    // Before: isCurrent captured BEFORE launch, so a swipe during DB read
-    // wrote the OLD chapter's summary over the NEW chapter's.
-    // Now: cancel previous job, re-check after DB, never cache a null.
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
         synchronized(summaryCache) { summaryCache.get(key) }?.let { cached ->
@@ -405,20 +396,16 @@ class HomeViewModel(
                 val isCurrentAtStart = bookId == currentBookId.value && chapter == selectedChapter.value
                 if (isCurrentAtStart) _summaryLoading.value = true
                 val s = runCatching { withContext(Dispatchers.IO) { dao.getSummary(bookId, chapter) } }.getOrNull()
-                // Re-check AFTER IO - this is the fix. User may have swiped while we were in DB.
                 val isCurrentNow = bookId == currentBookId.value && chapter == selectedChapter.value
                 if (s != null) {
                     synchronized(summaryCache) { summaryCache.put(key, s) }
                     if (isCurrentNow) summaryState.value = s
                 } else {
-                    // Don't cache null, don't add to missing set - retry next time.
-                    // Just clear stale summary if we're still on this chapter.
                     if (isCurrentNow) summaryState.value = null
                 }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { /* keep old summary on error, don't blank */ }
+            catch (e: Exception) { }
             finally {
-                // Only clear loading if we're still on this chapter
                 if (bookId == currentBookId.value && chapter == selectedChapter.value) {
                     _summaryLoading.value = false
                 }
@@ -513,11 +500,6 @@ class HomeViewModel(
         prefetchCommentary(BookCatalog.id(bookName), chapter)
     }
 
-    // FAST 5: Preload ONLY next + prev, not next+2.
-    // Before: next, next+2, prev = 3 full decompress + parse per swipe,
-    // all on IO competing with the CURRENT chapter's DB read.
-    // Now: next + prev only. HomeScreen already prefetches the same 2,
-    // cache check makes the duplicate call free.
     private fun preloadNextCommentary(bookId: Int, chapter: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
@@ -574,7 +556,10 @@ class HomeViewModel(
                 }
                 currentNoteText.value = noteText
             }
-            runCatching { syncManager?.uploadNote(bookId, chapter, verseNum, noteText) }
+            runCatching {
+                syncManager?.uploadNote(bookId, chapter, verseNum, noteText)
+                if (syncManager != null) markSynced() // FIXED: Note uploaded -> Synced now
+            }
         }
     }
     fun saveHighlight(color: Color) {
@@ -585,7 +570,10 @@ class HomeViewModel(
             val colorInt = color.toArgb()
             runCatching { withContext(Dispatchers.IO) { dao.saveHighlight(HighlightEntity(bookId = bookId, chapter = chapter, verse = verseNum, color = colorInt)) } }
             val hex = "#%08X".format(colorInt)
-            runCatching { syncManager?.uploadHighlight(bookId, chapter, verseNum, hex) }
+            runCatching {
+                syncManager?.uploadHighlight(bookId, chapter, verseNum, hex)
+                if (syncManager != null) markSynced() // FIXED: Highlight uploaded -> Synced now
+            }
         }
     }
     fun removeHighlight() {
