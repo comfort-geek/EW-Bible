@@ -26,7 +26,7 @@ import java.util.Locale
 
 class AiRepository {
 
-    private val _lastProvider = MutableStateFlow("Gemini")
+    private val _lastProvider = MutableStateFlow("Groq")
     val lastProvider: StateFlow<String> = _lastProvider.asStateFlow()
 
     private val geminiKey: String
@@ -54,10 +54,7 @@ class AiRepository {
     private var remoteGroq = FALLBACK_GROQ
     private var remoteVersion = 3
 
-    // FIX 1: 60s was cutting long answers. 120s lets it finish.
     private val STREAM_TIMEOUT_MS = 120000L
-    // FIX 2: 2048 tokens + your "2048 chars max" prompt = model stops early.
-    // 4096 gives room to finish the sentence.
     private val MAX_TOKENS = 4096
 
     private var cachedQuery = ""
@@ -188,9 +185,9 @@ class AiRepository {
         } catch (e: Exception) { "" }
     }
 
-    // FIX 3: NO MORE RACE. Sequential = no truncation.
-    // Try Gemini 1 -> if it streams to completion, done.
-    // Only if it fails with ZERO chunks, try next model / Groq.
+    // FIX: NO MORE RACE. Sequential = no truncation.
+    // Text = Groq first (fast), then Gemini backup.
+    // Image = Gemini only.
     // Once a model starts streaming, we COMMIT to it and let it finish.
     fun askStreaming(
         question: String,
@@ -205,7 +202,6 @@ class AiRepository {
 
         val errors = mutableListOf<String>()
 
-        // Helper: try one model, stream it. Returns true if completed.
         suspend fun tryOne(
             provider: String,
             model: String,
@@ -218,16 +214,13 @@ class AiRepository {
                     stream.collect { chunk ->
                         if (chunk.isNotEmpty()) {
                             gotAnything = true
-                            emit(chunk) // real streaming, like this chat
+                            emit(chunk)
                         }
                     }
                     true
                 } ?: false
 
                 if (gotAnything && completed) return true
-                // If we got chunks but timed out, DO NOT try another model -
-                // it would duplicate / mix answers. Just end this attempt
-                // as finished. Timeout is now 120s so this is rare.
                 if (gotAnything && !completed) return true
                 return false
             } catch (e: CancellationException) { throw e }
@@ -247,15 +240,15 @@ class AiRepository {
             return@flow
         }
 
-        // 1. Gemini first
-        for (model in remoteGemini) {
-            if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, null))) return@flow
-        }
-        // 2. Only if ALL Gemini failed with 0 chunks, try Groq
+        // 1. Groq first - FASTER
         if (groqKey.isNotBlank()) {
             for (model in remoteGroq) {
                 if (tryOne("Groq", model, tryGroqStreaming(model, basePrompt))) return@flow
             }
+        }
+        // 2. Only if ALL Groq failed with 0 chunks, try Gemini
+        for (model in remoteGemini) {
+            if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, null))) return@flow
         }
 
         if (errors.isNotEmpty() && errors.all { it.contains("429") }) {
@@ -277,20 +270,26 @@ class AiRepository {
         val sb = StringBuilder()
         return try {
             var lastErr: Exception? = null
-            for (model in remoteGemini) {
-                _lastProvider.value = "Gemini"
-                try {
-                    sb.clear()
-                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                        tryGeminiStreaming(model, fullPrompt, image).collect { sb.append(it) }
-                        true
-                    } ?: false
-                    if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
-                    if (sb.isNotBlank() && !completed) continue
-                } catch (e: CancellationException) { throw e }
-                catch (e: Exception) { lastErr = e; sb.clear() }
+
+            // Image = Gemini only
+            if (image != null) {
+                for (model in remoteGemini) {
+                    _lastProvider.value = "Gemini"
+                    try {
+                        sb.clear()
+                        val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                            tryGeminiStreaming(model, fullPrompt, image).collect { sb.append(it) }
+                            true
+                        } ?: false
+                        if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                        if (sb.isNotBlank() && !completed) continue
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) { lastErr = e; sb.clear() }
+                }
+                return Result.failure(Exception("Could not read the image. Please try again - Gemini is busy right now."))
             }
-            if (image != null) return Result.failure(Exception("Could not read the image. Please try again - Gemini is busy right now."))
+
+            // Text = Groq first (fast)
             if (groqKey.isNotBlank()) {
                 for (model in remoteGroq) {
                     _lastProvider.value = "Groq"
@@ -305,6 +304,20 @@ class AiRepository {
                     } catch (e: CancellationException) { throw e }
                     catch (e: Exception) { lastErr = e; sb.clear() }
                 }
+            }
+            // Then Gemini backup
+            for (model in remoteGemini) {
+                _lastProvider.value = "Gemini"
+                try {
+                    sb.clear()
+                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                        tryGeminiStreaming(model, fullPrompt, null).collect { sb.append(it) }
+                        true
+                    } ?: false
+                    if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                    if (sb.isNotBlank() && !completed) continue
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { lastErr = e; sb.clear() }
             }
             Result.failure(lastErr ?: Exception("All AI models are busy right now."))
         } catch (e: CancellationException) { throw e }
@@ -321,7 +334,6 @@ class AiRepository {
         val sb = StringBuilder()
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
         sb.append("You are a Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
-        // FIX 4: Removed "around 2048 characters max" - that was telling the model to cut off.
         sb.append("Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Let the length fit the question - a simple question gets 1 short paragraph, a deeper question gets 2 to 3 spaced paragraphs. Always finish your answer fully. Never stop mid-sentence or mid-verse. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links.\n\n")
         if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
         if (webContext.isNotBlank()) {
