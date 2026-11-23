@@ -246,7 +246,8 @@ class ChatViewModel(
             return
         }
 
-        val answerText = fullAnswer.toString().ifBlank { "Sorry, I couldn't answer that." }
+        // FIXED: Clean markdown / bullets from final answer before saving
+        val answerText = cleanMarkdown(fullAnswer.toString()).ifBlank { "Sorry, I couldn't answer that." }
         val aiMsg = MessageEntity(chatId = chatId, text = answerText, isUser = false)
         val aiId = bibleDao.insertMessage(aiMsg)
         _state.update {
@@ -308,6 +309,22 @@ class ChatViewModel(
         } catch (e: Exception) {
             ""
         }
+    }
+
+    // FIXED: Strips bullets, numbers, >, *, - at start of lines + markdown
+    private fun cleanMarkdown(text: String): String {
+        var cleaned = text
+            .replace("**", "")
+            .replace("__", "")
+            .replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "")
+            .replace("`", "")
+        return cleaned.lines().joinToString("\n") { line ->
+            var l = line.trimStart()
+            l = l.removePrefix("- ").removePrefix("* ").removePrefix("• ").removePrefix("> ")
+            l = l.replace(Regex("^\\d+\\.\\s"), "")
+            l = l.replace(Regex("^\\d+\\)\\s"), "")
+            l
+        }.trim()
     }
 
     fun clearError() {
