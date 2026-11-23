@@ -135,15 +135,9 @@ fun HomeScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
 
-    // FIXED: Last sync time - re-read every time Settings is opened
-    // SettingsPanel ticks it every 1s to show "Synced now / 5s ago"
-    var lastSyncMillis by remember(settingsOpen) {
-        mutableStateOf(
-            context.getSharedPreferences("ew_sync", android.content.Context.MODE_PRIVATE)
-                .getLong("last_sync", 0L)
-                .takeIf { it > 0 }
-        )
-    }
+    // FIXED: No local lastSyncMillis anymore.
+    // Before: read from empty SharedPreferences("ew_sync") which was never written -> always "Not synced yet"
+    // Now: use state.lastSyncMillis from HomeViewModel.markSynced() - single source of truth
 
     val gold = remember { Color(0xFFC9A227) }
     val background = remember(isDark) { if (isDark) Color(0xFF1E1E22) else Color(0xFFFDF8EF) }
@@ -159,26 +153,14 @@ fun HomeScreen(
     val ntBooks = remember(state.books) { state.books.filter { it.id >= 40 }.sortedBy { it.id } }
     val tabs = remember { listOf("Bible", "Open EW", "Search") }
 
-    // FIX 1: LOAD TOGETHER - single source of truth, with key check.
-    // Before: bare state.commentaryHtml was passed, so Genesis 1 HTML could be
-    // parsed as Genesis 2. Now: if ViewModel HTML is not for THIS chapter,
-    // pass "" - OpenEWContent keeps lastGoodParagraphs (old chapter) on screen
-    // until the real one arrives. Never parses stale HTML as new.
     val isCommentaryForCurrent = state.commentaryBookId == state.currentBookId &&
         state.commentaryChapter == state.selectedChapter
     val effectiveCommentaryHtml = if (isCommentaryForCurrent) state.commentaryHtml else ""
-    val isCommentaryLoading = false // No spinner - preload makes it instant
+    val isCommentaryLoading = false
 
-    // FIX 2: ONE LaunchedEffect loads EVERYTHING together on chapter change.
-    // Before: only prefetchCommentary() x3 here, loadSummary/loadCommentary only in
-    // ViewModel.init combine() - which can miss on fast swipe -> summary lock.
-    // Now: summary + commentary + prefetch are all triggered together, every time.
-    // And prefetch is only next/prev - ViewModel.loadCommentary already preloads
-    // next via preloadNextCommentary(), so don't triple-fire it here.
     LaunchedEffect(state.currentBookId, state.selectedChapter) {
         viewModel.loadSummary(state.currentBookId, state.selectedChapter)
         viewModel.loadCommentary(state.currentBookId, state.selectedChapter)
-        // Prefetch neighbours only - current is already loaded above
         val max = BookCatalog.chapters(state.currentBookId)
         if (state.selectedChapter < max) {
             viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter + 1)
@@ -363,7 +345,7 @@ fun HomeScreen(
 
     SettingsPanel(
         visible = settingsOpen, isLoggedIn = state.isLoggedIn, userName = state.userName, userEmail = state.userEmail,
-        lastSyncMillis = lastSyncMillis,
+        lastSyncMillis = state.lastSyncMillis,
         fontSize = state.fontSize, darkMode = isDark, notesCount = state.notes.size,
         background = background, panel = panel, textColor = textColor, gold = gold,
         onClose = { settingsOpen = false }, onFontSizeChange = { viewModel.setFontSize(it) }, onDarkModeChange = { viewModel.setDarkMode(it) },
@@ -371,16 +353,13 @@ fun HomeScreen(
         onShowNotes = { settingsOpen = false; showAllNotes = true },
         onOpenAiChat = { settingsOpen = false; viewModel.openAiChat() },
         onGoogleSignIn = {
-            // FIXED: Stay in Settings - do NOT set settingsOpen = false
             scope.launch {
                 val result = googleAuth.signInWithGoogle(activity)
                 result.onSuccess { nameAndEmail ->
                     val parts = nameAndEmail.split("|", limit = 2)
                     viewModel.onUserSignedIn(parts.getOrNull(0) ?: "User", parts.getOrNull(1) ?: "")
                     // Panel stays open, header updates in place to Name + Synced now
-                    // Re-read sync time after login
-                    lastSyncMillis = context.getSharedPreferences("ew_sync", android.content.Context.MODE_PRIVATE)
-                        .getLong("last_sync", 0L).takeIf { it > 0 }
+                    // No manual re-read needed - ViewModel.markSynced() updates state.lastSyncMillis
                 }.onFailure { e ->
                     if (e !is GoogleAuth.UserCancelledException) {
                         Toast.makeText(context, e.message ?: "Sign-in failed", Toast.LENGTH_SHORT).show()
@@ -388,7 +367,6 @@ fun HomeScreen(
                 }
             }
         },
-        // FIXED: Sign out also stays in place
         onSignOut = { googleAuth.signOut(); viewModel.onUserSignedOut() },
     )
 
