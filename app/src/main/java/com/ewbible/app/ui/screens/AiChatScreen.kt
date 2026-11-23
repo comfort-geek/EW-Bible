@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -19,7 +20,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -28,6 +33,52 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+// NEW: Makes https:// links blue + underline + tappable
+@Composable
+private fun LinkText(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val uriHandler = LocalUriHandler.current
+    val annotated = remember(text, color) {
+        buildAnnotatedString {
+            append(text)
+            val regex = Regex("https?://[^\\s]+")
+            regex.findAll(text).forEach { match ->
+                // Clean trailing . , ) that AI sometimes adds
+                var url = match.value
+                var end = match.range.last + 1
+                while (url.endsWith(".") || url.endsWith(",") || url.endsWith(")") || url.endsWith("]")) {
+                    url = url.dropLast(1)
+                    end -= 1
+                }
+                addStyle(
+                    style = SpanStyle(color = Color(0xFF1A73E8), textDecoration = TextDecoration.Underline),
+                    start = match.range.first,
+                    end = end
+                )
+                addStringAnnotation(
+                    tag = "URL",
+                    annotation = url,
+                    start = match.range.first,
+                    end = end
+                )
+            }
+        }
+    }
+
+    ClickableText(
+        text = annotated,
+        style = LocalTextStyle.current.copy(color = color, fontSize = 15.sp),
+        modifier = modifier,
+        onClick = { offset ->
+            annotated.getStringAnnotations("URL", offset, offset)
+                .firstOrNull()?.let { uriHandler.openUri(it.item) }
+        }
+    )
+}
 
 @Composable
 private fun MessageBubble(
@@ -41,10 +92,9 @@ private fun MessageBubble(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
-        Text(
-            text,
+        LinkText(
+            text = text,
             color = if (isUser) Color.White else textColor,
-            fontSize = 15.sp,
             modifier = Modifier
                 .fillMaxWidth(0.85f)
                 .background(if (isUser) gold else panel, RoundedCornerShape(12.dp))
@@ -122,9 +172,6 @@ fun AiChatScreen(
     val thinkingText = if (state.aiProvider == "Groq") "Groq is connecting..." else "Gemini is thinking..."
 
     if (showHistory) {
-        // FIXED: No navigationBarsPadding() here.
-        // ModalBottomSheet already handles system bars itself.
-        // Adding it again pushed the sheet up / cut off the last chat.
         ModalBottomSheet(
             onDismissRequest = { showHistory = false }
         ) {
@@ -211,7 +258,6 @@ fun AiChatScreen(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
-            // FIXED: bottom 8.dp -> 16.dp, last bubble never touches the input bar
             contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp)
         ) {
             items(state.messages, key = { it.id }, contentType = { if (it.isUser) "user" else "ai" }) { msg ->
@@ -220,9 +266,9 @@ fun AiChatScreen(
             if (state.isLoading) {
                 item(key = "loading", contentType = "loading") {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                        Text(
-                            if (state.streamingText.isNotEmpty()) state.streamingText else thinkingText,
-                            color = textColor, fontSize = 15.sp,
+                        LinkText(
+                            text = if (state.streamingText.isNotEmpty()) state.streamingText else thinkingText,
+                            color = textColor,
                             modifier = Modifier.fillMaxWidth(0.85f).background(panel, RoundedCornerShape(12.dp)).padding(10.dp)
                         )
                     }
