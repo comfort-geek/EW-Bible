@@ -61,7 +61,7 @@ class AiRepository {
     private var remoteVersion = 3
 
     private val STREAM_TIMEOUT_MS = 60000L
-    private val MAX_TOKENS = 2600
+    private val MAX_TOKENS = 2048
 
     private var cachedQuery = ""
     private var cachedWeb = ""
@@ -337,7 +337,7 @@ class AiRepository {
     suspend fun askQuestion(prompt: String, image: Bitmap? = null): Result<String> {
         val webContext = if (image == null) getWebContext(prompt) else ""
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
-        val linkRule = "Do NOT use Markdown. Write in clean plain paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."
+        val linkRule = "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."
         val fullPrompt = if (webContext.isNotBlank()) {
             "Today is $today. $linkRule WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say cutoff/2024:\n${webContext}\n\nUser question: $prompt"
         } else {
@@ -379,7 +379,6 @@ class AiRepository {
         } catch (e: CancellationException) { throw e }
     }
 
-    // FIXED: Duplicate removed - only ONE "You are..." line now
     private fun buildPrompt(
         question: String,
         currentRef: String,
@@ -391,7 +390,7 @@ class AiRepository {
         val sb = StringBuilder()
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
         sb.append("You are a helpful Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
-        sb.append("Do NOT use Markdown. Write in clean plain paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links. Keep answer complete but not too long - 3 to 4 short paragraphs, around 2000 characters max. Always finish your answer fully. Never stop mid-sentence or mid-verse.\n\n")
+        sb.append("Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Let the length fit the question - a simple question gets 1 short paragraph, a deeper question gets 2 to 3 spaced paragraphs. Keep answer complete but not too long - around 2048 characters max. Always finish your answer fully. Never stop mid-sentence or mid-verse. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links.\n\n")
         if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
         if (webContext.isNotBlank()) {
             sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say your knowledge is outdated, cut off, or up to 2024. Do NOT use old training data for current events. Answer ONLY from these results:\n${webContext.take(1200)}\n\n")
@@ -407,8 +406,25 @@ class AiRepository {
         return sb.toString()
     }
 
+    // FIXED: Now strips bullets, numbers, >, *, - at start of lines
     private fun cleanMarkdown(text: String): String {
-        return text.replace("**", "").replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "").trim()
+        var cleaned = text
+            .replace("**", "")
+            .replace("__", "")
+            .replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "")
+            .replace("`", "")
+        return cleaned.lines().joinToString("\n") { line ->
+            var l = line.trimStart()
+            l = l.removePrefix("- ").removePrefix("* ").removePrefix("• ").removePrefix("> ")
+            l = l.replace(Regex("^\\d+\\.\\s"), "")
+            l = l.replace(Regex("^\\d+\\)\\s"), "")
+            l
+        }.trim()
+    }
+
+    // FIXED: Safe for streaming - only removes inline markdown, never touches line starts mid-chunk
+    private fun cleanStreamingChunk(text: String): String {
+        return text.replace("**", "").replace("__", "").replace("### ", "").replace("## ", "").replace("# ", "").replace("`", "")
     }
 
     private fun bitmapToBase64(image: Bitmap?): String? {
@@ -465,7 +481,7 @@ class AiRepository {
                     .optJSONArray("candidates")?.optJSONObject(0)
                     ?.optJSONObject("content")?.optJSONArray("parts")
                     ?.optJSONObject(0)?.optString("text")
-                if (!text.isNullOrEmpty()) emit(text)
+                if (!text.isNullOrEmpty()) emit(cleanStreamingChunk(text))
             }
         } catch (e: CancellationException) { throw e }
         finally { runCatching { conn?.disconnect() } }
@@ -490,7 +506,7 @@ class AiRepository {
                 .put("max_tokens", MAX_TOKENS)
                 .put("stream", true)
                 .put("messages", JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", "You are a helpful AI. Do NOT use Markdown. Write in clean plain paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."))
+                    .put(JSONObject().put("role", "system").put("content", "You are a helpful AI. Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."))
                     .put(JSONObject().put("role", "user").put("content", prompt)))
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
@@ -508,7 +524,7 @@ class AiRepository {
                 val delta = JSONObject(data)
                     .optJSONArray("choices")?.optJSONObject(0)
                     ?.optJSONObject("delta")?.optString("content")
-                if (!delta.isNullOrEmpty()) emit(delta)
+                if (!delta.isNullOrEmpty()) emit(cleanStreamingChunk(delta))
             }
         } catch (e: CancellationException) { throw e }
         finally { runCatching { conn?.disconnect() } }
