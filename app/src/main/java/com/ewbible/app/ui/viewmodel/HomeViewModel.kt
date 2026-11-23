@@ -15,7 +15,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Collections
 
 data class HomeUiState(
     val books: List<BookEntity> = emptyList(),
@@ -53,7 +52,7 @@ data class HomeUiState(
     val showAiChat: Boolean = false,
     val currentNoteText: String = "",
     val isReadingRestored: Boolean = false,
-    val lastSyncMillis: Long? = null // NEW: drives "Synced now / 5s ago" in Settings
+    val lastSyncMillis: Long? = null
 )
 
 @OptIn(FlowPreview::class)
@@ -141,7 +140,6 @@ class HomeViewModel(
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
-    // NEW: Single place to record a successful sync
     private fun markSynced() {
         _uiState.update { s -> s.copy(lastSyncMillis = System.currentTimeMillis()) }
     }
@@ -234,12 +232,18 @@ class HomeViewModel(
         viewModelScope.launch { syncFromCloud() }
     }
 
+    // FIXED: Only markSynced() if ALL downloads actually succeeded.
+    // Before: getOrNull() swallowed failures, then markSynced() lied on offline / permission error.
     private suspend fun syncFromCloud() {
         val sm = syncManager ?: return
         if (cloudSyncDone) return
         cloudSyncDone = true
         try {
-            sm.getNotes().getOrNull()?.forEach { cloud ->
+            val notesResult = sm.getNotes()
+            val highlightsResult = sm.getHighlights()
+            val progressResult = sm.getProgress()
+
+            notesResult.getOrNull()?.forEach { cloud ->
                 val local = runCatching { withContext(Dispatchers.IO) { dao.getNoteAtVerse(cloud.bookId, cloud.chapter, cloud.verse) } }.getOrNull()
                 if (local == null || cloud.timestamp > local.timestamp) {
                     withContext(Dispatchers.IO) {
@@ -248,7 +252,7 @@ class HomeViewModel(
                     }
                 }
             }
-            sm.getHighlights().getOrNull()?.forEach { cloud ->
+            highlightsResult.getOrNull()?.forEach { cloud ->
                 val colorInt = runCatching { android.graphics.Color.parseColor(cloud.color) }.getOrDefault(0)
                 if (colorInt != 0) {
                     withContext(Dispatchers.IO) {
@@ -256,7 +260,7 @@ class HomeViewModel(
                     }
                 }
             }
-            val cloudProgress = sm.getProgress().getOrNull()
+            val cloudProgress = progressResult.getOrNull()
             if (cloudProgress != null) {
                 val localBook = runCatching { prefs.getLastBookId() }.getOrDefault(1)
                 val localChapter = runCatching { prefs.getLastChapter() }.getOrDefault(1)
@@ -272,8 +276,9 @@ class HomeViewModel(
                     }
                 }
             }
-            // FIXED: Sync finished (even if cloud was empty) -> show Synced now
-            markSynced()
+            if (notesResult.isSuccess && highlightsResult.isSuccess && progressResult.isSuccess) {
+                markSynced()
+            }
         } catch (e: Exception) { }
     }
 
@@ -345,15 +350,21 @@ class HomeViewModel(
             syncFromCloud()
         }
     }
-    fun onUserSignedOut() { viewModelScope.launch { runCatching { prefs.clearUser() } } }
+    fun onUserSignedOut() {
+        viewModelScope.launch {
+            runCatching { prefs.clearUser() }
+            _uiState.update { s -> s.copy(lastSyncMillis = null) }
+        }
+    }
     fun saveReadingProgress(verse: VerseEntity? = null, scrollIndex: Int = 0, scrollOffset: Int = 0) {
         viewModelScope.launch {
             val bookId = currentBookId.value
             val chapter = selectedChapter.value
             val verseNum = verse?.verse ?: (selectedVerse.value ?: 1)
             runCatching { prefs.saveLastReading(bookId = bookId, chapter = chapter, verse = verseNum, scrollIndex = scrollIndex, scrollOffset = scrollOffset) }
+            // FIXED: SyncManager returns Result, it does NOT throw. Must check isSuccess.
             runCatching {
-                syncManager?.uploadProgress(
+                val result = syncManager?.uploadProgress(
                     mode = "New King James Version",
                     book = BookCatalog.name(bookId),
                     chapter = chapter,
@@ -361,8 +372,7 @@ class HomeViewModel(
                     scrollIndex = scrollIndex,
                     scrollOffset = scrollOffset
                 )
-                // FIXED: Progress uploaded -> Synced now
-                if (syncManager != null) markSynced()
+                if (result?.isSuccess == true) markSynced()
             }
         }
     }
@@ -557,8 +567,8 @@ class HomeViewModel(
                 currentNoteText.value = noteText
             }
             runCatching {
-                syncManager?.uploadNote(bookId, chapter, verseNum, noteText)
-                if (syncManager != null) markSynced() // FIXED: Note uploaded -> Synced now
+                val result = syncManager?.uploadNote(bookId, chapter, verseNum, noteText)
+                if (result?.isSuccess == true) markSynced()
             }
         }
     }
@@ -571,8 +581,8 @@ class HomeViewModel(
             runCatching { withContext(Dispatchers.IO) { dao.saveHighlight(HighlightEntity(bookId = bookId, chapter = chapter, verse = verseNum, color = colorInt)) } }
             val hex = "#%08X".format(colorInt)
             runCatching {
-                syncManager?.uploadHighlight(bookId, chapter, verseNum, hex)
-                if (syncManager != null) markSynced() // FIXED: Highlight uploaded -> Synced now
+                val result = syncManager?.uploadHighlight(bookId, chapter, verseNum, hex)
+                if (result?.isSuccess == true) markSynced()
             }
         }
     }
@@ -582,7 +592,10 @@ class HomeViewModel(
             val bookId = currentBookId.value
             val chapter = selectedChapter.value
             runCatching { withContext(Dispatchers.IO) { dao.deleteHighlight(bookId, chapter, verseNum) } }
-            runCatching { syncManager?.deleteHighlight(bookId, chapter, verseNum) }
+            runCatching {
+                val result = syncManager?.deleteHighlight(bookId, chapter, verseNum)
+                if (result?.isSuccess == true) markSynced()
+            }
         }
     }
 }
