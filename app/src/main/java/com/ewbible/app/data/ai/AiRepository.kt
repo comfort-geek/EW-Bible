@@ -302,6 +302,8 @@ class AiRepository {
                 if (geminiJob.isCompleted && groqJob.isCompleted) {
                     val drained = channel.tryReceive().getOrNull()
                     if (drained == null) break
+                    // NEW: drop loser chunk - only winner chunks allowed
+                    if (loserCancelled && drained.first != _lastProvider.value) continue
                     if (!loserCancelled) {
                         loserCancelled = true
                         _lastProvider.value = drained.first
@@ -313,6 +315,8 @@ class AiRepository {
                 // FAST: was withTimeoutOrNull(65s) - now instant wake on chunk
                 val result = channel.receiveCatching()
                 val item = result.getOrNull() ?: break
+                // NEW: drop loser chunk - only winner chunks allowed
+                if (loserCancelled && item.first != _lastProvider.value) continue
                 if (!loserCancelled) {
                     loserCancelled = true
                     _lastProvider.value = item.first
@@ -391,7 +395,7 @@ class AiRepository {
     ): String {
         val sb = StringBuilder()
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
-        sb.append("You are a helpful Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
+        sb.append("You are a Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
         sb.append("Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Let the length fit the question - a simple question gets 1 short paragraph, a deeper question gets 2 to 3 spaced paragraphs. Keep answer complete but not too long - around 2048 characters max. Always finish your answer fully. Never stop mid-sentence or mid-verse. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links.\n\n")
         if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
         if (webContext.isNotBlank()) {
