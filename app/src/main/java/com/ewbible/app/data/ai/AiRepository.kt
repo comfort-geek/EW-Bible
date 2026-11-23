@@ -60,7 +60,6 @@ class AiRepository {
     private var remoteGroq = FALLBACK_GROQ
     private var remoteVersion = 3
 
-    // INCREASED A LITTLE: 2600 = a bit longer, still safe on quota. 3000+ burns quota fast.
     private val STREAM_TIMEOUT_MS = 60000L
     private val MAX_TOKENS = 2600
 
@@ -149,8 +148,8 @@ class AiRepository {
         return try {
             var conn: HttpURLConnection? = null
             try {
-                val url = URL("https://api.tavily.com/search")
-                conn = (url.openConnection() as HttpURLConnection).apply {
+                val searchUrl = URL("https://api.tavily.com/search")
+                conn = (searchUrl.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     setRequestProperty("Content-Type", "application/json")
                     connectTimeout = 2000
@@ -174,9 +173,9 @@ class AiRepository {
                     for (i in 0 until minOf(results.length(), 2)) {
                         val r = results.getJSONObject(i)
                         val title = r.optString("title")
-                        val url = r.optString("url")
+                        val resultUrl = r.optString("url")
                         val content = r.optString("content")
-                        if (content.isNotBlank()) sb.append("$title: ${content.take(350)}\nLink: $url\n\n")
+                        if (content.isNotBlank()) sb.append("$title: ${content.take(350)}\nLink: $resultUrl\n\n")
                     }
                 }
                 val out = sb.toString().take(1200)
@@ -266,7 +265,6 @@ class AiRepository {
             val groqJob = launch {
                 if (groqKey.isBlank()) return@launch
                 for (model in remoteGroq) {
-                    // Groq gets ALL his chances: if Gemini already won, stop. Otherwise keep trying.
                     if (winner.get() != null && winner.get() != "Groq") break
                     try {
                         var gotChunkFromThisModel = false
@@ -339,10 +337,11 @@ class AiRepository {
     suspend fun askQuestion(prompt: String, image: Bitmap? = null): Result<String> {
         val webContext = if (image == null) getWebContext(prompt) else ""
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
+        val linkRule = "Do NOT use Markdown. Write in clean plain paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."
         val fullPrompt = if (webContext.isNotBlank()) {
-            "Today is $today. WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say cutoff/2024:\n${webContext}\n\nUser question: $prompt"
+            "Today is $today. $linkRule WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say cutoff/2024:\n${webContext}\n\nUser question: $prompt"
         } else {
-            "Today is $today. User question: $prompt"
+            "Today is $today. $linkRule User question: $prompt"
         }
         val sb = StringBuilder()
         return try {
@@ -380,6 +379,7 @@ class AiRepository {
         } catch (e: CancellationException) { throw e }
     }
 
+    // FIXED: Duplicate removed - only ONE "You are..." line now
     private fun buildPrompt(
         question: String,
         currentRef: String,
@@ -391,7 +391,7 @@ class AiRepository {
         val sb = StringBuilder()
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
         sb.append("You are a helpful Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
-        sb.append("You are a helpful AI. Do NOT use Markdown. Write in clean plain paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links. Keep answer complete but not too long - 3 to 4 short paragraphs, around 2000 characters max. Always finish your answer fully. Never stop mid-sentence or mid-verse.\n\n")
+        sb.append("Do NOT use Markdown. Write in clean plain paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links. Keep answer complete but not too long - 3 to 4 short paragraphs, around 2000 characters max. Always finish your answer fully. Never stop mid-sentence or mid-verse.\n\n")
         if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
         if (webContext.isNotBlank()) {
             sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say your knowledge is outdated, cut off, or up to 2024. Do NOT use old training data for current events. Answer ONLY from these results:\n${webContext.take(1200)}\n\n")
