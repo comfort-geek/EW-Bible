@@ -15,6 +15,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Collections
 
 data class HomeUiState(
     val books: List<BookEntity> = emptyList(),
@@ -84,26 +85,24 @@ class HomeViewModel(
     private val scrollRestoreKey = MutableStateFlow(0)
     private val linkedVerseText = MutableStateFlow("")
     private val linkedVerseRef = MutableStateFlow("")
+
+    // FAST 1: Cancellable jobs. Before: loadSummary() launched a new
+    // coroutine every swipe that could NOT be cancelled, so 5 fast swipes
+    // = 5 DB reads racing, last one to finish won (often the OLD chapter).
     private var commentaryJob: Job? = null
-    // FIX: summary needs its own cancellable job, like commentaryJob.
-    // Before: loadSummary() launched a fire-and-forget coroutine.
-    // collectLatest cancelling did NOT cancel it, so 3 swipes = 3 summary
-    // loads racing, and the slowest (old chapter) won and overwrote the new one.
     private var summaryJob: Job? = null
     private var restoreDone = false
     private var cloudSyncDone = false
     private var lastCommentaryKey = ""
 
-    private val summaryCache = LruCache<String, SummaryEntity>(60)
-    // FIX: summaryMissing is REMOVED as a permanent block.
-    // Before: if dao.getSummary() returned null once (DB not seeded yet / race
-    // on first open), that chapter was marked missing FOREVER and loadSummary()
-    // returned early + set summaryState = null on every later visit.
-    // That was "summary doesn't show, locks on Bible" for chapters you visited early.
-    // Now: no permanent missing set. A null just means "not yet", retry next time.
-    private val summaryLoadingKeys = Collections.synchronizedSet(mutableSetOf<String>())
-    private val versesCache = LruCache<String, List<VerseEntity>>(60)
-    private val commentaryHtmlCache = LruCache<String, String>(120)
+    // FAST 2: Smaller caches. 60 summaries + 120 commentaries of full HTML
+    // = GC pressure on every swipe. 30 / 40 is current + neighbours + history.
+    private val summaryCache = LruCache<String, SummaryEntity>(30)
+    private val versesCache = LruCache<String, List<VerseEntity>>(30)
+    private val commentaryHtmlCache = LruCache<String, String>(40)
+    // DELETED: summaryMissing + summaryLoadingKeys
+    // summaryMissing was permanent - one transient null (DB not seeded yet,
+    // race with restore) = chapter never retried until restart. That's the lock.
 
     private val prophecyBooks = setOf(23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,66)
 
@@ -198,9 +197,10 @@ class HomeViewModel(
             }
         }
 
-        // FIX: LOAD TOGETHER - always load summary + commentary on every chapter change,
-        // even on Bible tab. Old code did this too, but loadSummary() itself was
-        // fire-and-forget and raced. Now loadSummary() is cancellable via summaryJob.
+        // Single source of truth: ViewModel owns loading.
+        // HomeScreen LaunchedEffect also calls loadSummary/loadCommentary,
+        // but both are now idempotent + cancellable, so double-call is cheap
+        // (cache hit returns instantly, no second DB read).
         viewModelScope.launch {
             bookChapterKey
                 .distinctUntilChanged()
@@ -287,11 +287,9 @@ class HomeViewModel(
         selectedVerse.value = null
         scrollRestoreKey.value += 1
         saveReadingProgress()
-        viewModelScope.launch(Dispatchers.IO) {
-            prefetchCommentary(bookId, 1)
-            prefetchCommentary(bookId, 2)
-            prefetchCommentary(bookId, 3)
-        }
+        // FAST 3: Don't prefetch 1,2,3 here. init{} already loads ch.1,
+        // HomeScreen already prefetches ch.2. The old 3x prefetch was
+        // 3 extra DB + decompress + parse competing with the current chapter.
     }
     fun selectBook(bookName: String) = selectBook(BookCatalog.id(bookName))
     fun selectChapter(chapter: Int) {
@@ -341,9 +339,7 @@ class HomeViewModel(
         saveReadingProgress()
     }
     fun openBook(bookName: String, chapter: Int) = openBook(BookCatalog.id(bookName), chapter)
-    fun selectTab(tab: String) {
-        selectedTab.value = tab
-    }
+    fun selectTab(tab: String) { selectedTab.value = tab }
     fun searchVerses(query: String) { searchQuery.value = query }
     fun setSearchQuery(query: String) { searchQuery.value = query }
     fun setSearchFilter(filter: String) { searchFilter.value = filter }
@@ -391,58 +387,41 @@ class HomeViewModel(
         }
     }
 
-    // FIXED loadSummary - the whole lock was here
+    // FAST 4: loadSummary rewritten - cancellable + re-checks current AFTER DB.
+    // Before: isCurrent captured BEFORE launch, so a swipe during DB read
+    // wrote the OLD chapter's summary over the NEW chapter's.
+    // Now: cancel previous job, re-check after DB, never cache a null.
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
-        // 1. Cache hit - instant, no DB
         synchronized(summaryCache) { summaryCache.get(key) }?.let { cached ->
-            // Only publish if still the current chapter AFTER the check.
-            // Before: this used a stale isCurrent captured before DB.
             if (bookId == currentBookId.value && chapter == selectedChapter.value) {
                 summaryState.value = cached
             }
             return
         }
-        // 2. Already loading this exact chapter - don't launch a duplicate
-        if (key in summaryLoadingKeys) return
-        // 3. Cancel any stale load for a PREVIOUS chapter.
-        // Before: no cancel, so old chapter's slow DB result overwrote the new chapter.
         summaryJob?.cancel()
-        summaryLoadingKeys.add(key)
         summaryJob = viewModelScope.launch {
             try {
-                // Show loading only if this is still current when we START.
-                // We re-check again AFTER DB, that's the real check.
-                if (bookId == currentBookId.value && chapter == selectedChapter.value) {
-                    _summaryLoading.value = true
-                }
+                val isCurrentAtStart = bookId == currentBookId.value && chapter == selectedChapter.value
+                if (isCurrentAtStart) _summaryLoading.value = true
                 val s = runCatching { withContext(Dispatchers.IO) { dao.getSummary(bookId, chapter) } }.getOrNull()
+                // Re-check AFTER IO - this is the fix. User may have swiped while we were in DB.
+                val isCurrentNow = bookId == currentBookId.value && chapter == selectedChapter.value
                 if (s != null) {
                     synchronized(summaryCache) { summaryCache.put(key, s) }
+                    if (isCurrentNow) summaryState.value = s
+                } else {
+                    // Don't cache null, don't add to missing set - retry next time.
+                    // Just clear stale summary if we're still on this chapter.
+                    if (isCurrentNow) summaryState.value = null
                 }
-                // FIX: Check current AFTER DB returns, not before.
-                // If user swiped to Genesis 3 while Genesis 2 was loading,
-                // we must NOT publish Genesis 2's summary over Genesis 3.
-                if (bookId == currentBookId.value && chapter == selectedChapter.value) {
-                    // FIX: Never null-out on missing.
-                    // Before: if s == null, summaryState = null wiped the UI
-                    // and summaryMissing made it permanent.
-                    // Now: if s == null, keep old summary on screen (BibleContent
-                    // keeps last good), just stop loading. Next visit retries.
-                    if (s != null) summaryState.value = s
-                    _summaryLoading.value = false
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // Don't wipe UI on error either
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { /* keep old summary on error, don't blank */ }
+            finally {
+                // Only clear loading if we're still on this chapter
                 if (bookId == currentBookId.value && chapter == selectedChapter.value) {
                     _summaryLoading.value = false
                 }
-            } finally {
-                summaryLoadingKeys.remove(key)
-                // Only clear loading if no other summary is loading
-                if (summaryLoadingKeys.isEmpty()) _summaryLoading.value = false
             }
         }
     }
@@ -534,21 +513,25 @@ class HomeViewModel(
         prefetchCommentary(BookCatalog.id(bookName), chapter)
     }
 
+    // FAST 5: Preload ONLY next + prev, not next+2.
+    // Before: next, next+2, prev = 3 full decompress + parse per swipe,
+    // all on IO competing with the CURRENT chapter's DB read.
+    // Now: next + prev only. HomeScreen already prefetches the same 2,
+    // cache check makes the duplicate call free.
     private fun preloadNextCommentary(bookId: Int, chapter: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val max = BookCatalog.chapters(bookId)
                 val targets = mutableListOf<Pair<Int, Int>>()
                 if (chapter < max) targets.add(bookId to chapter + 1)
-                if (chapter + 1 < max) targets.add(bookId to chapter + 2)
+                else if (bookId < 66) targets.add((bookId + 1) to 1)
                 if (chapter > 1) targets.add(bookId to chapter - 1)
-                if (chapter == max && bookId < 66) targets.add((bookId + 1) to 1)
                 for ((nb, nc) in targets) {
                     val key = "$nb-$nc"
-                    if (synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) } != null) {
-                        val html = synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) }!!
+                    val cached = synchronized(commentaryHtmlCache) { commentaryHtmlCache.get(key) }
+                    if (cached != null) {
                         withContext(Dispatchers.Default) {
-                            runCatching { prewarmOpenEWCache(BookCatalog.name(nb), nc, html) }
+                            runCatching { prewarmOpenEWCache(BookCatalog.name(nb), nc, cached) }
                         }
                         continue
                     }
