@@ -135,6 +135,16 @@ fun HomeScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
 
+    // FIXED: Last sync time - re-read every time Settings is opened
+    // SettingsPanel ticks it every 1s to show "Synced now / 5s ago"
+    var lastSyncMillis by remember(settingsOpen) {
+        mutableStateOf(
+            context.getSharedPreferences("ew_sync", android.content.Context.MODE_PRIVATE)
+                .getLong("last_sync", 0L)
+                .takeIf { it > 0 }
+        )
+    }
+
     val gold = remember { Color(0xFFC9A227) }
     val background = remember(isDark) { if (isDark) Color(0xFF1E1E22) else Color(0xFFFDF8EF) }
     val panel = remember(isDark) { if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9) }
@@ -353,6 +363,7 @@ fun HomeScreen(
 
     SettingsPanel(
         visible = settingsOpen, isLoggedIn = state.isLoggedIn, userName = state.userName, userEmail = state.userEmail,
+        lastSyncMillis = lastSyncMillis,
         fontSize = state.fontSize, darkMode = isDark, notesCount = state.notes.size,
         background = background, panel = panel, textColor = textColor, gold = gold,
         onClose = { settingsOpen = false }, onFontSizeChange = { viewModel.setFontSize(it) }, onDarkModeChange = { viewModel.setDarkMode(it) },
@@ -360,12 +371,16 @@ fun HomeScreen(
         onShowNotes = { settingsOpen = false; showAllNotes = true },
         onOpenAiChat = { settingsOpen = false; viewModel.openAiChat() },
         onGoogleSignIn = {
+            // FIXED: Stay in Settings - do NOT set settingsOpen = false
             scope.launch {
                 val result = googleAuth.signInWithGoogle(activity)
                 result.onSuccess { nameAndEmail ->
                     val parts = nameAndEmail.split("|", limit = 2)
                     viewModel.onUserSignedIn(parts.getOrNull(0) ?: "User", parts.getOrNull(1) ?: "")
-                    settingsOpen = false
+                    // Panel stays open, header updates in place to Name + Synced now
+                    // Re-read sync time after login
+                    lastSyncMillis = context.getSharedPreferences("ew_sync", android.content.Context.MODE_PRIVATE)
+                        .getLong("last_sync", 0L).takeIf { it > 0 }
                 }.onFailure { e ->
                     if (e !is GoogleAuth.UserCancelledException) {
                         Toast.makeText(context, e.message ?: "Sign-in failed", Toast.LENGTH_SHORT).show()
@@ -373,7 +388,8 @@ fun HomeScreen(
                 }
             }
         },
-        onSignOut = { googleAuth.signOut(); viewModel.onUserSignedOut(); settingsOpen = false },
+        // FIXED: Sign out also stays in place
+        onSignOut = { googleAuth.signOut(); viewModel.onUserSignedOut() },
     )
 
     if (dailyVerseDialog) {
