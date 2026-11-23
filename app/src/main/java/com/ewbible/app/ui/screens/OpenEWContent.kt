@@ -34,7 +34,6 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -57,23 +56,26 @@ private val BOOK_PATTERN = DISPLAY_NAMES
 private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?(?!\\d)")
 private val H1_REGEX = Regex("(?is)<h1[^>]*>.*?</h1>")
 
-private val parsedCache = LruCache<String, List<SpannableString>>(100)
+// FAST 1: Smaller cache = less GC. 100 chapters of Spannables = OOM / GC jank.
+// 24 = current + neighbours + recent swipes. LRU evicts the rest.
+private val parsedCache = LruCache<String, List<SpannableString>>(24)
 private val parsedCacheLock = Any()
 private fun getParsedCached(key: String): List<SpannableString>? =
     synchronized(parsedCacheLock) { parsedCache.get(key) }
 private fun putParsedCached(key: String, value: List<SpannableString>) =
     synchronized(parsedCacheLock) { parsedCache.put(key, value) }
 
-fun prewarmOpenEWCache(bookName: String, chapter: Int, html: String) {
-    if (html.isBlank()) return
-    val key = "$bookName-$chapter"
-    if (getParsedCached(key) != null) return
-    runCatching {
+// FAST 2: ONE parse path. Before: prewarm + produceState duplicated
+// HtmlCompat + linkify + split. Now both call parseHtml().
+private fun parseHtml(bookName: String, chapter: Int, html: String): List<SpannableString>? {
+    if (html.isBlank()) return null
+    return runCatching {
         val parsedHtml = HtmlCompat.fromHtml(
             linkifyForHtml(cleanForHtml(html, bookName, chapter)),
             HtmlCompat.FROM_HTML_MODE_LEGACY, null, null
         )
         val spannable = parsedHtml as? Spannable ?: SpannableString(parsedHtml)
+        // Only URLSpans need recoloring - don't scan all spans twice
         spannable.getSpans(0, spannable.length, URLSpan::class.java).forEach { span ->
             spannable.setSpan(
                 ForegroundColorSpan(0xFFC9A227.toInt()),
@@ -82,8 +84,16 @@ fun prewarmOpenEWCache(bookName: String, chapter: Int, html: String) {
             )
         }
         val full = if (spannable is SpannableString) spannable else SpannableString(spannable)
-        putParsedCached(key, splitIntoParagraphs(full))
-    }
+        splitIntoParagraphs(full)
+    }.getOrNull()
+}
+
+fun prewarmOpenEWCache(bookName: String, chapter: Int, html: String) {
+    if (html.isBlank()) return
+    val key = "$bookName-$chapter"
+    if (getParsedCached(key) != null) return
+    // Already on Dispatchers.Default from ViewModel - don't block UI
+    parseHtml(bookName, chapter, html)?.let { putParsedCached(key, it) }
 }
 
 private fun cleanForHtml(html: String, bookName: String, chapter: Int): String {
@@ -146,9 +156,20 @@ private fun linkifyMatch(m: MatchResult): String {
 
 private val HEADING_LINE = Regex("""^(?:[A-Z]\.|[0-9]+\.|[a-z]\.)\s+[A-Z].{0,90}$""")
 
+// FAST 3: Bucket spans ONCE, not per-paragraph.
+// Before: for each paragraph, full.getSpans(s, e, Any) scanned ALL spans.
+// Now: getSpans() once, then assign each span to the paragraphs it overlaps.
 private fun splitIntoParagraphs(full: SpannableString): List<SpannableString> {
     val text = full.toString()
     if (text.isBlank()) return emptyList()
+    // Only copy the span types we actually create. Any::class.java was
+    // copying every internal HtmlCompat span too.
+    val allSpans = full.getSpans(0, full.length, Any::class.java).filter {
+        it is URLSpan || it is ForegroundColorSpan || it is StyleSpan || it is RelativeSizeSpan
+    }
+    // Pre-compute span ranges once
+    val spanRanges = allSpans.map { it to (full.getSpanStart(it) to full.getSpanEnd(it)) }
+
     val result = ArrayList<SpannableString>()
     var start = 0
     val len = text.length
@@ -167,9 +188,10 @@ private fun splitIntoParagraphs(full: SpannableString): List<SpannableString> {
         while (e > s && text[e - 1].isWhitespace()) e--
         if (e > s) {
             val chunk = SpannableString(text.substring(s, e))
-            full.getSpans(s, e, Any::class.java).forEach { span ->
-                val spanS = maxOf(full.getSpanStart(span), s)
-                val spanE = minOf(full.getSpanEnd(span), e)
+            // Only check spans that overlap [s, e) - most spans are skipped by range check
+            for ((span, range) in spanRanges) {
+                val spanS = maxOf(range.first, s)
+                val spanE = minOf(range.second, e)
                 if (spanE > spanS) {
                     chunk.setSpan(span, spanS - s, spanE - s, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
@@ -192,7 +214,7 @@ fun OpenEWContent(
     fontSize: Float,
     textColor: Color,
     hasError: Boolean = false,
-    isLoading: Boolean = false, // kept for API compat, ignored - no spinner anymore
+    isLoading: Boolean = false,
     bookName: String = "",
     chapter: Int = 1,
     onVerseClick: (book: String, chapter: Int, verse: Int, endVerse: Int) -> Unit = { _, _, _, _ -> },
@@ -228,44 +250,31 @@ fun OpenEWContent(
     val cachedInstant = remember(cacheKey) { getParsedCached(cacheKey) }
 
     val paragraphs by produceState<List<SpannableString>?>(initialValue = cachedInstant, cacheKey, commentaryHtml) {
+        // FAST 4: Don't re-parse if prewarm already did it.
         getParsedCached(cacheKey)?.let { value = it; return@produceState }
         if (commentaryHtml.isBlank()) {
             value = null
             return@produceState
         }
         value = withContext(Dispatchers.Default) {
-            runCatching {
-                val parsedHtml = HtmlCompat.fromHtml(
-                    linkifyForHtml(cleanForHtml(commentaryHtml, bookName, chapter)),
-                    HtmlCompat.FROM_HTML_MODE_LEGACY, null, null
-                )
-                val spannable = parsedHtml as? Spannable ?: SpannableString(parsedHtml)
-                spannable.getSpans(0, spannable.length, URLSpan::class.java).forEach { span ->
-                    spannable.setSpan(
-                        ForegroundColorSpan(0xFFC9A227.toInt()),
-                        spannable.getSpanStart(span), spannable.getSpanEnd(span),
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-                    )
-                }
-                val full = if (spannable is SpannableString) spannable else SpannableString(spannable)
-                val split = splitIntoParagraphs(full)
-                putParsedCached(cacheKey, split)
-                split
-            }.getOrNull()
+            parseHtml(bookName, chapter, commentaryHtml)?.also { putParsedCached(cacheKey, it) }
         }
     }
 
-    // NO SPINNER: Keep last good chapter on screen while new one loads.
-    // User never sees blank / spinner, just old content then instant swap.
+    // FAST 5: NEVER mutate state during composition.
+    // Before: if (paragraphs != null) lastGoodParagraphs = paragraphs
+    // That triggers a recomposition during composition = jank / loop.
+    // Now: update lastGood in LaunchedEffect.
     var lastGoodParagraphs by remember { mutableStateOf<List<SpannableString>?>(null) }
     var lastGoodKey by remember { mutableStateOf("") }
-    if (paragraphs != null) {
-        lastGoodParagraphs = paragraphs
-        lastGoodKey = cacheKey
+    LaunchedEffect(paragraphs, cacheKey) {
+        if (paragraphs != null) {
+            lastGoodParagraphs = paragraphs
+            lastGoodKey = cacheKey
+        }
     }
     val displayParagraphs = paragraphs ?: lastGoodParagraphs ?: emptyList()
     val displayKey = if (paragraphs != null) cacheKey else lastGoodKey
-    // Always show NEW title immediately, even if content is still old - feels instant
     val displayTitle = if (bookName.isNotBlank()) "$bookName $chapter" else lastGoodKey
 
     Column(
@@ -309,9 +318,6 @@ fun OpenEWContent(
                 )
             }
         } else if (displayParagraphs.isEmpty()) {
-            // NO SPINNER: First-ever load with nothing cached yet.
-            // Just show empty space - preload (below) means this almost never happens.
-            // If it does, content pops in when ready, no spinner flash.
             Box(modifier = Modifier.weight(1f).fillMaxWidth())
         } else {
             LazyColumn(
