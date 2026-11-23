@@ -43,7 +43,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,7 +75,7 @@ fun SettingsPanel(
     onSignOut: () -> Unit,
     onOpenAiChat: () -> Unit = {},
 ) {
-    var resourcesExpanded by rememberSaveable { mutableStateOf(false) }
+    // REMOVED: resourcesExpanded - no more Resources dropdown
     var sliderValue by remember(fontSize) { mutableFloatStateOf(fontSize.coerceIn(12f, 20f)) }
     var showLogs by remember { mutableStateOf(false) }
 
@@ -164,49 +163,36 @@ fun SettingsPanel(
 
             HorizontalDivider()
 
-            Row(
+            // Ask AI - always visible now, no Resources header / dropdown
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { resourcesExpanded = !resourcesExpanded }
-                    .padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Resources", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = textColor)
-                Text(if (resourcesExpanded) "▲" else "▼", fontSize = 11.sp, color = textColor)
-            }
-
-            if (resourcesExpanded) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(panel, RoundedCornerShape(10.dp))
-                        .combinedClickable(
-                            onClick = {
-                                onClose()
-                                onOpenAiChat()
-                            },
-                            onLongClick = {
-                                showLogs = true
-                            }
-                        )
-                        .padding(10.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.ChatBubbleOutline,
-                            contentDescription = null,
-                            tint = gold,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text("Ask AI", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = textColor)
-                            Text("Ask anything about the Bible", fontSize = 11.sp, color = textColor.copy(alpha = 0.6f))
+                    .padding(vertical = 10.dp)
+                    .background(panel, RoundedCornerShape(10.dp))
+                    .combinedClickable(
+                        onClick = {
+                            onClose()
+                            onOpenAiChat()
+                        },
+                        onLongClick = {
+                            showLogs = true
                         }
+                    )
+                    .padding(10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.ChatBubbleOutline,
+                        contentDescription = null,
+                        tint = gold,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text("Ask AI", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = textColor)
+                        Text("Ask anything about the Bible", fontSize = 11.sp, color = textColor.copy(alpha = 0.6f))
                     }
                 }
-                Spacer(modifier = Modifier.height(10.dp))
             }
 
             HorizontalDivider()
