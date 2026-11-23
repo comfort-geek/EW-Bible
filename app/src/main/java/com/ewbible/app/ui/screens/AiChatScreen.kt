@@ -166,6 +166,17 @@ fun AiChatScreen(
         }
     }
 
+    // FAST: Follow streaming text too, so chat scrolls while AI types
+    LaunchedEffect(state.streamingText.length) {
+        if (!state.isLoading || state.streamingText.isEmpty()) return@LaunchedEffect
+        val lastIndex = state.messages.size // loading item is at messages.size
+        val visible = listState.layoutInfo.visibleItemsInfo
+        val lastVisible = visible.lastOrNull()?.index ?: 0
+        if (lastVisible >= lastIndex - 2) {
+            runCatching { listState.scrollToItem(lastIndex) }
+        }
+    }
+
     val gray = remember { Color.Gray }
 
     val titleText = if (state.aiProvider == "Groq") "Ask Groq" else "Ask Gemini"
@@ -287,7 +298,7 @@ fun AiChatScreen(
             }
         }
 
-        // --- Input ---
+        // --- Input - NEVER LOCKED ---
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -301,20 +312,30 @@ fun AiChatScreen(
             OutlinedTextField(
                 value = input,
                 onValueChange = { input = it },
-                placeholder = { Text("Ask anything...", maxLines = 1) },
+                placeholder = { Text(if (state.isLoading) "Type next question..." else "Ask anything...", maxLines = 1) },
                 modifier = Modifier.weight(1f),
-                maxLines = 4
+                maxLines = 4,
+                enabled = true // FIXED: was locked while loading
             )
+            // NEW: Stop button - only while streaming
+            if (state.isLoading) {
+                IconButton(
+                    onClick = { viewModel.stopStreaming() },
+                    modifier = Modifier.size(40.dp)
+                ) { Icon(Icons.Default.Stop, null, tint = Color.Red) }
+            }
+            // FIXED: Send works even while streaming - cancels old, starts new instantly
             IconButton(
                 onClick = {
                     val q = input.trim()
-                    if (q.isBlank() || state.isLoading) return@IconButton
+                    if (q.isBlank()) return@IconButton
                     viewModel.send(q, currentRef, selectedImage, selectedTranslation)
                     input = ""
                     selectedImage = null
                 },
+                enabled = input.isNotBlank(), // FIXED: removed && !state.isLoading
                 modifier = Modifier.size(40.dp)
-            ) { Icon(Icons.Default.Send, null, tint = gold) }
+            ) { Icon(Icons.Default.Send, null, tint = if (input.isNotBlank()) gold else gray) }
         }
     }
 }
