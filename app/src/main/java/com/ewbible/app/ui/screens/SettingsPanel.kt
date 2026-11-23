@@ -1,6 +1,11 @@
 package com.ewbible.app.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -45,8 +50,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -58,8 +65,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.ewbible.app.CrashReportDialog
 import com.ewbible.app.data.reminder.ReminderManager
+import kotlinx.coroutines.delay
 import java.util.Calendar
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
@@ -68,7 +77,8 @@ fun SettingsPanel(
     visible: Boolean,
     isLoggedIn: Boolean,
     userName: String,
-    userEmail: String,
+    userEmail: String = "", // KEPT for caller compatibility, NOT DISPLAYED anymore
+    lastSyncMillis: Long? = null, // NEW: pass from ViewModel / prefs
     fontSize: Float,
     darkMode: Boolean,
     notesCount: Int,
@@ -92,6 +102,45 @@ fun SettingsPanel(
     val context = LocalContext.current
     var reminderText by remember { mutableStateOf(ReminderManager.getReminderText(context)) }
 
+    // --- NEW: Sync ticker - updates "Synced 1s ago" -> "2s ago" every second ---
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(visible) {
+        while (visible) {
+            delay(1000)
+            now = System.currentTimeMillis()
+        }
+    }
+    val syncText = when {
+        !isLoggedIn -> "Not signed in"
+        lastSyncMillis == null -> "Not synced yet"
+        now - lastSyncMillis < 5000 -> "Synced now"
+        now - lastSyncMillis < 60000 -> "Synced ${(now - lastSyncMillis) / 1000}s ago"
+        now - lastSyncMillis < 3600000 -> "Synced ${(now - lastSyncMillis) / 60000}m ago"
+        else -> "Synced ${(now - lastSyncMillis) / 3600000}h ago"
+    }
+
+    // --- NEW: Notification permission for Reminder (Android 13+) ---
+    // This is why your reminder never showed - without this, Android blocks it silently
+    var pendingReminderHour by remember { mutableStateOf<Int?>(null) }
+    var pendingReminderMinute by remember { mutableStateOf<Int?>(null) }
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            val h = pendingReminderHour
+            val m = pendingReminderMinute
+            if (h != null && m != null) {
+                ReminderManager.setReminder(context, h, m)
+                reminderText = ReminderManager.getReminderText(context)
+                Toast.makeText(context, "Reminder set for $reminderText daily", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "Allow notifications to get reminders", Toast.LENGTH_LONG).show()
+        }
+        pendingReminderHour = null
+        pendingReminderMinute = null
+    }
+
     if (!visible && !showLogs) return
     val scrollState = rememberScrollState()
 
@@ -107,11 +156,11 @@ fun SettingsPanel(
 
     // Time Picker Dialog
     if (showTimePicker) {
-        val now = Calendar.getInstance()
+        val nowCal = Calendar.getInstance()
         val saved = ReminderManager.getReminder(context)
         val timePickerState = rememberTimePickerState(
-            initialHour = saved?.first ?: now.get(Calendar.HOUR_OF_DAY),
-            initialMinute = saved?.second ?: now.get(Calendar.MINUTE),
+            initialHour = saved?.first ?: nowCal.get(Calendar.HOUR_OF_DAY),
+            initialMinute = saved?.second ?: nowCal.get(Calendar.MINUTE),
             is24Hour = false
         )
         AlertDialog(
@@ -122,15 +171,25 @@ fun SettingsPanel(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    ReminderManager.setReminder(context, timePickerState.hour, timePickerState.minute)
-                    reminderText = ReminderManager.getReminderText(context)
+                    val hour = timePickerState.hour
+                    val minute = timePickerState.minute
                     showTimePicker = false
-                    Toast.makeText(context, "Reminder set for $reminderText daily", Toast.LENGTH_SHORT).show()
+                    // FIXED: Ask notification permission BEFORE scheduling
+                    if (Build.VERSION.SDK_INT >= 33 &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        pendingReminderHour = hour
+                        pendingReminderMinute = minute
+                        notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        ReminderManager.setReminder(context, hour, minute)
+                        reminderText = ReminderManager.getReminderText(context)
+                        Toast.makeText(context, "Reminder set for $reminderText daily", Toast.LENGTH_SHORT).show()
+                    }
                 }) { Text("Set Reminder", color = gold) }
             },
             dismissButton = {
                 TextButton(onClick = {
-                    // Long-press / Clear option: if a reminder exists, allow clearing
                     if (ReminderManager.getReminder(context) != null) {
                         ReminderManager.cancelReminder(context)
                         reminderText = ReminderManager.getReminderText(context)
@@ -197,22 +256,22 @@ fun SettingsPanel(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    if (isLoggedIn && userEmail.isNotBlank()) {
-                        Text(
-                            text = userEmail,
-                            fontSize = 11.sp,
-                            color = textColor.copy(alpha = 0.6f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            softWrap = false
-                        )
-                    }
+                    // FIXED: Email removed. Sync status shows here instead.
+                    Text(
+                        text = syncText,
+                        fontSize = 11.sp,
+                        color = textColor.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        softWrap = false
+                    )
                 }
                 if (isLoggedIn) {
                     TextButton(onClick = onSignOut, modifier = Modifier.height(32.dp)) {
                         Text("Log Out", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                     }
                 } else {
+                    // FIXED: Login in place - does NOT call onClose(), panel stays open
                     TextButton(onClick = onGoogleSignIn, modifier = Modifier.height(32.dp)) {
                         Text("Log In", color = gold, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                     }
