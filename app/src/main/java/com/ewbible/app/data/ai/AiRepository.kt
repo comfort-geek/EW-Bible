@@ -60,9 +60,9 @@ class AiRepository {
     private var remoteGroq = FALLBACK_GROQ
     private var remoteVersion = 3
 
-    // MODERATE: Full but not wasteful. 1000 = cut, 3000 = quota dies fast, 1800 = sweet spot.
-    private val STREAM_TIMEOUT_MS = 45000L
-    private val MAX_TOKENS = 1800
+    // INCREASED A LITTLE: 2600 = a bit longer, still safe on quota. 3000+ burns quota fast.
+    private val STREAM_TIMEOUT_MS = 60000L
+    private val MAX_TOKENS = 2600
 
     private var cachedQuery = ""
     private var cachedWeb = ""
@@ -388,8 +388,8 @@ class AiRepository {
         val sb = StringBuilder()
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
         sb.append("You are a helpful Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
-        // MODERATE: Complete but not essay. 2-3 short paragraphs, ~1200 chars.
-        sb.append("IMPORTANT: Do NOT use Markdown. No **, no ###, no ---, no bullet lists. Write in clean plain paragraphs only. Keep answer complete but moderate - 2 to 3 short paragraphs, around 1200 characters max. Always finish your answer fully. Never stop mid-sentence or mid-verse.\n\n")
+        // INCREASED A LITTLE: 3-4 paragraphs, ~2000 chars. Was 2-3 paragraphs, ~1200 chars.
+        sb.append("IMPORTANT: Do NOT use Markdown. No **, no ###, no ---, no bullet lists. Write in clean plain paragraphs only. Keep answer complete but not too long - 3 to 4 short paragraphs, around 2000 characters max. Always finish your answer fully. Never stop mid-sentence or mid-verse.\n\n")
         if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
         if (webContext.isNotBlank()) {
             sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say your knowledge is outdated, cut off, or up to 2024. Do NOT use old training data for current events. Answer ONLY from these results:\n${webContext.take(1200)}\n\n")
@@ -433,7 +433,7 @@ class AiRepository {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
                 connectTimeout = 5000
-                readTimeout = 45000
+                readTimeout = 60000
                 doOutput = true
             }
             val parts = JSONArray().put(JSONObject().put("text", prompt))
@@ -479,7 +479,7 @@ class AiRepository {
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Authorization", "Bearer $groqKey")
                 connectTimeout = 5000
-                readTimeout = 45000
+                readTimeout = 60000
                 doOutput = true
             }
             val body = JSONObject()
@@ -488,7 +488,7 @@ class AiRepository {
                 .put("max_tokens", MAX_TOKENS)
                 .put("stream", true)
                 .put("messages", JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", "You are a helpful Bible assistant. Answer clearly, warmly, and biblically. No Markdown. Keep answer complete but moderate - 2 to 3 short paragraphs, around 1200 characters max. Always finish your answer fully, never stop mid-sentence. If WEB SEARCH RESULTS are provided, you MUST use them and never say your knowledge is cut off."))
+                    .put(JSONObject().put("role", "system").put("content", "You are a helpful Bible assistant. Answer clearly, warmly, and biblically. No Markdown. Keep answer complete but not too long - 3 to 4 short paragraphs, around 2000 characters max. Always finish your answer fully, never stop mid-sentence. If WEB SEARCH RESULTS are provided, you MUST use them and never say your knowledge is cut off."))
                     .put(JSONObject().put("role", "user").put("content", prompt)))
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
