@@ -62,7 +62,6 @@ private fun Modifier.swipeChapter(
                 if (fired) return@detectHorizontalDragGestures
                 totalDx += delta
                 totalDy += abs(change.position.y - change.previousPosition.y)
-                // ✅ INSTANT: fire as soon as horizontal wins, don't wait for finger lift
                 if (abs(totalDx) > 90 * density && abs(totalDx) > abs(totalDy) * 1.5f) {
                     fired = true
                     if (totalDx < 0) nextState() else prevState()
@@ -185,38 +184,44 @@ fun BibleContent(
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
     val currentKey = safeBookId to safeChapter
 
-    // ✅ INSTANT: Keep last good chapter on screen until new one arrives
-    // Before: versesList = emptyList() on switch -> blank screen
-    // Now: cachedVerses stays until new verses match the new key
+    // FIX: VERSES + SUMMARY HAVE SEPARATE KEYS - THE BUG WAS HERE
+    // Before: summary only showed if cachedKey (verses key) == currentKey
+    // So if verses were slow/empty, summary was locked forever on old chapter.
+    // Now: verses and summary update independently, both load together.
     var cachedVerses by remember { mutableStateOf<List<VerseEntity>>(emptyList()) }
+    var cachedVersesKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var cachedSummary by remember { mutableStateOf<SummaryEntity?>(null) }
-    var cachedKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var cachedSummaryKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
-    val incomingMatchesKey = versesList.isEmpty() ||
-        (versesList.first().bookId == safeBookId && versesList.first().chapter == safeChapter)
-
-    // Only swap cache when incoming data is actually for THIS chapter
-    if (incomingMatchesKey && versesList.isNotEmpty()) {
-        if (cachedKey != currentKey) {
-            cachedVerses = versesList
-            cachedKey = currentKey
-        } else if (cachedVerses != versesList) {
-            cachedVerses = versesList
+    // Verses: only accept verses for THIS chapter
+    if (versesList.isNotEmpty()) {
+        val first = versesList.first()
+        if (first.bookId == safeBookId && first.chapter == safeChapter) {
+            if (cachedVersesKey != currentKey || cachedVerses != versesList) {
+                cachedVerses = versesList
+                cachedVersesKey = currentKey
+            }
         }
     }
+    // Summary: only accept summary for THIS chapter, independent of verses
     if (summary != null && summary.bookId == safeBookId && summary.chapter == safeChapter) {
-        if (cachedSummary != summary) cachedSummary = summary
+        if (cachedSummaryKey != currentKey || cachedSummary != summary) {
+            cachedSummary = summary
+            cachedSummaryKey = currentKey
+        }
     }
-    // When key changes, keep old summary until new one arrives - don't blank it
-    // When key changes and summary is null, we still show cachedSummary (old chapter) - intentional
+    // If ViewModel sends null summary for new chapter (still loading), DON'T clear old one
+    // Keep old summary until new one arrives - no blank, no lock
 
     val versesToShow = cachedVerses
-    val summaryToShow = if (cachedKey == currentKey) cachedSummary else cachedSummary // keep old until new arrives
+    // Show summary ONLY if its key matches current chapter.
+    // If it doesn't match yet, show nothing for summary (not old chapter's summary)
+    // This stops "summary stuck on previous chapter" + "summary never appears"
+    val summaryToShow = if (cachedSummaryKey == currentKey) cachedSummary else null
 
     var lastKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     LaunchedEffect(currentKey) {
-        // ✅ INSTANT: scroll to top immediately on key change, don't wait for versesMatchKey
         if (lastKey != null && lastKey != currentKey) {
             if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
                 listState.scrollToItem(0)
@@ -248,8 +253,8 @@ fun BibleContent(
                 modifier = Modifier.fillMaxSize().padding(horizontal = horizontalPadding),
                 contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp)
             ) {
-                // Show cached summary - never blank, never "Loading..."
-                if (summaryToShow != null && cachedKey == currentKey) {
+                // FIX: Show summary when ITS key matches, not verses key
+                if (summaryToShow != null) {
                     item(key = "summary-${currentKey.first}-${currentKey.second}", contentType = "summary") {
                         Card(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
