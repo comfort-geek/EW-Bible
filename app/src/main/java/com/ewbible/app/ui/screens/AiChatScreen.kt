@@ -317,13 +317,6 @@ fun AiChatScreen(
                 maxLines = 4,
                 enabled = true // FIXED: was locked while loading
             )
-            // NEW: Stop button - only while streaming
-            if (state.isLoading) {
-                IconButton(
-                    onClick = { viewModel.stopStreaming() },
-                    modifier = Modifier.size(40.dp)
-                ) { Icon(Icons.Default.Stop, null, tint = Color.Red) }
-            }
             // FIXED: Send works even while streaming - cancels old, starts new instantly
             IconButton(
                 onClick = {
