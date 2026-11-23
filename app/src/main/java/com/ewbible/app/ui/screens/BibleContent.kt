@@ -62,6 +62,7 @@ private fun Modifier.swipeChapter(
                 if (fired) return@detectHorizontalDragGestures
                 totalDx += delta
                 totalDy += abs(change.position.y - change.previousPosition.y)
+                // INSTANT: fire as soon as horizontal wins, don't wait for finger lift
                 if (abs(totalDx) > 90 * density && abs(totalDx) > abs(totalDy) * 1.5f) {
                     fired = true
                     if (totalDx < 0) nextState() else prevState()
@@ -175,7 +176,8 @@ fun BibleContent(
     onPreviousChapter: () -> Unit = {},
     summaryLoading: Boolean = false,
 ) {
-    val effectiveFontSize = fontSize.coerceAtLeast(18f)
+    // FIX: was coerceAtLeast(18f) - blocked 12-17 from Settings, now matches HomeScreen 12..20
+    val effectiveFontSize = fontSize.coerceIn(12f, 20f)
     val fontSizeSp = effectiveFontSize.sp
     val lineHeight = (effectiveFontSize + 6).sp
 
@@ -184,44 +186,47 @@ fun BibleContent(
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
     val currentKey = safeBookId to safeChapter
 
-    // FIX: VERSES + SUMMARY HAVE SEPARATE KEYS - THE BUG WAS HERE
-    // Before: summary only showed if cachedKey (verses key) == currentKey
-    // So if verses were slow/empty, summary was locked forever on old chapter.
-    // Now: verses and summary update independently, both load together.
+    // FIX: LOAD TOGETHER BUT SHOW INDEPENDENTLY
+    // Before: 1 shared cachedKey for verses + summary.
+    // If verses were slow, cachedKey != currentKey, so summary never showed even though it arrived.
+    // That was the "locks itself on Bible, summary doesn't show" bug.
+    // Now: 2 separate keys. Summary never waits for verses, verses never wait for summary.
     var cachedVerses by remember { mutableStateOf<List<VerseEntity>>(emptyList()) }
     var cachedVersesKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var cachedSummary by remember { mutableStateOf<SummaryEntity?>(null) }
     var cachedSummaryKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
-    // Verses: only accept verses for THIS chapter
-    if (versesList.isNotEmpty()) {
-        val first = versesList.first()
-        if (first.bookId == safeBookId && first.chapter == safeChapter) {
-            if (cachedVersesKey != currentKey || cachedVerses != versesList) {
-                cachedVerses = versesList
-                cachedVersesKey = currentKey
-            }
+    // Verses: only swap when incoming verses are actually for THIS chapter
+    val incomingMatchesKey = versesList.isEmpty() ||
+        (versesList.first().bookId == safeBookId && versesList.first().chapter == safeChapter)
+    if (incomingMatchesKey && versesList.isNotEmpty()) {
+        if (cachedVersesKey != currentKey || cachedVerses != versesList) {
+            cachedVerses = versesList
+            cachedVersesKey = currentKey
         }
     }
-    // Summary: only accept summary for THIS chapter, independent of verses
+
+    // Summary: only swap when incoming summary is actually for THIS chapter
+    // Runs independently of verses - no cachedKey check here
     if (summary != null && summary.bookId == safeBookId && summary.chapter == safeChapter) {
         if (cachedSummaryKey != currentKey || cachedSummary != summary) {
             cachedSummary = summary
             cachedSummaryKey = currentKey
         }
     }
-    // If ViewModel sends null summary for new chapter (still loading), DON'T clear old one
-    // Keep old summary until new one arrives - no blank, no lock
+    // If summary is null for new chapter, keep old summary on screen until new one arrives.
+    // Don't blank it - that was the other half of the flicker / lock.
 
+    // What to show: if we have fresh data for this key, show it.
+    // If not yet, show old cached data (last good chapter) - never blank.
     val versesToShow = cachedVerses
-    // Show summary ONLY if its key matches current chapter.
-    // If it doesn't match yet, show nothing for summary (not old chapter's summary)
-    // This stops "summary stuck on previous chapter" + "summary never appears"
-    val summaryToShow = if (cachedSummaryKey == currentKey) cachedSummary else null
+    val summaryToShow = cachedSummary
+    val showSummary = summaryToShow != null && cachedSummaryKey == currentKey
 
     var lastKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     LaunchedEffect(currentKey) {
+        // Scroll to top immediately on key change, don't wait for verses
         if (lastKey != null && lastKey != currentKey) {
             if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
                 listState.scrollToItem(0)
@@ -253,8 +258,8 @@ fun BibleContent(
                 modifier = Modifier.fillMaxSize().padding(horizontal = horizontalPadding),
                 contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp)
             ) {
-                // FIX: Show summary when ITS key matches, not verses key
-                if (summaryToShow != null) {
+                // FIX: gated on cachedSummaryKey, NOT cachedVersesKey
+                if (showSummary) {
                     item(key = "summary-${currentKey.first}-${currentKey.second}", contentType = "summary") {
                         Card(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
@@ -263,7 +268,7 @@ fun BibleContent(
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                 Spacer(modifier = Modifier.height(8.dp))
-                                Text(summaryToShow.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                Text(summaryToShow!!.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                 Text(summaryToShow.whatHappened ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
