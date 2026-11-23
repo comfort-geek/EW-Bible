@@ -121,7 +121,9 @@ class AiRepository {
         if (q == "hi" || q == "hello" || q == "hey") return false
         val strongTriggers = listOf(
             "pope", "president", "election", "war", "news",
-            "latest", "recent", "current", "today", "what happened"
+            "latest", "recent", "current", "today", "what happened",
+            "job", "jobs", "hiring", "vacancy", "vacancies", "apply",
+            "bible", "verse", "church", "pastor"
         )
         if (strongTriggers.any { q.contains(it) }) return true
         if (q.length < 30) return false
@@ -172,8 +174,9 @@ class AiRepository {
                     for (i in 0 until minOf(results.length(), 2)) {
                         val r = results.getJSONObject(i)
                         val title = r.optString("title")
+                        val url = r.optString("url")
                         val content = r.optString("content")
-                        if (content.isNotBlank()) sb.append("$title: ${content.take(350)}\n\n")
+                        if (content.isNotBlank()) sb.append("$title: ${content.take(350)}\nLink: $url\n\n")
                     }
                 }
                 val out = sb.toString().take(1200)
@@ -388,8 +391,7 @@ class AiRepository {
         val sb = StringBuilder()
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
         sb.append("You are a helpful Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
-        // INCREASED A LITTLE: 3-4 paragraphs, ~2000 chars. Was 2-3 paragraphs, ~1200 chars.
-        sb.append("IMPORTANT: Do NOT use Markdown. No **, no ###, no ---, no bullet lists. Write in clean plain paragraphs only. Keep answer complete but not too long - 3 to 4 short paragraphs, around 2000 characters max. Always finish your answer fully. Never stop mid-sentence or mid-verse.\n\n")
+        sb.append("You are a helpful AI. Do NOT use Markdown. Write in clean plain paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links. Keep answer complete but not too long - 3 to 4 short paragraphs, around 2000 characters max. Always finish your answer fully. Never stop mid-sentence or mid-verse.\n\n")
         if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
         if (webContext.isNotBlank()) {
             sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say your knowledge is outdated, cut off, or up to 2024. Do NOT use old training data for current events. Answer ONLY from these results:\n${webContext.take(1200)}\n\n")
@@ -488,7 +490,7 @@ class AiRepository {
                 .put("max_tokens", MAX_TOKENS)
                 .put("stream", true)
                 .put("messages", JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", "You are a helpful Bible assistant. Answer clearly, warmly, and biblically. No Markdown. Keep answer complete but not too long - 3 to 4 short paragraphs, around 2000 characters max. Always finish your answer fully, never stop mid-sentence. If WEB SEARCH RESULTS are provided, you MUST use them and never say your knowledge is cut off."))
+                    .put(JSONObject().put("role", "system").put("content", "You are a helpful AI. Do NOT use Markdown. Write in clean plain paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."))
                     .put(JSONObject().put("role", "user").put("content", prompt)))
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
