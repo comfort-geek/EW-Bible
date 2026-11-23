@@ -149,26 +149,32 @@ fun HomeScreen(
     val ntBooks = remember(state.books) { state.books.filter { it.id >= 40 }.sortedBy { it.id } }
     val tabs = remember { listOf("Bible", "Open EW", "Search") }
 
-    // FIX: NO BLANKING - keep ViewModel HTML even if it's for previous chapter.
-    // OpenEWContent keeps lastGoodParagraphs, blanking to "" forced re-parse from empty.
-    // ViewModel preloads new chapter in background, it will swap when ready.
-    val effectiveCommentaryHtml = state.commentaryHtml
-    val isCommentaryLoading = false // No spinner - preload makes it instant, isLoading ignored in OpenEWContent
+    // FIX 1: LOAD TOGETHER - single source of truth, with key check.
+    // Before: bare state.commentaryHtml was passed, so Genesis 1 HTML could be
+    // parsed as Genesis 2. Now: if ViewModel HTML is not for THIS chapter,
+    // pass "" - OpenEWContent keeps lastGoodParagraphs (old chapter) on screen
+    // until the real one arrives. Never parses stale HTML as new.
+    val isCommentaryForCurrent = state.commentaryBookId == state.currentBookId &&
+        state.commentaryChapter == state.selectedChapter
+    val effectiveCommentaryHtml = if (isCommentaryForCurrent) state.commentaryHtml else ""
+    val isCommentaryLoading = false // No spinner - preload makes it instant
 
-    // FIX: PRELOAD ALWAYS - no more if (tab == "Open EW")
-    // Old code only prefetched after tap, so first tap waited seconds.
-    // Now while user reads Bible, current + next + prev commentary are already parsed.
+    // FIX 2: ONE LaunchedEffect loads EVERYTHING together on chapter change.
+    // Before: only prefetchCommentary() x3 here, loadSummary/loadCommentary only in
+    // ViewModel.init combine() - which can miss on fast swipe -> summary lock.
+    // Now: summary + commentary + prefetch are all triggered together, every time.
+    // And prefetch is only next/prev - ViewModel.loadCommentary already preloads
+    // next via preloadNextCommentary(), so don't triple-fire it here.
     LaunchedEffect(state.currentBookId, state.selectedChapter) {
-        // Current - so tap on Open EW is instant
-        viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter)
-        // Next - so swipe forward is instant
+        viewModel.loadSummary(state.currentBookId, state.selectedChapter)
+        viewModel.loadCommentary(state.currentBookId, state.selectedChapter)
+        // Prefetch neighbours only - current is already loaded above
         val max = BookCatalog.chapters(state.currentBookId)
         if (state.selectedChapter < max) {
             viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter + 1)
         } else if (state.currentBookId < 66) {
             viewModel.prefetchCommentary(state.currentBookId + 1, 1)
         }
-        // Prev - so swipe back is instant
         if (state.selectedChapter > 1) {
             viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter - 1)
         }
