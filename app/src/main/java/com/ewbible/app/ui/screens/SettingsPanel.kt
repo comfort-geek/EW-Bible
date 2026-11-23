@@ -77,8 +77,8 @@ fun SettingsPanel(
     visible: Boolean,
     isLoggedIn: Boolean,
     userName: String,
-    userEmail: String = "", // KEPT for caller compatibility, NOT DISPLAYED anymore
-    lastSyncMillis: Long? = null, // NEW: pass from ViewModel / prefs
+    userEmail: String = "",
+    lastSyncMillis: Long? = null,
     fontSize: Float,
     darkMode: Boolean,
     notesCount: Int,
@@ -102,7 +102,6 @@ fun SettingsPanel(
     val context = LocalContext.current
     var reminderText by remember { mutableStateOf(ReminderManager.getReminderText(context)) }
 
-    // --- NEW: Sync ticker - updates "Synced 1s ago" -> "2s ago" every second ---
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(visible) {
         while (visible) {
@@ -119,8 +118,6 @@ fun SettingsPanel(
         else -> "Synced ${(now - lastSyncMillis) / 3600000}h ago"
     }
 
-    // --- NEW: Notification permission for Reminder (Android 13+) ---
-    // This is why your reminder never showed - without this, Android blocks it silently
     var pendingReminderHour by remember { mutableStateOf<Int?>(null) }
     var pendingReminderMinute by remember { mutableStateOf<Int?>(null) }
     val notifPermissionLauncher = rememberLauncherForActivityResult(
@@ -154,7 +151,6 @@ fun SettingsPanel(
     }
     if (!visible) return
 
-    // Time Picker Dialog
     if (showTimePicker) {
         val nowCal = Calendar.getInstance()
         val saved = ReminderManager.getReminder(context)
@@ -174,7 +170,6 @@ fun SettingsPanel(
                     val hour = timePickerState.hour
                     val minute = timePickerState.minute
                     showTimePicker = false
-                    // FIXED: Ask notification permission BEFORE scheduling
                     if (Build.VERSION.SDK_INT >= 33 &&
                         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
                     ) {
@@ -256,7 +251,6 @@ fun SettingsPanel(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    // FIXED: Email removed. Sync status shows here instead.
                     Text(
                         text = syncText,
                         fontSize = 11.sp,
@@ -271,7 +265,6 @@ fun SettingsPanel(
                         Text("Log Out", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                     }
                 } else {
-                    // FIXED: Login in place - does NOT call onClose(), panel stays open
                     TextButton(onClick = onGoogleSignIn, modifier = Modifier.height(32.dp)) {
                         Text("Log In", color = gold, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                     }
@@ -317,9 +310,12 @@ fun SettingsPanel(
                 value = sliderValue,
                 onValueChange = { sliderValue = it },
                 onValueChangeFinished = { onFontSizeChange(sliderValue) },
-                valueRange = 12f..20f
+                valueRange = 12f..20f,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(24.dp)
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -355,7 +351,6 @@ fun SettingsPanel(
                 Text("Notes ($notesCount)", color = textColor, fontSize = 13.sp)
             }
 
-            // REMINDER - below Notes
             Button(
                 onClick = { showTimePicker = true },
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(40.dp),
