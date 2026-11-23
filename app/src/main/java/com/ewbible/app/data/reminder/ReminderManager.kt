@@ -16,12 +16,22 @@ object ReminderManager {
     fun getReminder(context: Context): Pair<Int, Int>? {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (!prefs.getBoolean(KEY_ENABLED, false)) return null
-        return prefs.getInt(KEY_HOUR, -1) to prefs.getInt(KEY_MINUTE, -1)
+        val h = prefs.getInt(KEY_HOUR, -1)
+        val m = prefs.getInt(KEY_MINUTE, -1)
+        if (h < 0 || m < 0) return null
+        return h to m
     }
 
     fun getReminderText(context: Context): String {
         val r = getReminder(context) ?: return "Set Reminder"
-        return String.format("%02d:%02d", r.first, r.second)
+        // 12-hour format to match your TimePicker (is24Hour = false)
+        val hour12 = when {
+            r.first == 0 -> 12
+            r.first > 12 -> r.first - 12
+            else -> r.first
+        }
+        val amPm = if (r.first < 12) "AM" else "PM"
+        return String.format("%02d:%02d %s", hour12, r.second, amPm)
     }
 
     fun setReminder(context: Context, hour: Int, minute: Int) {
@@ -41,6 +51,8 @@ object ReminderManager {
         alarmManager.cancel(pendingIntent(context))
     }
 
+    // FIXED: This is called every day, not just once.
+    // If time passed today -> tomorrow. Receiver calls this again after firing.
     fun schedule(context: Context, hour: Int, minute: Int) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val calendar = Calendar.getInstance().apply {
@@ -48,18 +60,17 @@ object ReminderManager {
             set(Calendar.MINUTE, minute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
-            // If time already passed today, schedule for tomorrow
             if (timeInMillis <= System.currentTimeMillis()) {
                 add(Calendar.DAY_OF_YEAR, 1)
             }
         }
-        // setExactAndAllowWhileIdle = fires even in Doze / screen off
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (alarmManager.canScheduleExactAlarms()) {
                 alarmManager.setExactAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent(context)
                 )
             } else {
+                // Fallback: inexact, can be delayed by Doze - tell user to allow exact alarms
                 alarmManager.setAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent(context)
                 )
@@ -69,6 +80,12 @@ object ReminderManager {
                 AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent(context)
             )
         }
+    }
+
+    // NEW: Used by Receiver + BootReceiver to reschedule without re-saving
+    fun rescheduleIfEnabled(context: Context) {
+        val r = getReminder(context) ?: return
+        schedule(context, r.first, r.second)
     }
 
     private fun pendingIntent(context: Context): PendingIntent {
