@@ -135,9 +135,8 @@ fun HomeScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
 
-    // FIXED: No local lastSyncMillis anymore.
-    // Before: read from empty SharedPreferences("ew_sync") which was never written -> always "Not synced yet"
-    // Now: use state.lastSyncMillis from HomeViewModel.markSynced() - single source of truth
+    // FIXED: No local lastSyncMillis.
+    // ViewModel is single source of truth via state.lastSyncMillis / markSynced()
 
     val gold = remember { Color(0xFFC9A227) }
     val background = remember(isDark) { if (isDark) Color(0xFF1E1E22) else Color(0xFFFDF8EF) }
@@ -358,8 +357,6 @@ fun HomeScreen(
                 result.onSuccess { nameAndEmail ->
                     val parts = nameAndEmail.split("|", limit = 2)
                     viewModel.onUserSignedIn(parts.getOrNull(0) ?: "User", parts.getOrNull(1) ?: "")
-                    // Panel stays open, header updates in place to Name + Synced now
-                    // No manual re-read needed - ViewModel.markSynced() updates state.lastSyncMillis
                 }.onFailure { e ->
                     if (e !is GoogleAuth.UserCancelledException) {
                         Toast.makeText(context, e.message ?: "Sign-in failed", Toast.LENGTH_SHORT).show()
