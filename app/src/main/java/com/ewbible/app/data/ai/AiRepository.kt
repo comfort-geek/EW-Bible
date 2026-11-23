@@ -139,7 +139,8 @@ class AiRepository {
         if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) {
             return cachedWeb
         }
-        val result = withTimeoutOrNull(2200L) { searchTavily(question) } ?: ""
+        // FAST: was 2200ms, now 1000ms - don't block streaming for slow web search
+        val result = withTimeoutOrNull(1000L) { searchTavily(question) } ?: ""
         return result
     }
 
@@ -152,8 +153,8 @@ class AiRepository {
                 conn = (searchUrl.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     setRequestProperty("Content-Type", "application/json")
-                    connectTimeout = 2000
-                    readTimeout = 2500
+                    connectTimeout = 1000
+                    readTimeout = 1200
                     doOutput = true
                 }
                 val body = JSONObject()
@@ -309,8 +310,9 @@ class AiRepository {
                     emit(drained.second)
                     continue
                 }
-                val result = withTimeoutOrNull(STREAM_TIMEOUT_MS + 5000L) { channel.receiveCatching() }
-                val item = result?.getOrNull() ?: break
+                // FAST: was withTimeoutOrNull(65s) - now instant wake on chunk
+                val result = channel.receiveCatching()
+                val item = result.getOrNull() ?: break
                 if (!loserCancelled) {
                     loserCancelled = true
                     _lastProvider.value = item.first
@@ -450,7 +452,7 @@ class AiRepository {
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
-                connectTimeout = 5000
+                connectTimeout = 3000
                 readTimeout = 60000
                 doOutput = true
             }
@@ -496,7 +498,7 @@ class AiRepository {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Authorization", "Bearer $groqKey")
-                connectTimeout = 5000
+                connectTimeout = 3000
                 readTimeout = 60000
                 doOutput = true
             }
