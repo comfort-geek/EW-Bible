@@ -122,7 +122,7 @@ class AiRepository {
             "pope", "president", "election", "war", "news",
             "latest", "recent", "current", "today", "what happened",
             "job", "jobs", "hiring", "vacancy", "vacancies", "apply",
-            "bible", "verse", "church", "pastor"
+            "bible", "verse", "church", "pastor", "other topics"
         )
         if (strongTriggers.any { q.contains(it) }) return true
         if (q.length < 30) return false
