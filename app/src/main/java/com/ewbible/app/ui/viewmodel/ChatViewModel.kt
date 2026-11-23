@@ -173,14 +173,19 @@ class ChatViewModel(
     }
 
     // FREE $0: No hard daily limit - provider quota handles it
+    // FAST + ASK WHILE STREAMING: no isLoading block, old job cancelled, new starts instantly
     fun send(question: String, currentRef: String, image: Bitmap?, translation: String = "NKJV") {
         val chatId = _state.value.currentChatId ?: return
-        if (_state.value.isLoading) return
         sendJob?.cancel()
         sendJob = viewModelScope.launch {
             val todayCount = getGlobalTodayCount()
             doSend(chatId, question, currentRef, image, translation, todayCount)
         }
+    }
+
+    fun stopStreaming() {
+        sendJob?.cancel()
+        sendJob = null
     }
 
     // FIXED: suspend only - does NOT launch its own job
@@ -228,13 +233,46 @@ class ChatViewModel(
             ).collect { chunk ->
                 fullAnswer.append(chunk)
                 val now = System.currentTimeMillis()
-                if (now - lastStreamEmit >= 120) {
+                // FAST: 25ms instead of 120ms - chunks appear instantly
+                if (now - lastStreamEmit >= 25) {
                     lastStreamEmit = now
                     _state.update { it.copy(streamingText = fullAnswer.toString()) }
                 }
             }
+            // FAST: final flush - don't lose last chunk
+            _state.update { it.copy(streamingText = fullAnswer.toString()) }
         } catch (e: CancellationException) {
-            throw e // FIXED: cancel is not an error, don't show "Failed"
+            // NEW: User asked new question or pressed Stop - save partial answer, don't lose it
+            if (fullAnswer.isNotBlank()) {
+                val partialText = cleanMarkdown(fullAnswer.toString())
+                val partialMsg = MessageEntity(chatId = chatId, text = partialText, isUser = false)
+                val partialId = bibleDao.insertMessage(partialMsg)
+                _state.update {
+                    it.copy(
+                        messages = it.messages + partialMsg.copy(id = partialId),
+                        isLoading = false,
+                        streamingText = ""
+                    )
+                }
+                // Sync partial too
+                syncManager?.uploadMessage(
+                    chatId.toString(),
+                    CloudMessage(
+                        messageId = partialId.toString(),
+                        chatId = chatId.toString(),
+                        role = "ai",
+                        type = "text",
+                        text = partialText,
+                        context = chatContext,
+                        bibleRef = if (chatType == "bible") chatContext else "",
+                        imageUrl = "",
+                        timestamp = partialMsg.timestamp
+                    )
+                )
+            } else {
+                _state.update { it.copy(isLoading = false, streamingText = "") }
+            }
+            throw e // cancel is not an error, don't show "Failed"
         } catch (e: Exception) {
             val msg = e.message ?: ""
             val friendly = if (msg.contains("429") || msg.contains("quota", ignoreCase = true) || msg.contains("Rate limit", ignoreCase = true) || msg.contains("rate limit", ignoreCase = true)) {
