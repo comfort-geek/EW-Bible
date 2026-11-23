@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -87,8 +86,6 @@ private fun VerseRow(
     onVerseLongClick: (Int) -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
-    // FAST: don't allocate 2 different Modifiers + clip + background on every recomposition
-    // for un-highlighted verses (99% of rows). Transparent highlight = plain Row.
     val isHighlighted = highlight != Color.Transparent
     Row(
         modifier = Modifier
@@ -187,17 +184,12 @@ fun BibleContent(
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
     val currentKey = remember(safeBookId, safeChapter) { safeBookId to safeChapter }
 
-    // FAST 1: NEVER mutate state during composition.
-    // Before: cachedVerses = versesList / cachedSummary = summary directly
-    // in composition = recomposition loop on every swipe.
-    // Now: last-good cache only updates in LaunchedEffect.
     var cachedVerses by remember { mutableStateOf<List<VerseEntity>>(emptyList()) }
     var cachedVersesKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var cachedSummary by remember { mutableStateOf<SummaryEntity?>(null) }
     var cachedSummaryKey by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     LaunchedEffect(versesList, currentKey) {
-        // Only swap when incoming verses are actually for THIS chapter
         if (versesList.isNotEmpty()) {
             val first = versesList.first()
             if (first.bookId == safeBookId && first.chapter == safeChapter) {
@@ -209,15 +201,12 @@ fun BibleContent(
         }
     }
     LaunchedEffect(summary, currentKey) {
-        // Summary runs independently of verses - never waits for verses
         if (summary != null && summary.bookId == safeBookId && summary.chapter == safeChapter) {
             if (cachedSummaryKey != currentKey || cachedSummary != summary) {
                 cachedSummary = summary
                 cachedSummaryKey = currentKey
             }
         }
-        // If summary is null for new chapter, keep old summary on screen
-        // until new one arrives. Don't blank it.
     }
 
     val versesToShow = cachedVerses
@@ -225,7 +214,6 @@ fun BibleContent(
     val showSummary = summaryToShow != null && cachedSummaryKey == currentKey
 
     LaunchedEffect(currentKey) {
-        // Scroll to top immediately on key change, don't wait for verses
         if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
             listState.scrollToItem(0)
         }
@@ -275,9 +263,6 @@ fun BibleContent(
                     }
                 }
 
-                // FAST 2: Key must be unique per chapter.
-                // Before: key = { it.verse } - verse 1 in Gen 1 == verse 1 in Gen 2,
-                // Compose reused the old row. Now: book-chapter-verse.
                 items(
                     items = versesToShow,
                     key = { "${currentKey.first}-${currentKey.second}-${it.verse}" },
