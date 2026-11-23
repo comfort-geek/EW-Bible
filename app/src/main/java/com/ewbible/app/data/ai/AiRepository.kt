@@ -2,21 +2,17 @@ package com.ewbible.app.data.ai
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.util.Log
 import com.ewbible.app.BuildConfig
 import com.ewbible.app.CrashReporter
 import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
@@ -27,8 +23,6 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 
 class AiRepository {
 
@@ -60,8 +54,11 @@ class AiRepository {
     private var remoteGroq = FALLBACK_GROQ
     private var remoteVersion = 3
 
-    private val STREAM_TIMEOUT_MS = 60000L
-    private val MAX_TOKENS = 2048
+    // FIX 1: 60s was cutting long answers. 120s lets it finish.
+    private val STREAM_TIMEOUT_MS = 120000L
+    // FIX 2: 2048 tokens + your "2048 chars max" prompt = model stops early.
+    // 4096 gives room to finish the sentence.
+    private val MAX_TOKENS = 4096
 
     private var cachedQuery = ""
     private var cachedWeb = ""
@@ -139,7 +136,6 @@ class AiRepository {
         if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) {
             return cachedWeb
         }
-        // FAST: was 2200ms, now 1000ms - don't block streaming for slow web search
         val result = withTimeoutOrNull(1000L) { searchTavily(question) } ?: ""
         return result
     }
@@ -192,6 +188,10 @@ class AiRepository {
         } catch (e: Exception) { "" }
     }
 
+    // FIX 3: NO MORE RACE. Sequential = no truncation.
+    // Try Gemini 1 -> if it streams to completion, done.
+    // Only if it fails with ZERO chunks, try next model / Groq.
+    // Once a model starts streaming, we COMMIT to it and let it finish.
     fun askStreaming(
         question: String,
         currentRef: String,
@@ -203,140 +203,65 @@ class AiRepository {
         val webContext = if (image == null) getWebContext(question) else ""
         val basePrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext)
 
+        val errors = mutableListOf<String>()
+
+        // Helper: try one model, stream it. Returns true if completed.
+        suspend fun tryOne(
+            provider: String,
+            model: String,
+            stream: Flow<String>
+        ): Boolean {
+            _lastProvider.value = provider
+            var gotAnything = false
+            try {
+                val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                    stream.collect { chunk ->
+                        if (chunk.isNotEmpty()) {
+                            gotAnything = true
+                            emit(chunk) // real streaming, like this chat
+                        }
+                    }
+                    true
+                } ?: false
+
+                if (gotAnything && completed) return true
+                // If we got chunks but timed out, DO NOT try another model -
+                // it would duplicate / mix answers. Just end this attempt
+                // as finished. Timeout is now 120s so this is rare.
+                if (gotAnything && !completed) return true
+                return false
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                errors.add("$provider $model: ${e.message}")
+                if (provider == "Gemini") CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
+                else CrashReporter.groqLog("Groq $model failed: ${e.message}")
+                return false
+            }
+        }
+
         if (image != null) {
             for (model in remoteGemini) {
-                _lastProvider.value = "Gemini"
-                var gotAnything = false
-                try {
-                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                        tryGeminiStreaming(model, basePrompt, image).collect { chunk ->
-                            if (chunk.isNotEmpty()) { gotAnything = true; emit(chunk) }
-                        }
-                        true
-                    } ?: false
-                    if (gotAnything && completed) return@flow
-                    if (gotAnything && !completed) return@flow
-                } catch (e: CancellationException) { throw e }
-                catch (e: Exception) {
-                    CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
-                }
+                if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, image))) return@flow
             }
             emit("Could not read the image. Please try again - Gemini is busy right now.")
             return@flow
         }
 
-        val errors = mutableListOf<String>()
-
-        coroutineScope {
-            val channel = Channel<Pair<String, String>>(Channel.UNLIMITED)
-            val winner = AtomicReference<String?>(null)
-            val winnerFinished = AtomicBoolean(false)
-            val winnerGotAnything = AtomicBoolean(false)
-
-            val geminiJob = launch {
-                for (model in remoteGemini) {
-                    if (winner.get() != null && winner.get() != "Gemini") break
-                    try {
-                        var gotChunkFromThisModel = false
-                        val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                            tryGeminiStreaming(model, basePrompt, null).collect { chunk ->
-                                if (chunk.isNotEmpty()) {
-                                    gotChunkFromThisModel = true
-                                    winnerGotAnything.set(true)
-                                    winner.compareAndSet(null, "Gemini")
-                                    if (winner.get() == "Gemini") channel.send("Gemini" to chunk)
-                                }
-                            }
-                            true
-                        } ?: false
-                        if (winner.get() == "Gemini") {
-                            if (completed) winnerFinished.set(true)
-                            break
-                        }
-                        if (gotChunkFromThisModel) break
-                        if (!completed) continue
-                    } catch (e: CancellationException) { throw e }
-                    catch (e: Exception) {
-                        errors.add("Gemini $model: ${e.message}")
-                        CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
-                    }
-                }
+        // 1. Gemini first
+        for (model in remoteGemini) {
+            if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, null))) return@flow
+        }
+        // 2. Only if ALL Gemini failed with 0 chunks, try Groq
+        if (groqKey.isNotBlank()) {
+            for (model in remoteGroq) {
+                if (tryOne("Groq", model, tryGroqStreaming(model, basePrompt))) return@flow
             }
+        }
 
-            val groqJob = launch {
-                if (groqKey.isBlank()) return@launch
-                for (model in remoteGroq) {
-                    if (winner.get() != null && winner.get() != "Groq") break
-                    try {
-                        var gotChunkFromThisModel = false
-                        val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                            tryGroqStreaming(model, basePrompt).collect { chunk ->
-                                if (chunk.isNotEmpty()) {
-                                    gotChunkFromThisModel = true
-                                    winnerGotAnything.set(true)
-                                    winner.compareAndSet(null, "Groq")
-                                    if (winner.get() == "Groq") channel.send("Groq" to chunk)
-                                }
-                            }
-                            true
-                        } ?: false
-                        if (winner.get() == "Groq") {
-                            if (completed) winnerFinished.set(true)
-                            break
-                        }
-                        if (gotChunkFromThisModel) break
-                        if (!completed) continue
-                    } catch (e: CancellationException) { throw e }
-                    catch (e: Exception) {
-                        errors.add("Groq $model: ${e.message}")
-                        CrashReporter.groqLog("Groq $model failed: ${e.message}")
-                    }
-                }
-            }
-
-            var gotAnything = false
-            var loserCancelled = false
-
-            while (true) {
-                if (geminiJob.isCompleted && groqJob.isCompleted && channel.isEmpty) break
-                if (geminiJob.isCompleted && groqJob.isCompleted) {
-                    val drained = channel.tryReceive().getOrNull()
-                    if (drained == null) break
-                    // NEW: drop loser chunk - only winner chunks allowed
-                    if (loserCancelled && drained.first != _lastProvider.value) continue
-                    if (!loserCancelled) {
-                        loserCancelled = true
-                        _lastProvider.value = drained.first
-                    }
-                    gotAnything = true
-                    emit(drained.second)
-                    continue
-                }
-                // FAST: was withTimeoutOrNull(65s) - now instant wake on chunk
-                val result = channel.receiveCatching()
-                val item = result.getOrNull() ?: break
-                // NEW: drop loser chunk - only winner chunks allowed
-                if (loserCancelled && item.first != _lastProvider.value) continue
-                if (!loserCancelled) {
-                    loserCancelled = true
-                    _lastProvider.value = item.first
-                    if (item.first == "Gemini") groqJob.cancel() else geminiJob.cancel()
-                }
-                gotAnything = true
-                emit(item.second)
-            }
-
-            channel.close()
-            geminiJob.join()
-            groqJob.join()
-
-            if (!gotAnything) {
-                if (errors.isNotEmpty() && errors.all { it.contains("429") }) {
-                    emit("Free daily limit reached for today. Please try again tomorrow.")
-                } else {
-                    emit("All AI models are busy right now. Please try again in a minute.")
-                }
-            }
+        if (errors.isNotEmpty() && errors.all { it.contains("429") }) {
+            emit("Free daily limit reached for today. Please try again tomorrow.")
+        } else {
+            emit("All AI models are busy right now. Please try again in a minute.")
         }
     }.flowOn(Dispatchers.IO)
 
@@ -396,7 +321,8 @@ class AiRepository {
         val sb = StringBuilder()
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
         sb.append("You are a Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
-        sb.append("Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Let the length fit the question - a simple question gets 1 short paragraph, a deeper question gets 2 to 3 spaced paragraphs. Keep answer complete but not too long - around 2048 characters max. Always finish your answer fully. Never stop mid-sentence or mid-verse. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links.\n\n")
+        // FIX 4: Removed "around 2048 characters max" - that was telling the model to cut off.
+        sb.append("Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Let the length fit the question - a simple question gets 1 short paragraph, a deeper question gets 2 to 3 spaced paragraphs. Always finish your answer fully. Never stop mid-sentence or mid-verse. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links.\n\n")
         if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
         if (webContext.isNotBlank()) {
             sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say your knowledge is outdated, cut off, or up to 2024. Do NOT use old training data for current events. Answer ONLY from these results:\n${webContext.take(1200)}\n\n")
@@ -412,7 +338,6 @@ class AiRepository {
         return sb.toString()
     }
 
-    // FIXED: Now strips bullets, numbers, >, *, - at start of lines
     private fun cleanMarkdown(text: String): String {
         var cleaned = text
             .replace("**", "")
@@ -428,7 +353,6 @@ class AiRepository {
         }.trim()
     }
 
-    // FIXED: Safe for streaming - only removes inline markdown, never touches line starts mid-chunk
     private fun cleanStreamingChunk(text: String): String {
         return text.replace("**", "").replace("__", "").replace("### ", "").replace("## ", "").replace("# ", "").replace("`", "")
     }
@@ -457,7 +381,7 @@ class AiRepository {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
                 connectTimeout = 3000
-                readTimeout = 60000
+                readTimeout = 120000
                 doOutput = true
             }
             val parts = JSONArray().put(JSONObject().put("text", prompt))
@@ -503,7 +427,7 @@ class AiRepository {
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Authorization", "Bearer $groqKey")
                 connectTimeout = 3000
-                readTimeout = 60000
+                readTimeout = 120000
                 doOutput = true
             }
             val body = JSONObject()
