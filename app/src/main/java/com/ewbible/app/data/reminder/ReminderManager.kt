@@ -35,11 +35,15 @@ object ReminderManager {
         return String.format("%02d:%02d %s", hour12, r.second, amPm)
     }
 
-    // Call this BEFORE setReminder() - opens system screen to allow exact alarms
+    fun canScheduleExactAlarms(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        val alarm = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        return alarm.canScheduleExactAlarms()
+    }
+
     fun requestExactAlarmPermission(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val alarm = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            if (!alarm.canScheduleExactAlarms()) {
+            if (!canScheduleExactAlarms(context)) {
                 val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
                     data = Uri.parse("package:${context.packageName}")
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -55,22 +59,7 @@ object ReminderManager {
             .putInt(KEY_MINUTE, minute)
             .putBoolean(KEY_ENABLED, true)
             .apply()
-        try {
-            schedule(context, hour, minute)
-        } catch (e: SecurityException) {
-            // Exact alarm denied - fallback to inexact, still fires
-            val alarm = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            val cal = Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, hour)
-                set(Calendar.MINUTE, minute)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-                if (timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
-            }
-            try {
-                alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, cal.timeInMillis, pendingIntent(context))
-            } catch (e2: Exception) { }
-        } catch (e: Exception) { }
+        schedule(context, hour, minute)
     }
 
     fun cancelReminder(context: Context) {
@@ -92,27 +81,25 @@ object ReminderManager {
                 add(Calendar.DAY_OF_YEAR, 1)
             }
         }
+
+        val showIntent = PendingIntent.getActivity(
+            context, 0,
+            Intent(context, com.ewbible.app.MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (alarmManager.canScheduleExactAlarms()) {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent(context)
-                    )
-                } else {
-                    alarmManager.setAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent(context)
-                    )
-                }
-            } else {
-                alarmManager.setExactAndAllowWhileIdle(
+            // ✅ setAlarmClock = CANNOT be delayed by Doze / Battery Saver
+            // This is what the Clock app uses - it always fires
+            val info = AlarmManager.AlarmClockInfo(calendar.timeInMillis, showIntent)
+            alarmManager.setAlarmClock(info, pendingIntent(context))
+        } catch (e: SecurityException) {
+            try {
+                alarmManager.setAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent(context)
                 )
-            }
-        } catch (e: SecurityException) {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP, calendar.timeInMillis, pendingIntent(context)
-            )
-        }
+            } catch (e2: Exception) { }
+        } catch (e: Exception) { }
     }
 
     fun rescheduleIfEnabled(context: Context) {
