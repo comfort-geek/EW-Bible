@@ -117,9 +117,7 @@ class AiRepository {
         return bibleWords.any { q.contains(it) }
     }
 
-    // --- NEW: Breakdown ONLY when user asks for it ---
-    // "Who wrote Psalm 23?" -> false = short answer
-    // "Break down Psalm 23" -> true = portions
+    // --- Breakdown ONLY when user asks for it ---
     private fun needsBreakdown(question: String): Boolean {
         val q = question.lowercase().trim()
         return q.contains("break down") ||
@@ -137,7 +135,7 @@ class AiRepository {
             q.contains("go deep")
     }
 
-    // --- NEW: Search for ANY factual topic, not just news ---
+    // --- FIXED: Search ONLY for news / current / factual topics ---
     private fun needsWebSearch(question: String): Boolean {
         val q = question.lowercase().trim()
         // Never search for greetings / prayer / creative
@@ -145,24 +143,27 @@ class AiRepository {
         if (q.contains("pray for me") || q.contains("pray for")) return false
         if (q.contains("write a prayer") || q.contains("write me a prayer")) return false
         if (q.contains("write a sermon")) return false
-        // Bible meaning from local DB / model is OK, but still allow search for background
+
+        // FIX: Pure Bible questions do NOT need web search - no blog Sources
+        if (isBibleQuestion(q)) {
+            val newsTriggers = listOf("president", "election", "news", "pope", "latest", "today", "malawi")
+            if (newsTriggers.none { q.contains(it) }) return false
+        }
+
         if (q.contains("what does") && q.contains("mean") && isBibleQuestion(q)) return false
         if (q.contains("explain") && q.contains("verse") && !needsBreakdown(q)) return false
 
-        // Any factual / current / general knowledge topic -> SEARCH
+        // ONLY news / current / jobs / election topics -> SEARCH
         val triggers = listOf(
-            "pope", "president", "election", "war", "news", "latest", "recent",
-            "current", "today", "what happened", "job", "jobs", "hiring",
-            "vacancy", "vacancies", "apply", "who is", "who was", "who won",
-            "when did", "where is", "how many", "is it true", "what is",
-            "malawi", "africa", "football", "soccer", "music", "movie",
-            "science", "history", "health", "disease", "technology", "ai",
-            "school", "university", "exam", "government", "minister",
-            "church", "pastor", "bible", "verse", "other topics"
+            "pope", "president", "election", "minister", "government",
+            "war", "news", "latest", "recent", "current", "today",
+            "what happened", "who won", "who is", "who was",
+            "job", "jobs", "hiring", "vacancy", "vacancies", "apply",
+            "malawi", "football", "soccer"
         )
         if (triggers.any { q.contains(it) }) return true
-        // Default: if it's a real question (not just hi), search to verify
-        if (q.length > 15 && (q.contains("?") || q.startsWith("what") || q.startsWith("who") || q.startsWith("when") || q.startsWith("where") || q.startsWith("why") || q.startsWith("how"))) return true
+
+        // Default: NO search. AI answers from knowledge.
         return false
     }
 
@@ -172,7 +173,6 @@ class AiRepository {
         if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) {
             return cachedWeb
         }
-        // FIX: was 1000ms - always timed out in Malawi. Now 8s.
         val result = withTimeoutOrNull(8000L) { searchTavily(question) } ?: ""
         return result
     }
@@ -235,7 +235,6 @@ class AiRepository {
     ): Flow<String> = flow {
         val webContext = if (image == null) getWebContext(question) else ""
 
-        // FIX: Never guess on factual topics if search failed
         if (image == null && needsWebSearch(question) && webContext.isBlank()) {
             emit("I could not verify this with live search right now, so I will not guess. Please check your connection and try again. For Malawi news, check MEC or Malawi Government website at https://www.malawi.gov.mw")
             return@flow
@@ -301,7 +300,11 @@ class AiRepository {
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
         val isBible = isBibleQuestion(prompt)
         val isBreakdown = needsBreakdown(prompt)
-        val linkRule = "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."
+        val linkRule = if (isBible) {
+            "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Do NOT add a 'Sources:' section with websites. Do NOT list blog links. Cite the Bible reference instead, like 2 Samuel 18:9-15."
+        } else {
+            "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."
+        }
         val breakdownRule = if (isBreakdown) {
             "The user asked for a breakdown. Break the passage/topic into 3 to 5 portions. For EACH portion: Start with 'Portion 1: [Title]' on its own line, then quote the verse/part, then 1 paragraph for meaning, then 1 paragraph for application. Leave a blank line between portions. Do NOT break down if the user did not ask for it."
         } else {
@@ -374,8 +377,8 @@ class AiRepository {
     ): String {
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
         val linkRule = "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links. At the end, if you used web results, add a line 'Sources:' followed by the real URLs you used, one per line."
+        val bibleLinkRule = "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Do NOT add a 'Sources:' section with websites. Do NOT list blog links. Cite the Bible reference instead, like 2 Samuel 18:9-15."
 
-        // Length / breakdown rule - DEPENDS on question
         val lengthRule = if (isBreakdown) {
             "The user asked for a breakdown. Break the passage or topic into 3 to 5 portions. For EACH portion: Start with 'Portion 1: [Title]' on its own line, then quote the verse or key part, then 1 paragraph for meaning, then 1 paragraph for application. Leave a blank line between portions. Always finish fully."
         } else {
@@ -403,7 +406,7 @@ class AiRepository {
         }
 
         sb.append("You are a Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
-        sb.append("$linkRule\n$lengthRule\n\n")
+        sb.append("$bibleLinkRule\n$lengthRule\n\n")
         if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
         if (webContext.isNotBlank()) {
             sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results for any non-Bible facts. If the results do NOT contain the answer, say so and do NOT guess:\n${webContext.take(3000)}\n\n")
@@ -511,8 +514,6 @@ class AiRepository {
                 readTimeout = 120000
                 doOutput = true
             }
-            // FIX: temperature depends on task. Factual = 0.0, breakdown = 0.2, creative = 0.7
-            // We use 0.0 for factual search, 0.2 for breakdown, to stop hallucinating.
             val temp = if (isBreakdown) 0.2 else 0.0
             val body = JSONObject()
                 .put("model", model)
