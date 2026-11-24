@@ -120,6 +120,15 @@ fun SettingsPanel(
 
     var pendingReminderHour by remember { mutableStateOf<Int?>(null) }
     var pendingReminderMinute by remember { mutableStateOf<Int?>(null) }
+
+    // ✅ FIX: One helper - asks for Exact Alarm FIRST, then saves
+    fun saveReminder(hour: Int, minute: Int) {
+        ReminderManager.requestExactAlarmPermission(context)
+        ReminderManager.setReminder(context, hour, minute)
+        reminderText = ReminderManager.getReminderText(context)
+        Toast.makeText(context, "Reminder set for $reminderText daily", Toast.LENGTH_SHORT).show()
+    }
+
     val notifPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -127,9 +136,7 @@ fun SettingsPanel(
             val h = pendingReminderHour
             val m = pendingReminderMinute
             if (h != null && m != null) {
-                ReminderManager.setReminder(context, h, m)
-                reminderText = ReminderManager.getReminderText(context)
-                Toast.makeText(context, "Reminder set for $reminderText daily", Toast.LENGTH_SHORT).show()
+                saveReminder(h, m) // ✅ FIX: was setReminder() without exact-alarm permission
             }
         } else {
             Toast.makeText(context, "Allow notifications to get reminders", Toast.LENGTH_LONG).show()
@@ -177,9 +184,7 @@ fun SettingsPanel(
                         pendingReminderMinute = minute
                         notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     } else {
-                        ReminderManager.setReminder(context, hour, minute)
-                        reminderText = ReminderManager.getReminderText(context)
-                        Toast.makeText(context, "Reminder set for $reminderText daily", Toast.LENGTH_SHORT).show()
+                        saveReminder(hour, minute) // ✅ FIX: was setReminder() directly
                     }
                 }) { Text("Set Reminder", color = gold) }
             },
