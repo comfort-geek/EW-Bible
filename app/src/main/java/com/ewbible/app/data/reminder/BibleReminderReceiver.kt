@@ -11,6 +11,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.ewbible.app.MainActivity
+import com.ewbible.app.R
 
 class BibleReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
@@ -38,6 +39,7 @@ class BibleReminderReceiver : BroadcastReceiver() {
             ).apply {
                 description = "Daily Bible reading reminder"
                 enableVibration(true)
+                setShowBadge(true)
             }
             manager.createNotificationChannel(channel)
         }
@@ -51,15 +53,17 @@ class BibleReminderReceiver : BroadcastReceiver() {
         )
 
         val notification = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.mipmap.ic_launcher) // ✅ FIX: was android.R.drawable.ic_dialog_info
             .setContentTitle("📖 Time to read the Bible")
             .setContentText("Your daily Bible reading time is now. Open EW Bible.")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setAutoCancel(true)
+            .setShowWhen(true)
             .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
             .setVibrate(longArrayOf(0, 500, 200, 500))
             .setContentIntent(pending)
+            .setFullScreenIntent(pending, true) // ✅ FIX: forces it to show even if phone is locked / Doze
             .build()
 
         try {
