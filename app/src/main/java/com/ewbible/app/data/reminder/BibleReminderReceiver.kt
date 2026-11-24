@@ -14,18 +14,17 @@ import com.ewbible.app.MainActivity
 
 class BibleReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        // Reschedule FIRST - even if notification fails, tomorrow still works
         val saved = ReminderManager.getReminder(context)
+
+        // 1. ALWAYS reschedule first, even for BOOT
         if (saved != null) {
             try {
                 ReminderManager.schedule(context, saved.first, saved.second)
-            } catch (e: Exception) { /* don't crash receiver */ }
+            } catch (e: Exception) { }
         }
 
-        if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
-            return
-        }
-
+        // 2. Boot = only reschedule, don't show notification now
+        if (intent?.action == Intent.ACTION_BOOT_COMPLETED) return
         if (saved == null) return
 
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -52,10 +51,11 @@ class BibleReminderReceiver : BroadcastReceiver() {
         )
 
         val notification = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(android.R.drawable.ic_dialog_info) // TEST ICON - always works
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("📖 Time to read the Bible")
             .setContentText("Your daily Bible reading time is now. Open EW Bible.")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setAutoCancel(true)
             .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
             .setVibrate(longArrayOf(0, 500, 200, 500))
@@ -65,9 +65,7 @@ class BibleReminderReceiver : BroadcastReceiver() {
         try {
             NotificationManagerCompat.from(context).notify(1001, notification)
         } catch (e: SecurityException) {
-            // User denied POST_NOTIFICATIONS
-        } catch (e: Exception) {
-            // Bad icon / other OEM issue
-        }
+            // POST_NOTIFICATIONS denied - user turned it off in settings
+        } catch (e: Exception) { }
     }
 }
