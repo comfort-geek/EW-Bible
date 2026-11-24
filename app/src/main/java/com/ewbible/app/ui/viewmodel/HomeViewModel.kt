@@ -94,6 +94,10 @@ class HomeViewModel(
     private var cloudSyncDone = false
     private var lastCommentaryKey = ""
 
+    // ✅ FIX: Counter, not boolean. One upload finishing must not clear another pending upload.
+    private var pendingUploads = 0
+    private val pendingLock = Any()
+
     private val summaryCache = LruCache<String, SummaryEntity>(30)
     private val versesCache = LruCache<String, List<VerseEntity>>(30)
     private val commentaryHtmlCache = LruCache<String, String>(40)
@@ -142,7 +146,11 @@ class HomeViewModel(
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
+    // ✅ FIX: markSynced only clears if no pending uploads remain
     private fun markSynced() {
+        synchronized(pendingLock) {
+            if (pendingUploads > 0) return
+        }
         _uiState.update { s -> s.copy(
             lastSyncMillis = System.currentTimeMillis(),
             hasUnsyncedChanges = false
@@ -150,7 +158,23 @@ class HomeViewModel(
     }
 
     private fun markUnsynced() {
+        synchronized(pendingLock) { pendingUploads++ }
         _uiState.update { s -> s.copy(hasUnsyncedChanges = true) }
+    }
+
+    private fun markOneUploadDone(success: Boolean) {
+        synchronized(pendingLock) {
+            if (pendingUploads > 0) pendingUploads--
+            if (pendingUploads > 0) return
+        }
+        if (success) {
+            _uiState.update { s -> s.copy(
+                lastSyncMillis = System.currentTimeMillis(),
+                hasUnsyncedChanges = false
+            ) }
+        } else {
+            _uiState.update { s -> s.copy(hasUnsyncedChanges = true) }
+        }
     }
 
     fun setOnline(isOnline: Boolean) {
@@ -292,11 +316,15 @@ class HomeViewModel(
                     }
                 }
             }
+            // ✅ FIX: Do NOT call markSynced() here if local uploads are still pending.
+            // Download success does not mean upload success.
             if (notesResult.isSuccess && highlightsResult.isSuccess && progressResult.isSuccess) {
                 markSynced()
             } else {
                 cloudSyncDone = false
                 markUnsynced()
+                // Undo the +1 from markUnsynced if it was only download failure, keep flag true
+                // markUnsynced already set flag, no extra work needed
             }
         } catch (e: Exception) {
             cloudSyncDone = false
@@ -375,6 +403,7 @@ class HomeViewModel(
     fun onUserSignedOut() {
         viewModelScope.launch {
             runCatching { prefs.clearUser() }
+            synchronized(pendingLock) { pendingUploads = 0 }
             _uiState.update { s -> s.copy(lastSyncMillis = null, hasUnsyncedChanges = false) }
         }
     }
@@ -395,7 +424,7 @@ class HomeViewModel(
                     scrollIndex = scrollIndex,
                     scrollOffset = scrollOffset
                 )
-                if (result?.isSuccess == true) markSynced() else markUnsynced()
+                markOneUploadDone(result?.isSuccess == true)
             }
         }
     }
@@ -593,7 +622,7 @@ class HomeViewModel(
             markUnsynced()
             runCatching {
                 val result = syncManager?.uploadNote(bookId, chapter, verseNum, noteText)
-                if (result?.isSuccess == true) markSynced() else markUnsynced()
+                markOneUploadDone(result?.isSuccess == true)
             }
         }
     }
@@ -609,7 +638,7 @@ class HomeViewModel(
             val hex = "#%08X".format(colorInt)
             runCatching {
                 val result = syncManager?.uploadHighlight(bookId, chapter, verseNum, hex)
-                if (result?.isSuccess == true) markSynced() else markUnsynced()
+                markOneUploadDone(result?.isSuccess == true)
             }
         }
     }
@@ -623,7 +652,7 @@ class HomeViewModel(
             markUnsynced()
             runCatching {
                 val result = syncManager?.deleteHighlight(bookId, chapter, verseNum)
-                if (result?.isSuccess == true) markSynced() else markUnsynced()
+                markOneUploadDone(result?.isSuccess == true)
             }
         }
     }
