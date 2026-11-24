@@ -52,7 +52,9 @@ data class HomeUiState(
     val showAiChat: Boolean = false,
     val currentNoteText: String = "",
     val isReadingRestored: Boolean = false,
-    val lastSyncMillis: Long? = null
+    val lastSyncMillis: Long? = null,
+    val isOnline: Boolean = true,
+    val hasUnsyncedChanges: Boolean = false
 )
 
 @OptIn(FlowPreview::class)
@@ -141,7 +143,23 @@ class HomeViewModel(
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     private fun markSynced() {
-        _uiState.update { s -> s.copy(lastSyncMillis = System.currentTimeMillis()) }
+        _uiState.update { s -> s.copy(
+            lastSyncMillis = System.currentTimeMillis(),
+            hasUnsyncedChanges = false
+        ) }
+    }
+
+    private fun markUnsynced() {
+        _uiState.update { s -> s.copy(hasUnsyncedChanges = true) }
+    }
+
+    fun setOnline(isOnline: Boolean) {
+        val wasOnline = _uiState.value.isOnline
+        _uiState.update { s -> s.copy(isOnline = isOnline) }
+        if (isOnline && !wasOnline) {
+            cloudSyncDone = false
+            viewModelScope.launch { syncFromCloud() }
+        }
     }
 
     private fun setCommentary(bookId: Int, chapter: Int, html: String, error: Boolean = false) {
@@ -232,8 +250,6 @@ class HomeViewModel(
         viewModelScope.launch { syncFromCloud() }
     }
 
-    // FIXED: Only markSynced() if ALL downloads actually succeeded.
-    // Before: getOrNull() swallowed failures, then markSynced() lied on offline / permission error.
     private suspend fun syncFromCloud() {
         val sm = syncManager ?: return
         if (cloudSyncDone) return
@@ -278,8 +294,14 @@ class HomeViewModel(
             }
             if (notesResult.isSuccess && highlightsResult.isSuccess && progressResult.isSuccess) {
                 markSynced()
+            } else {
+                cloudSyncDone = false
+                markUnsynced()
             }
-        } catch (e: Exception) { }
+        } catch (e: Exception) {
+            cloudSyncDone = false
+            markUnsynced()
+        }
     }
 
     fun selectBook(bookId: Int) {
@@ -353,7 +375,7 @@ class HomeViewModel(
     fun onUserSignedOut() {
         viewModelScope.launch {
             runCatching { prefs.clearUser() }
-            _uiState.update { s -> s.copy(lastSyncMillis = null) }
+            _uiState.update { s -> s.copy(lastSyncMillis = null, hasUnsyncedChanges = false) }
         }
     }
     fun saveReadingProgress(verse: VerseEntity? = null, scrollIndex: Int = 0, scrollOffset: Int = 0) {
@@ -362,7 +384,8 @@ class HomeViewModel(
             val chapter = selectedChapter.value
             val verseNum = verse?.verse ?: (selectedVerse.value ?: 1)
             runCatching { prefs.saveLastReading(bookId = bookId, chapter = chapter, verse = verseNum, scrollIndex = scrollIndex, scrollOffset = scrollOffset) }
-            // FIXED: SyncManager returns Result, it does NOT throw. Must check isSuccess.
+            if (!_uiState.value.isLoggedIn) return@launch
+            markUnsynced()
             runCatching {
                 val result = syncManager?.uploadProgress(
                     mode = "New King James Version",
@@ -372,7 +395,7 @@ class HomeViewModel(
                     scrollIndex = scrollIndex,
                     scrollOffset = scrollOffset
                 )
-                if (result?.isSuccess == true) markSynced()
+                if (result?.isSuccess == true) markSynced() else markUnsynced()
             }
         }
     }
@@ -566,9 +589,11 @@ class HomeViewModel(
                 }
                 currentNoteText.value = noteText
             }
+            if (!_uiState.value.isLoggedIn) return@launch
+            markUnsynced()
             runCatching {
                 val result = syncManager?.uploadNote(bookId, chapter, verseNum, noteText)
-                if (result?.isSuccess == true) markSynced()
+                if (result?.isSuccess == true) markSynced() else markUnsynced()
             }
         }
     }
@@ -579,10 +604,12 @@ class HomeViewModel(
             val chapter = selectedChapter.value
             val colorInt = color.toArgb()
             runCatching { withContext(Dispatchers.IO) { dao.saveHighlight(HighlightEntity(bookId = bookId, chapter = chapter, verse = verseNum, color = colorInt)) } }
+            if (!_uiState.value.isLoggedIn) return@launch
+            markUnsynced()
             val hex = "#%08X".format(colorInt)
             runCatching {
                 val result = syncManager?.uploadHighlight(bookId, chapter, verseNum, hex)
-                if (result?.isSuccess == true) markSynced()
+                if (result?.isSuccess == true) markSynced() else markUnsynced()
             }
         }
     }
@@ -592,9 +619,11 @@ class HomeViewModel(
             val bookId = currentBookId.value
             val chapter = selectedChapter.value
             runCatching { withContext(Dispatchers.IO) { dao.deleteHighlight(bookId, chapter, verseNum) } }
+            if (!_uiState.value.isLoggedIn) return@launch
+            markUnsynced()
             runCatching {
                 val result = syncManager?.deleteHighlight(bookId, chapter, verseNum)
-                if (result?.isSuccess == true) markSynced()
+                if (result?.isSuccess == true) markSynced() else markUnsynced()
             }
         }
     }
