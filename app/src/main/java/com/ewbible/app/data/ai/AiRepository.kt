@@ -105,6 +105,18 @@ class AiRepository {
         } catch (_: Exception) { }
     }
 
+    // --- NEW: Decide if we should force Bible mode or not ---
+    private fun isBibleQuestion(question: String): Boolean {
+        val q = question.lowercase()
+        val bibleWords = listOf(
+            "verse", "chapter", "bible", "scripture", "psalm", "proverb",
+            "jesus", "god", "lord", "pray", "prayer", "church", "pastor",
+            "david", "moses", "apostle", "gospel", "sin", "faith",
+            "salvation", "holy spirit", "baptism", "heaven", "hell"
+        )
+        return bibleWords.any { q.contains(it) }
+    }
+
     private fun needsWebSearch(question: String): Boolean {
         val q = question.lowercase().trim()
         if (q.contains("what does") && q.contains("mean")) return false
@@ -261,7 +273,12 @@ class AiRepository {
     suspend fun askQuestion(prompt: String, image: Bitmap? = null): Result<String> {
         val webContext = if (image == null) getWebContext(prompt) else ""
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
-        val linkRule = "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."
+        val isBible = isBibleQuestion(prompt)
+        val linkRule = if (isBible) {
+            "You are a Bible assistant. Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."
+        } else {
+            "You are a helpful AI assistant. Do NOT force Bible verses. Do NOT turn every answer into a sermon. Only mention the Bible if the user asked about it. Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."
+        }
         val fullPrompt = if (webContext.isNotBlank()) {
             "Today is $today. $linkRule WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say cutoff/2024:\n${webContext}\n\nUser question: $prompt"
         } else {
@@ -331,10 +348,33 @@ class AiRepository {
         translation: String,
         webContext: String = ""
     ): String {
-        val sb = StringBuilder()
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
+        val linkRule = "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Let the length fit the question - a simple question gets 1 short paragraph, a deeper question gets 2 to 3 spaced paragraphs. Always finish your answer fully. Never stop mid-sentence or mid-verse. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."
+
+        val sb = StringBuilder()
+
+        // --- GENERAL MODE: No Bible forcing ---
+        if (!isBibleQuestion(question)) {
+            sb.append("You are a helpful AI assistant. Today is $today. Answer clearly and helpfully. ")
+            sb.append("Do NOT force Bible verses into the answer. Do NOT turn every answer into a sermon. Only mention the Bible if the user asked about it.\n")
+            sb.append("$linkRule\n\n")
+            if (webContext.isNotBlank()) {
+                sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say your knowledge is outdated, cut off, or up to 2024. Do NOT use old training data for current events. Answer ONLY from these results:\n${webContext.take(1200)}\n\n")
+            }
+            if (history.isNotEmpty()) {
+                sb.append("CONVERSATION HISTORY (last 4):\n")
+                history.takeLast(4).forEach {
+                    sb.append(if (it.isUser) "User: " else "Assistant: ").append(it.text.take(400)).append("\n")
+                }
+                sb.append("\n")
+            }
+            sb.append("User question: $question")
+            return sb.toString()
+        }
+
+        // --- BIBLE MODE: Only when user actually asked about Bible ---
         sb.append("You are a Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
-        sb.append("Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Let the length fit the question - a simple question gets 1 short paragraph, a deeper question gets 2 to 3 spaced paragraphs. Always finish your answer fully. Never stop mid-sentence or mid-verse. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links.\n\n")
+        sb.append("$linkRule\n\n")
         if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
         if (webContext.isNotBlank()) {
             sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. YOU MUST USE THEM. Do NOT say your knowledge is outdated, cut off, or up to 2024. Do NOT use old training data for current events. Answer ONLY from these results:\n${webContext.take(1200)}\n\n")
