@@ -105,7 +105,7 @@ class AiRepository {
         } catch (_: Exception) { }
     }
 
-    // --- Bible detection ---
+    // --- Bible detection - kept only for search guard, NOT for prompt branching ---
     private fun isBibleQuestion(question: String): Boolean {
         val q = question.lowercase()
         val bibleWords = listOf(
@@ -135,16 +135,15 @@ class AiRepository {
             q.contains("go deep")
     }
 
-    // --- FIXED: Search ONLY for news / current / factual topics ---
+    // --- FIXED LOGIC: Search ONLY for news / current / jobs ---
     private fun needsWebSearch(question: String): Boolean {
         val q = question.lowercase().trim()
-        // Never search for greetings / prayer / creative
         if (q == "hi" || q == "hello" || q == "hey" || q == "amen") return false
         if (q.contains("pray for me") || q.contains("pray for")) return false
         if (q.contains("write a prayer") || q.contains("write me a prayer")) return false
         if (q.contains("write a sermon")) return false
 
-        // FIX: Pure Bible questions do NOT need web search - no blog Sources
+        // FIX: Pure Bible questions do NOT need web search
         if (isBibleQuestion(q)) {
             val newsTriggers = listOf("president", "election", "news", "pope", "latest", "today", "malawi")
             if (newsTriggers.none { q.contains(it) }) return false
@@ -153,11 +152,12 @@ class AiRepository {
         if (q.contains("what does") && q.contains("mean") && isBibleQuestion(q)) return false
         if (q.contains("explain") && q.contains("verse") && !needsBreakdown(q)) return false
 
-        // ONLY news / current / jobs / election topics -> SEARCH
+        // FIX: Removed "who is" and "who was" - they caused "Who was Absalom?" to search blogs.
+        // "Who is president?" still works because "president" is in the list.
         val triggers = listOf(
             "pope", "president", "election", "minister", "government",
             "war", "news", "latest", "recent", "current", "today",
-            "what happened", "who won", "who is", "who was",
+            "what happened", "who won",
             "job", "jobs", "hiring", "vacancy", "vacancies", "apply",
             "malawi", "football", "soccer"
         )
@@ -298,12 +298,13 @@ class AiRepository {
             return Result.success("I could not verify this with live search right now, so I will not guess. Please check your connection and try again.")
         }
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
-        val isBible = isBibleQuestion(prompt)
         val isBreakdown = needsBreakdown(prompt)
-        val linkRule = if (isBible) {
-            "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Do NOT add a 'Sources:' section with websites. Do NOT list blog links. Cite the Bible reference instead, like 2 Samuel 18:9-15."
-        } else {
+        // FIX: Link rule now depends on webContext, NOT on keyword detection.
+        // If we searched -> Sources. If we did NOT search -> Bible reference, no blogs.
+        val linkRule = if (webContext.isNotBlank()) {
             "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."
+        } else {
+            "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Do NOT add a 'Sources:' section with websites. Do NOT list blog links. If the question is about the Bible, cite the Bible reference instead, like 2 Samuel 18:9-15."
         }
         val breakdownRule = if (isBreakdown) {
             "The user asked for a breakdown. Break the passage/topic into 3 to 5 portions. For EACH portion: Start with 'Portion 1: [Title]' on its own line, then quote the verse/part, then 1 paragraph for meaning, then 1 paragraph for application. Leave a blank line between portions. Do NOT break down if the user did not ask for it."
@@ -376,8 +377,15 @@ class AiRepository {
         isBreakdown: Boolean = false
     ): String {
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
-        val linkRule = "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links. At the end, if you used web results, add a line 'Sources:' followed by the real URLs you used, one per line."
-        val bibleLinkRule = "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Do NOT add a 'Sources:' section with websites. Do NOT list blog links. Cite the Bible reference instead, like 2 Samuel 18:9-15."
+
+        // FIX: One unified prompt. No more if (!isBibleQuestion) branch.
+        // The model itself decides if the question is Bible or general.
+        // This fixes Absalom, Ruth, etc. without listing names.
+        val linkRule = if (webContext.isNotBlank()) {
+            "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links. At the end, if you used web results, add a line 'Sources:' followed by the real URLs you used, one per line."
+        } else {
+            "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Do NOT add a 'Sources:' section with websites. Do NOT list blog links. If the question is about the Bible, cite the Bible reference instead, like 2 Samuel 18:9-15."
+        }
 
         val lengthRule = if (isBreakdown) {
             "The user asked for a breakdown. Break the passage or topic into 3 to 5 portions. For EACH portion: Start with 'Portion 1: [Title]' on its own line, then quote the verse or key part, then 1 paragraph for meaning, then 1 paragraph for application. Leave a blank line between portions. Always finish fully."
@@ -386,30 +394,12 @@ class AiRepository {
         }
 
         val sb = StringBuilder()
-
-        if (!isBibleQuestion(question)) {
-            sb.append("You are a helpful AI assistant. Today is $today. Answer clearly and helpfully. ")
-            sb.append("Do NOT force Bible verses into the answer. Do NOT turn every answer into a sermon. Only mention the Bible if the user asked about it.\n")
-            sb.append("$linkRule\n$lengthRule\n\n")
-            if (webContext.isNotBlank()) {
-                sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results. If the results do NOT contain the answer, say 'I could not verify this from live sources' and do NOT guess names, dates, or election results. Never invent a president, election result, or date:\n${webContext.take(3000)}\n\n")
-            }
-            if (history.isNotEmpty()) {
-                sb.append("CONVERSATION HISTORY (last 4):\n")
-                history.takeLast(4).forEach {
-                    sb.append(if (it.isUser) "User: " else "Assistant: ").append(it.text.take(400)).append("\n")
-                }
-                sb.append("\n")
-            }
-            sb.append("User question: $question")
-            return sb.toString()
-        }
-
-        sb.append("You are a Bible assistant. Today is $today. Answer clearly, warmly, and biblically. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
-        sb.append("$bibleLinkRule\n$lengthRule\n\n")
+        sb.append("You are a Bible assistant and a helpful general assistant. Today is $today. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
+        sb.append("If the question is about the Bible, answer biblically and warmly. If the question is about news, Malawi, jobs, or general topics, answer clearly and helpfully without forcing Bible verses or turning it into a sermon. Only mention the Bible if the user asked about it or if the question is clearly biblical.\n")
+        sb.append("$linkRule\n$lengthRule\n\n")
         if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
         if (webContext.isNotBlank()) {
-            sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results for any non-Bible facts. If the results do NOT contain the answer, say so and do NOT guess:\n${webContext.take(3000)}\n\n")
+            sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results for factual claims. If the results do NOT contain the answer, say 'I could not verify this from live sources' and do NOT guess names, dates, or election results. Never invent a president, election result, or date:\n${webContext.take(3000)}\n\n")
         }
         if (history.isNotEmpty()) {
             sb.append("CONVERSATION HISTORY (last 4):\n")
