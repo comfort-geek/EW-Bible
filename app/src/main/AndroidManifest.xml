@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:name=".EwBibleApp"
@@ -36,10 +37,10 @@
             </intent-filter>
         </activity>
 
-        <!-- REMINDER RECEIVER -->
+        <!-- REMINDER RECEIVER - MUST BE exported=true for BOOT_COMPLETED -->
         <receiver
             android:name=".data.reminder.BibleReminderReceiver"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="com.ewbible.app.ACTION_BIBLE_REMINDER" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
