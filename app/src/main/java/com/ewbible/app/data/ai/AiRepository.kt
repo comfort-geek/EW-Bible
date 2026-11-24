@@ -105,19 +105,19 @@ class AiRepository {
         } catch (_: Exception) { }
     }
 
-    // --- Bible detection - kept only for search guard, NOT for prompt branching ---
     private fun isBibleQuestion(question: String): Boolean {
         val q = question.lowercase()
         val bibleWords = listOf(
             "verse", "chapter", "bible", "scripture", "psalm", "proverb",
             "jesus", "god", "lord", "pray", "prayer", "church", "pastor",
             "david", "moses", "apostle", "gospel", "sin", "faith",
-            "salvation", "holy spirit", "baptism", "heaven", "hell"
+            "salvation", "holy spirit", "baptism", "heaven", "hell",
+            "abraham", "isaac", "jacob", "joseph", "samuel", "elijah",
+            "peter", "paul", "john", "mary", "solomon", "noah"
         )
         return bibleWords.any { q.contains(it) }
     }
 
-    // --- Breakdown ONLY when user asks for it ---
     private fun needsBreakdown(question: String): Boolean {
         val q = question.lowercase().trim()
         return q.contains("break down") ||
@@ -135,35 +135,34 @@ class AiRepository {
             q.contains("go deep")
     }
 
-    // --- FIXED LOGIC: Search ONLY for news / current / jobs ---
     private fun needsWebSearch(question: String): Boolean {
         val q = question.lowercase().trim()
+
+        // 1. NEVER SEARCH - creative / spiritual / meaning
         if (q == "hi" || q == "hello" || q == "hey" || q == "amen") return false
-        if (q.contains("pray for me") || q.contains("pray for")) return false
         if (q.contains("write a prayer") || q.contains("write me a prayer")) return false
-        if (q.contains("write a sermon")) return false
+        if (q.contains("write a sermon") || q.contains("pray for me")) return false
+        if (q.contains("what does") && q.contains("mean")) return false
+        if (q.contains("explain") && (q.contains("verse") || q.contains("chapter") || q.contains("passage") || q.contains("psalm"))) return false
+        if (q.contains("meaning of") || q.contains("lesson from") || q.contains("teach me") || q.contains("devotion")) return false
+        if (q.contains("break down") || q.contains("breakdown") || q.contains("verse by verse")) return false
 
-        // FIX: Pure Bible questions do NOT need web search
-        if (isBibleQuestion(q)) {
-            val newsTriggers = listOf("president", "election", "news", "pope", "latest", "today", "malawi")
-            if (newsTriggers.none { q.contains(it) }) return false
-        }
-
-        if (q.contains("what does") && q.contains("mean") && isBibleQuestion(q)) return false
-        if (q.contains("explain") && q.contains("verse") && !needsBreakdown(q)) return false
-
-        // FIX: Removed "who is" and "who was" - they caused "Who was Absalom?" to search blogs.
-        // "Who is president?" still works because "president" is in the list.
-        val triggers = listOf(
-            "pope", "president", "election", "minister", "government",
-            "war", "news", "latest", "recent", "current", "today",
-            "what happened", "who won",
-            "job", "jobs", "hiring", "vacancy", "vacancies", "apply",
-            "malawi", "football", "soccer"
+        // 2. ALWAYS SEARCH - fact that can change, no name needed
+        val factualIntent = listOf(
+            "who is", "who won", "who was", "who became", "who appointed",
+            "what happened", "what is happening", "latest", "recent", "current",
+            "today", "yesterday", "this week", "this year",
+            "when did", "when will", "how many", "how much",
+            "election", "results", "president", "minister", "government",
+            "job", "jobs", "hiring", "vacancy", "vacancies", "apply", "salary",
+            "news", "pope", "war", "football", "soccer", "score",
+            "price of", "exchange rate", "weather"
         )
-        if (triggers.any { q.contains(it) }) return true
+        if (factualIntent.any { q.contains(it) }) return true
 
-        // Default: NO search. AI answers from knowledge.
+        // 3. Pure Bible - no search
+        if (isBibleQuestion(q)) return false
+
         return false
     }
 
@@ -173,11 +172,13 @@ class AiRepository {
         if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) {
             return cachedWeb
         }
-        val result = withTimeoutOrNull(8000L) { searchTavily(question) } ?: ""
+        val lower = question.lowercase()
+        val timeRange = if (lower.contains("today") || lower.contains("yesterday") || lower.contains("latest") || lower.contains("news")) "week" else "month"
+        val result = withTimeoutOrNull(4000L) { searchTavily(question, timeRange) } ?: ""
         return result
     }
 
-    private suspend fun searchTavily(query: String): String {
+    private suspend fun searchTavily(query: String, timeRange: String = "month"): String {
         if (tavilyKey.isBlank()) return ""
         return try {
             var conn: HttpURLConnection? = null
@@ -186,17 +187,17 @@ class AiRepository {
                 conn = (searchUrl.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     setRequestProperty("Content-Type", "application/json")
-                    connectTimeout = 5000
-                    readTimeout = 8000
+                    connectTimeout = 3000
+                    readTimeout = 4000
                     doOutput = true
                 }
                 val body = JSONObject()
                     .put("api_key", tavilyKey)
                     .put("query", query)
-                    .put("search_depth", "advanced")
-                    .put("max_results", 5)
+                    .put("search_depth", "basic")
+                    .put("max_results", 2)
                     .put("include_answer", true)
-                    .put("time_range", "year")
+                    .put("time_range", timeRange)
                     .toString()
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
                 if (conn.responseCode !in 200..299) return ""
@@ -207,12 +208,12 @@ class AiRepository {
                 if (answer.isNotBlank()) sb.append("TAVILY ANSWER: $answer\n\n")
                 val results = json.optJSONArray("results")
                 if (results != null) {
-                    for (i in 0 until minOf(results.length(), 5)) {
+                    for (i in 0 until minOf(results.length(), 2)) {
                         val r = results.getJSONObject(i)
-                        sb.append("${r.optString("title")}: ${r.optString("content").take(600)}\nLink: ${r.optString("url")}\nPublished: ${r.optString("published_date")}\n\n")
+                        sb.append("${r.optString("title")}: ${r.optString("content").take(400)}\nPublished: ${r.optString("published_date")}\n\n")
                     }
                 }
-                val out = sb.toString().take(3000)
+                val out = sb.toString().take(2000)
                 if (out.isNotBlank()) {
                     cachedQuery = query.trim().lowercase()
                     cachedWeb = out
@@ -234,11 +235,6 @@ class AiRepository {
         translation: String = "NKJV"
     ): Flow<String> = flow {
         val webContext = if (image == null) getWebContext(question) else ""
-
-        if (image == null && needsWebSearch(question) && webContext.isBlank()) {
-            emit("I could not verify this with live search right now, so I will not guess. Please check your connection and try again. For Malawi news, check MEC or Malawi Government website at https://www.malawi.gov.mw")
-            return@flow
-        }
 
         val isBreakdown = needsBreakdown(question)
         val basePrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext, isBreakdown)
@@ -272,7 +268,7 @@ class AiRepository {
             for (model in remoteGemini) {
                 if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, image))) return@flow
             }
-            emit("Could not read the image. Please try again - Gemini is busy right now.")
+            emit("Could not read the image. Please try again.")
             return@flow
         }
 
@@ -288,23 +284,18 @@ class AiRepository {
         if (errors.isNotEmpty() && errors.all { it.contains("429") }) {
             emit("Free daily limit reached for today. Please try again tomorrow.")
         } else {
-            emit("All AI models are busy right now. Please try again in a minute.")
+            emit("I am busy right now. Please try again in a minute.")
         }
     }.flowOn(Dispatchers.IO)
 
     suspend fun askQuestion(prompt: String, image: Bitmap? = null): Result<String> {
         val webContext = if (image == null) getWebContext(prompt) else ""
-        if (image == null && needsWebSearch(prompt) && webContext.isBlank()) {
-            return Result.success("I could not verify this with live search right now, so I will not guess. Please check your connection and try again.")
-        }
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
         val isBreakdown = needsBreakdown(prompt)
-        // FIX: Link rule now depends on webContext, NOT on keyword detection.
-        // If we searched -> Sources. If we did NOT search -> Bible reference, no blogs.
         val linkRule = if (webContext.isNotBlank()) {
-            "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links."
+            "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write in this style: short, warm, and clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. Use **Bold Title:** at the start of a paragraph when you start a new idea. Do NOT use bullet points, dashes, or numbered lists. Do NOT add a 'Sources:' section. Do NOT list links at the end. If you used a web result, just mention the source naturally in one sentence, like 'According to Reuters...'"
         } else {
-            "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Do NOT add a 'Sources:' section with websites. Do NOT list blog links. If the question is about the Bible, cite the Bible reference instead, like 2 Samuel 18:9-15."
+            "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write in this style: short, warm, and clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. Use **Bold Title:** at the start of a paragraph when you start a new idea. Do NOT use bullet points, dashes, or numbered lists. Do NOT add a 'Sources:' section with websites. Do NOT list blog links. If the question is about the Bible, cite the Bible reference instead, like 2 Samuel 18:9-15."
         }
         val breakdownRule = if (isBreakdown) {
             "The user asked for a breakdown. Break the passage/topic into 3 to 5 portions. For EACH portion: Start with 'Portion 1: [Title]' on its own line, then quote the verse/part, then 1 paragraph for meaning, then 1 paragraph for application. Leave a blank line between portions. Do NOT break down if the user did not ask for it."
@@ -312,7 +303,7 @@ class AiRepository {
             "Do NOT break into portions. Let the length fit the question - a simple question gets 1 short paragraph, a deeper question gets 2 to 3 spaced paragraphs. Always finish your answer fully. Never stop mid-sentence."
         }
         val fullPrompt = if (webContext.isNotBlank()) {
-            "Today is $today. $linkRule $breakdownRule WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results. If the results do NOT contain the answer, say 'I could not verify this from live sources' and do NOT guess names, dates, or election results. Never invent a president, election result, or date:\n${webContext}\n\nUser question: $prompt"
+            "Today is $today. $linkRule $breakdownRule WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results. If the results do NOT contain the answer, say 'Please check your connection and try again.' and do NOT guess names, dates, or election results. Never invent a president, election result, or date:\n${webContext}\n\nUser question: $prompt"
         } else {
             "Today is $today. $linkRule $breakdownRule User question: $prompt"
         }
@@ -333,7 +324,7 @@ class AiRepository {
                     } catch (e: CancellationException) { throw e }
                     catch (e: Exception) { lastErr = e; sb.clear() }
                 }
-                return Result.failure(Exception("Could not read the image. Please try again - Gemini is busy right now."))
+                return Result.failure(Exception("Could not read the image. Please try again."))
             }
             if (groqKey.isNotBlank()) {
                 for (model in remoteGroq) {
@@ -363,7 +354,7 @@ class AiRepository {
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { lastErr = e; sb.clear() }
             }
-            Result.failure(lastErr ?: Exception("All AI models are busy right now."))
+            Result.failure(lastErr ?: Exception("I am busy right now. Please try again in a minute."))
         } catch (e: CancellationException) { throw e }
     }
 
@@ -378,13 +369,10 @@ class AiRepository {
     ): String {
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
 
-        // FIX: One unified prompt. No more if (!isBibleQuestion) branch.
-        // The model itself decides if the question is Bible or general.
-        // This fixes Absalom, Ruth, etc. without listing names.
         val linkRule = if (webContext.isNotBlank()) {
-            "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links. At the end, if you used web results, add a line 'Sources:' followed by the real URLs you used, one per line."
+            "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write in this style: short, warm, and clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. Use **Bold Title:** at the start of a paragraph when you start a new idea. Do NOT use bullet points, dashes, or numbered lists. Do NOT add a 'Sources:' section. Do NOT list links at the end. If you used a web result, just mention the source naturally in one sentence, like 'According to Reuters...'"
         } else {
-            "Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. Do NOT add a 'Sources:' section with websites. Do NOT list blog links. If the question is about the Bible, cite the Bible reference instead, like 2 Samuel 18:9-15."
+            "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write in this style: short, warm, and clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. Use **Bold Title:** at the start of a paragraph when you start a new idea. Do NOT use bullet points, dashes, or numbered lists. Do NOT add a 'Sources:' section with websites. Do NOT list blog links. If the question is about the Bible, cite the Bible reference instead, like 2 Samuel 18:9-15."
         }
 
         val lengthRule = if (isBreakdown) {
@@ -394,12 +382,15 @@ class AiRepository {
         }
 
         val sb = StringBuilder()
-        sb.append("You are a Bible assistant and a helpful general assistant. Today is $today. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
+        sb.append("You are the EW Bible assistant. Today is $today. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
+        sb.append("Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. You are the EW Bible assistant.\n")
         sb.append("If the question is about the Bible, answer biblically and warmly. If the question is about news, Malawi, jobs, or general topics, answer clearly and helpfully without forcing Bible verses or turning it into a sermon. Only mention the Bible if the user asked about it or if the question is clearly biblical.\n")
         sb.append("$linkRule\n$lengthRule\n\n")
-        if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
+        if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(2000)}\n\n")
         if (webContext.isNotBlank()) {
-            sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results for factual claims. If the results do NOT contain the answer, say 'I could not verify this from live sources' and do NOT guess names, dates, or election results. Never invent a president, election result, or date:\n${webContext.take(3000)}\n\n")
+            sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results for factual claims. If the results do NOT contain the answer, say 'Please check your connection and try again.' and do NOT guess names, dates, or election results. Never invent a president, election result, or date:\n${webContext.take(2000)}\n\n")
+        } else if (needsWebSearch(question)) {
+            sb.append("No web results were available. Do NOT guess names, dates, or election results. If you do not know the fact, say 'Please check your connection and try again.'\n\n")
         }
         if (history.isNotEmpty()) {
             sb.append("CONVERSATION HISTORY (last 4):\n")
@@ -414,7 +405,6 @@ class AiRepository {
 
     private fun cleanMarkdown(text: String): String {
         var cleaned = text
-            .replace("**", "")
             .replace("__", "")
             .replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "")
             .replace("`", "")
@@ -428,7 +418,7 @@ class AiRepository {
     }
 
     private fun cleanStreamingChunk(text: String): String {
-        return text.replace("**", "").replace("__", "").replace("### ", "").replace("## ", "").replace("# ", "").replace("`", "")
+        return text.replace("__", "").replace("### ", "").replace("## ", "").replace("# ", "").replace("`", "")
     }
 
     private fun bitmapToBase64(image: Bitmap?): String? {
@@ -512,7 +502,7 @@ class AiRepository {
                 .put("max_tokens", MAX_TOKENS)
                 .put("stream", true)
                 .put("messages", JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", "You are a helpful AI. Do NOT use Markdown. Do NOT use bullet points, dashes, asterisks, or numbered lists. Write in clean plain paragraphs only, with a blank line between paragraphs. If you include a link, write it as a plain full URL like https://... Only use links from the provided web search results. Never invent links. If you do not know a fact, say you could not verify it."))
+                    .put(JSONObject().put("role", "system").put("content", "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write in this style: short, warm, and clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. Use **Bold Title:** at the start of a paragraph when you start a new idea. Do NOT use bullet points, dashes, or numbered lists. Do NOT add a 'Sources:' section. Do NOT list links. If you do not know a fact, say you could not verify it."))
                     .put(JSONObject().put("role", "user").put("content", prompt)))
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
