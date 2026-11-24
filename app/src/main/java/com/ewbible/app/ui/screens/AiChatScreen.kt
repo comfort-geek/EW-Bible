@@ -34,7 +34,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-// NEW: Makes https:// links blue + underline + tappable
 @Composable
 private fun LinkText(
     text: String,
@@ -47,7 +46,6 @@ private fun LinkText(
             append(text)
             val regex = Regex("https?://[^\\s]+")
             regex.findAll(text).forEach { match ->
-                // Clean trailing . , ) that AI sometimes adds
                 var url = match.value
                 var end = match.range.last + 1
                 while (url.endsWith(".") || url.endsWith(",") || url.endsWith(")") || url.endsWith("]")) {
@@ -166,10 +164,9 @@ fun AiChatScreen(
         }
     }
 
-    // FAST: Follow streaming text too, so chat scrolls while AI types
     LaunchedEffect(state.streamingText.length) {
         if (!state.isLoading || state.streamingText.isEmpty()) return@LaunchedEffect
-        val lastIndex = state.messages.size // loading item is at messages.size
+        val lastIndex = state.messages.size
         val visible = listState.layoutInfo.visibleItemsInfo
         val lastVisible = visible.lastOrNull()?.index ?: 0
         if (lastVisible >= lastIndex - 2) {
@@ -212,123 +209,130 @@ fun AiChatScreen(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(background)
-            .statusBarsPadding()
-    ) {
-        // --- Top bar ---
-        Row(
-            modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onClose, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Close, null, tint = textColor) }
-            IconButton(onClick = { showHistory = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.History, null, tint = textColor) }
-            Text(
-                titleText,
-                color = textColor,
-                fontWeight = FontWeight.Bold,
-                fontSize = 18.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                currentRef,
-                color = gold,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            IconButton(onClick = { viewModel.startNewChat(currentRef) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
-        }
-
-        // --- Translation chips ---
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            translations.forEach { t ->
-                val isSelected = selectedTranslation == t
-                Box(
-                    modifier = Modifier
-                        .background(if (isSelected) gold else panel, shape = RoundedCornerShape(16.dp))
-                        .clickable { selectedTranslation = t }
-                        .padding(horizontal = 14.dp, vertical = 6.dp)
+    // ✅ FIX: Scaffold pins topBar, only body moves with keyboard
+    Scaffold(
+        containerColor = background,
+        topBar = {
+            Column(modifier = Modifier.background(background)) {
+                // --- Top bar - PINNED, never moves ---
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(t, color = if (isSelected) Color.White else textColor, fontSize = 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                    IconButton(onClick = onClose, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Close, null, tint = textColor) }
+                    IconButton(onClick = { showHistory = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.History, null, tint = textColor) }
+                    Text(
+                        titleText,
+                        color = textColor,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        currentRef,
+                        color = gold,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    IconButton(onClick = { viewModel.startNewChat(currentRef) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
                 }
-            }
-        }
 
-        // --- Messages ---
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp)
-        ) {
-            items(state.messages, key = { it.id }, contentType = { if (it.isUser) "user" else "ai" }) { msg ->
-                MessageBubble(text = msg.text, isUser = msg.isUser, textColor = textColor, gold = gold, panel = panel)
-            }
-            if (state.isLoading) {
-                item(key = "loading", contentType = "loading") {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                        LinkText(
-                            text = if (state.streamingText.isNotEmpty()) state.streamingText else thinkingText,
-                            color = textColor,
-                            modifier = Modifier.fillMaxWidth(0.85f).background(panel, RoundedCornerShape(12.dp)).padding(10.dp)
-                        )
+                // --- Translation chips - also pinned with top bar ---
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    translations.forEach { t ->
+                        val isSelected = selectedTranslation == t
+                        Box(
+                            modifier = Modifier
+                                .background(if (isSelected) gold else panel, shape = RoundedCornerShape(16.dp))
+                                .clickable { selectedTranslation = t }
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Text(t, color = if (isSelected) Color.White else textColor, fontSize = 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                        }
                     }
                 }
             }
         }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding) // ✅ keeps body below top bar
+                .background(background)
+                .imePadding() // ✅ only body gets keyboard padding
+        ) {
+            // --- Messages ---
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp)
+            ) {
+                items(state.messages, key = { it.id }, contentType = { if (it.isUser) "user" else "ai" }) { msg ->
+                    MessageBubble(text = msg.text, isUser = msg.isUser, textColor = textColor, gold = gold, panel = panel)
+                }
+                if (state.isLoading) {
+                    item(key = "loading", contentType = "loading") {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                            LinkText(
+                                text = if (state.streamingText.isNotEmpty()) state.streamingText else thinkingText,
+                                color = textColor,
+                                modifier = Modifier.fillMaxWidth(0.85f).background(panel, RoundedCornerShape(12.dp)).padding(10.dp)
+                            )
+                        }
+                    }
+                }
+            }
 
-        // --- Image attached banner ---
-        if (selectedImage != null) {
+            // --- Image attached banner ---
+            if (selectedImage != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().background(background).padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Image attached ✓", color = gold, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { selectedImage = null }) { Text("Remove") }
+                }
+            }
+
+            // --- Input ---
             Row(
-                modifier = Modifier.fillMaxWidth().background(background).padding(horizontal = 8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(background)
+                    .navigationBarsPadding()
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Image attached ✓", color = gold, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                TextButton(onClick = { selectedImage = null }) { Text("Remove") }
+                IconButton(onClick = { picker.launch("image/*") }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Image, null, tint = gold) }
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    placeholder = { Text(if (state.isLoading) "Type next question..." else "Ask anything...", maxLines = 1) },
+                    modifier = Modifier.weight(1f),
+                    maxLines = 4,
+                    enabled = true
+                )
+                IconButton(
+                    onClick = {
+                        val q = input.trim()
+                        if (q.isBlank()) return@IconButton
+                        viewModel.send(q, currentRef, selectedImage, selectedTranslation)
+                        input = ""
+                        selectedImage = null
+                    },
+                    enabled = input.isNotBlank(),
+                    modifier = Modifier.size(40.dp)
+                ) { Icon(Icons.Default.Send, null, tint = if (input.isNotBlank()) gold else gray) }
             }
-        }
-
-        // --- Input - NEVER LOCKED ---
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(background)
-                .navigationBarsPadding()
-                .imePadding()
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = { picker.launch("image/*") }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Image, null, tint = gold) }
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                placeholder = { Text(if (state.isLoading) "Type next question..." else "Ask anything...", maxLines = 1) },
-                modifier = Modifier.weight(1f),
-                maxLines = 4,
-                enabled = true // FIXED: was locked while loading
-            )
-            // FIXED: Send works even while streaming - cancels old, starts new instantly
-            IconButton(
-                onClick = {
-                    val q = input.trim()
-                    if (q.isBlank()) return@IconButton
-                    viewModel.send(q, currentRef, selectedImage, selectedTranslation)
-                    input = ""
-                    selectedImage = null
-                },
-                enabled = input.isNotBlank(), // FIXED: removed && !state.isLoading
-                modifier = Modifier.size(40.dp)
-            ) { Icon(Icons.Default.Send, null, tint = if (input.isNotBlank()) gold else gray) }
         }
     }
 }
