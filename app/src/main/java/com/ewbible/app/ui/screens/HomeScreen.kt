@@ -342,9 +342,12 @@ fun HomeScreen(
         }
     }
 
+    // ✅ FIX: Pass isOnline + hasUnsyncedChanges - was missing, so SettingsPanel defaulted to online
     SettingsPanel(
         visible = settingsOpen, isLoggedIn = state.isLoggedIn, userName = state.userName, userEmail = state.userEmail,
         lastSyncMillis = state.lastSyncMillis,
+        isOnline = state.isOnline,
+        hasUnsyncedChanges = state.hasUnsyncedChanges,
         fontSize = state.fontSize, darkMode = isDark, notesCount = state.notes.size,
         background = background, panel = panel, textColor = textColor, gold = gold,
         onClose = { settingsOpen = false }, onFontSizeChange = { viewModel.setFontSize(it) }, onDarkModeChange = { viewModel.setDarkMode(it) },
