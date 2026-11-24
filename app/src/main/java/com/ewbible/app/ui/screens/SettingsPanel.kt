@@ -79,6 +79,8 @@ fun SettingsPanel(
     userName: String,
     userEmail: String = "",
     lastSyncMillis: Long? = null,
+    isOnline: Boolean = true,
+    hasUnsyncedChanges: Boolean = false,
     fontSize: Float,
     darkMode: Boolean,
     notesCount: Int,
@@ -109,8 +111,12 @@ fun SettingsPanel(
             now = System.currentTimeMillis()
         }
     }
+
+    // ✅ FIX: Offline must NEVER say "Synced X ago"
     val syncText = when {
         !isLoggedIn -> "Not signed in"
+        !isOnline -> "Not yet synced"
+        hasUnsyncedChanges -> "Syncing..."
         lastSyncMillis == null -> "Not synced yet"
         now - lastSyncMillis < 5000 -> "Synced now"
         now - lastSyncMillis < 60000 -> "Synced ${(now - lastSyncMillis) / 1000}s ago"
@@ -121,7 +127,6 @@ fun SettingsPanel(
     var pendingReminderHour by remember { mutableStateOf<Int?>(null) }
     var pendingReminderMinute by remember { mutableStateOf<Int?>(null) }
 
-    // ✅ FIX: One helper - asks for Exact Alarm FIRST, then saves
     fun saveReminder(hour: Int, minute: Int) {
         ReminderManager.requestExactAlarmPermission(context)
         ReminderManager.setReminder(context, hour, minute)
@@ -136,7 +141,7 @@ fun SettingsPanel(
             val h = pendingReminderHour
             val m = pendingReminderMinute
             if (h != null && m != null) {
-                saveReminder(h, m) // ✅ FIX: was setReminder() without exact-alarm permission
+                saveReminder(h, m)
             }
         } else {
             Toast.makeText(context, "Allow notifications to get reminders", Toast.LENGTH_LONG).show()
@@ -184,7 +189,7 @@ fun SettingsPanel(
                         pendingReminderMinute = minute
                         notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     } else {
-                        saveReminder(hour, minute) // ✅ FIX: was setReminder() directly
+                        saveReminder(hour, minute)
                     }
                 }) { Text("Set Reminder", color = gold) }
             },
@@ -259,7 +264,7 @@ fun SettingsPanel(
                     Text(
                         text = syncText,
                         fontSize = 11.sp,
-                        color = textColor.copy(alpha = 0.6f),
+                        color = if (!isOnline && isLoggedIn) Color.Red.copy(alpha = 0.8f) else textColor.copy(alpha = 0.6f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         softWrap = false
