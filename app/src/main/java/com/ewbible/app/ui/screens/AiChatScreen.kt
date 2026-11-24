@@ -213,7 +213,12 @@ fun AiChatScreen(
     Scaffold(
         containerColor = background,
         topBar = {
-            Column(modifier = Modifier.background(background)) {
+            // ✅ FIXED: added .statusBarsPadding() - was missing, top bar went under notch
+            Column(
+                modifier = Modifier
+                    .background(background)
+                    .statusBarsPadding()
+            ) {
                 // --- Top bar - PINNED, never moves ---
                 Row(
                     modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
@@ -265,9 +270,9 @@ fun AiChatScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding) // ✅ keeps body below top bar
+                .padding(innerPadding)
                 .background(background)
-                .imePadding() // ✅ only body gets keyboard padding
+                .imePadding()
         ) {
             // --- Messages ---
             LazyColumn(
