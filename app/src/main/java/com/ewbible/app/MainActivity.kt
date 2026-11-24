@@ -1,7 +1,12 @@
 package com.ewbible.app
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -34,12 +39,9 @@ import com.ewbible.app.ui.viewmodel.HomeViewModelFactory
 
 class MainActivity : ComponentActivity() {
 
-    // REMINDER: Ask for notification permission on Android 13+
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        // No need to do anything - if denied, reminder just won't show.
-        // User can enable it later in Settings > Apps > EW Bible > Notifications
         CrashReporter.breadcrumb(this, "Notification permission granted=$granted")
     }
 
@@ -54,11 +56,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun isCurrentlyOnline(): Boolean {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Ask once on first open - needed for reminder sound notification
         askNotificationPermission()
 
         CrashReporter.breadcrumb(this, "MainActivity.onCreate")
@@ -70,7 +79,6 @@ class MainActivity : ComponentActivity() {
         }
 
         val preferences = AppPreferences(applicationContext)
-        // FINAL: AiRepository - matches ChatViewModel
         val aiRepository = AiRepository()
         val syncManager = SyncManager()
 
@@ -107,7 +115,6 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     } else if (dao != null) {
-                        // FINAL: Home factory - NO geminiRepository
                         val homeFactory = remember(dao) {
                             HomeViewModelFactory(
                                 dao = dao,
@@ -115,7 +122,6 @@ class MainActivity : ComponentActivity() {
                                 syncManager = syncManager
                             )
                         }
-                        // FINAL: Chat factory - all 3 args
                         val chatFactory = remember(dao, aiRepository) {
                             object : ViewModelProvider.Factory {
                                 @Suppress("UNCHECKED_CAST")
@@ -135,6 +141,42 @@ class MainActivity : ComponentActivity() {
                         val homeViewModel: HomeViewModel = viewModel(factory = homeFactory)
                         val chatViewModel: ChatViewModel = viewModel(factory = chatFactory)
 
+                        // ✅ FIX: Tell HomeViewModel when network changes
+                        // This is what makes SettingsPanel show "Not yet synced" offline
+                        DisposableEffect(homeViewModel) {
+                            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+                            // Set initial state immediately
+                            homeViewModel.setOnline(isCurrentlyOnline())
+
+                            val callback = object : ConnectivityManager.NetworkCallback() {
+                                override fun onAvailable(network: Network) {
+                                    homeViewModel.setOnline(true)
+                                }
+                                override fun onLost(network: Network) {
+                                    homeViewModel.setOnline(false)
+                                }
+                                override fun onCapabilitiesChanged(
+                                    network: Network,
+                                    networkCapabilities: NetworkCapabilities
+                                ) {
+                                    val hasInternet = networkCapabilities.hasCapability(
+                                        NetworkCapabilities.NET_CAPABILITY_VALIDATED
+                                    )
+                                    homeViewModel.setOnline(hasInternet)
+                                }
+                            }
+
+                            val request = NetworkRequest.Builder()
+                                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                                .build()
+                            cm.registerNetworkCallback(request, callback)
+
+                            onDispose {
+                                runCatching { cm.unregisterNetworkCallback(callback) }
+                            }
+                        }
+
                         HomeScreen(
                             viewModel = homeViewModel,
                             chatViewModel = chatViewModel
@@ -144,9 +186,8 @@ class MainActivity : ComponentActivity() {
                     if (showCrashDialog) {
                         CrashReportDialog(
                             crashText = crashText,
-                            onCopy = { /* CrashReportDialog already copies to clipboard */ },
+                            onCopy = { },
                             onClear = {
-                                // FIXED: CrashReporter has clear(), not clearLastCrash() / clearLastNonFatal()
                                 CrashReporter.clear(this@MainActivity)
                                 crashText = ""
                                 showCrashDialog = false
