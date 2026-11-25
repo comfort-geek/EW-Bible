@@ -64,10 +64,10 @@ class AiRepository {
     private var cachedAt = 0L
     private val WEB_CACHE_MS = 10 * 60 * 1000L
 
-    // ===== 10/10: ONE style rule, ONE regex, ONE prompt builder =====
+    // ===== FIXED: Bold Title + Sources =====
 
     private companion object {
-        const val STYLE_RULE = "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write short, warm, clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. Use **Bold Title:** at the start of a paragraph when you start a new idea. Do NOT use bullet points, dashes, or numbered lists. Do NOT add a 'Sources:' section. Do NOT list links at the end."
+        const val STYLE_RULE = "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write short, warm, clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. When you start a new idea, start the paragraph with a bold heading on its own line, like **Economic Impact**. Never write the words 'Bold Title:' or 'Bold Title'. Do NOT use bullet points, dashes, or numbered lists. For BIBLE and GENERAL answers, do NOT add a Sources section. For NEWS / FACT answers, you MUST end with a Sources section with at least 2 sources."
 
         val BIBLE_BOOKS = listOf(
             "genesis", "exodus", "leviticus", "numbers", "deuteronomy",
@@ -250,7 +250,7 @@ class AiRepository {
                 val body = JSONObject()
                     .put("query", query)
                     .put("search_depth", "basic")
-                    .put("max_results", 2)
+                    .put("max_results", 3)
                     .put("include_answer", true)
                     .put("time_range", timeRange)
                     .toString()
@@ -263,12 +263,16 @@ class AiRepository {
                 if (answer.isNotBlank()) sb.append("TAVILY ANSWER: $answer\n\n")
                 val results = json.optJSONArray("results")
                 if (results != null) {
-                    for (i in 0 until minOf(results.length(), 2)) {
+                    for (i in 0 until minOf(results.length(), 3)) {
                         val r = results.getJSONObject(i)
-                        sb.append("${r.optString("title")}: ${r.optString("content").take(400)}\nPublished: ${r.optString("published_date")}\n\n")
+                        sb.append("SOURCE ${i + 1}:\n")
+                        sb.append("Title: ${r.optString("title")}\n")
+                        sb.append("URL: ${r.optString("url")}\n")
+                        sb.append("Content: ${r.optString("content").take(500)}\n")
+                        sb.append("Published: ${r.optString("published_date")}\n\n")
                     }
                 }
-                val out = sb.toString().take(2000)
+                val out = sb.toString().take(3000)
                 if (out.isNotBlank()) {
                     cachedQuery = query.trim().lowercase()
                     cachedWeb = out
@@ -299,7 +303,7 @@ class AiRepository {
             _lastProvider.value = provider
             var gotAnything = false
             try {
-                val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                     stream.collect { chunk ->
                         if (chunk.isNotEmpty()) { gotAnything = true; emit(chunk) }
                     }
@@ -427,10 +431,10 @@ class AiRepository {
         }
 
         val contextRule = when (context) {
-            ContextType.BIBLE -> "CONTEXT: BIBLE. Answer only from Scripture. Quote $translation. If the question is about the Bible, cite the Bible reference instead, like 2 Samuel 18:9-15. Do NOT add news, jobs, or politics. End with application."
-            ContextType.BREAKDOWN -> "CONTEXT: BREAKDOWN. Break into 3-5 portions as instructed."
-            ContextType.NEWS -> "CONTEXT: NEWS / FACT. Answer ONLY from WEB SEARCH RESULTS. If you used a web result, just mention the source naturally in one sentence, like 'According to Reuters...'. Do NOT quote Bible verses. Do NOT turn it into a sermon. Do NOT add prayer at the end."
-            ContextType.GENERAL -> "CONTEXT: GENERAL. Answer clearly and helpfully. Do NOT force Bible verses."
+            ContextType.BIBLE -> "CONTEXT: BIBLE. Answer only from Scripture. Quote $translation. If the question is about the Bible, cite the Bible reference instead, like 2 Samuel 18:9-15. Do NOT add news, jobs, or politics. End with application. Do NOT add a Sources section."
+            ContextType.BREAKDOWN -> "CONTEXT: BREAKDOWN. Break into 3-5 portions as instructed. Do NOT add a Sources section."
+            ContextType.NEWS -> "CONTEXT: NEWS / FACT. Answer ONLY from WEB SEARCH RESULTS. Do NOT quote Bible verses. Do NOT turn it into a sermon. Do NOT add prayer at the end. At the very end, you MUST add a Sources section. Format it exactly like this:\n\n**Sources**\nSource 1 - [Title from SOURCE 1](URL from SOURCE 1)\nSource 2 - [Title from SOURCE 2](URL from SOURCE 2)\n\nUse at least 2 different sources if 2 or more are given. If only 1 source is given, use only that 1. Use ONLY the URLs given in WEB SEARCH RESULTS. Never invent a URL, title, or date."
+            ContextType.GENERAL -> "CONTEXT: GENERAL. Answer clearly and helpfully. Do NOT force Bible verses. Do NOT add a Sources section."
         }
 
         val sb = StringBuilder()
@@ -439,7 +443,7 @@ class AiRepository {
         sb.append("$contextRule\n$lengthRule\n\n")
         if (bibleContext.isNotBlank() && context != ContextType.NEWS) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1000)}\n\n")
         if (webContext.isNotBlank()) {
-            sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results for factual claims. If the results do NOT contain the answer, say 'Please check your connection and try again.' and do NOT guess names, dates, or election results. Never invent a president, election result, or date:\n${webContext.take(2000)}\n\n")
+            sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results for factual claims. If the results do NOT contain the answer, say 'Please check your connection and try again.' and do NOT guess names, dates, or election results. Never invent a president, election result, or date:\n${webContext.take(3000)}\n\n")
         } else if (context == ContextType.NEWS) {
             sb.append("No web results were available. Do NOT guess names, dates, or election results. If you do not know the fact, say 'Please check your connection and try again.'\n\n")
         }
@@ -454,22 +458,38 @@ class AiRepository {
         return sb.toString()
     }
 
+    // ===== FIX 2: cleanMarkdown - strips **Bold Title:** fully, keeps **bold** + links =====
     private fun cleanMarkdown(text: String): String {
-        val cleaned = text
+        var cleaned = text
+            .replace("**Bold Title:**", "")
+            .replace("**Bold Title**", "")
+            .replace("Bold Title:", "")
+            .replace("Bold Title", "")
             .replace("__", "")
             .replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "")
             .replace("`", "")
+        // Keep **bold** and [Title](URL) links - do NOT strip them
         return cleaned.lines().joinToString("\n") { line ->
             var l = line.trimStart()
-            l = l.removePrefix("- ").removePrefix("* ").removePrefix("• ").removePrefix("> ")
-            l = l.replace(Regex("^\\d+\\.\\s"), "")
-            l = l.replace(Regex("^\\d+\\)\\s"), "")
+            if (!l.startsWith("Source ")) {
+                l = l.removePrefix("- ").removePrefix("* ").removePrefix("• ").removePrefix("> ")
+                l = l.replace(Regex("^\\d+\\.\\s"), "")
+                l = l.replace(Regex("^\\d+\\)\\s"), "")
+            }
             l
         }.trim()
     }
 
+    // ===== FIX 3: cleanStreamingChunk - same cleaning as cleanMarkdown =====
     private fun cleanStreamingChunk(text: String): String {
-        return text.replace("__", "").replace("### ", "").replace("## ", "").replace("# ", "").replace("`", "")
+        return text
+            .replace("**Bold Title:**", "")
+            .replace("**Bold Title**", "")
+            .replace("Bold Title:", "")
+            .replace("Bold Title", "")
+            .replace("__", "")
+            .replace("### ", "").replace("## ", "").replace("# ", "")
+            .replace("`", "")
     }
 
     private fun bitmapToBase64(image: Bitmap?): String? {
@@ -501,38 +521,40 @@ class AiRepository {
             }
             val parts = JSONArray().put(JSONObject().put("text", prompt))
             val base64 = bitmapToBase64(image)
-            if (base64 != null) parts.put(JSONObject().put("inlineData", JSONObject().put("mimeType", "image/jpeg").put("data", base64)))
-            val genConfig = JSONObject().put("maxOutputTokens", MAX_TOKENS)
-            if (model == "gemini-4-hydrogen") {
-                genConfig.put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
+            if (base64 != null) {
+                parts.put(JSONObject().put("inline_data", JSONObject().put("mime_type", "image/jpeg").put("data", base64)))
             }
             val body = JSONObject()
                 .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
-                .put("generationConfig", genConfig)
+                .put("generationConfig", JSONObject().put("maxOutputTokens", MAX_TOKENS).put("temperature", 0.7))
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            if (conn.responseCode !in 200..299) {
-                val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull() ?: ""
-                throw Exception("Gemini HTTP ${conn.responseCode}: ${err.take(200)}")
-            }
-            val reader: BufferedReader = conn.inputStream.bufferedReader()
+            if (conn.responseCode !in 200..299) throw Exception("Gemini ${conn.responseCode}")
+            val reader = BufferedReader(conn.inputStream.bufferedReader())
             var line: String?
             while (reader.readLine().also { line = it } != null) {
                 val l = line!!.trim()
-                if (!l.startsWith("data:")) continue
-                val jsonStr = l.removePrefix("data:").trim()
-                if (jsonStr.isEmpty() || jsonStr == "[DONE]") continue
-                val text = JSONObject(jsonStr)
-                    .optJSONArray("candidates")?.optJSONObject(0)
-                    ?.optJSONObject("content")?.optJSONArray("parts")
-                    ?.optJSONObject(0)?.optString("text")
-                if (!text.isNullOrEmpty()) emit(cleanStreamingChunk(text))
+                if (l.isEmpty() || l == "[DONE]") continue
+                val data = if (l.startsWith("data:")) l.removePrefix("data:").trim() else l
+                if (data.isEmpty() || data == "[DONE]") continue
+                try {
+                    val json = JSONObject(data)
+                    val candidates = json.optJSONArray("candidates") ?: continue
+                    if (candidates.length() == 0) continue
+                    val content = candidates.getJSONObject(0).optJSONObject("content") ?: continue
+                    val p = content.optJSONArray("parts") ?: continue
+                    for (i in 0 until p.length()) {
+                        val t = p.getJSONObject(i).optString("text")
+                        if (t.isNotEmpty()) emit(cleanStreamingChunk(t))
+                    }
+                } catch (_: Exception) { }
             }
-        } catch (e: CancellationException) { throw e }
-        finally { runCatching { conn?.disconnect() } }
-    }.flowOn(Dispatchers.IO)
+        } finally {
+            runCatching { conn?.disconnect() }
+        }
+    }
 
-    private fun tryGroqStreaming(model: String, prompt: String, isBreakdown: Boolean = false): Flow<String> = flow {
+    private fun tryGroqStreaming(model: String, prompt: String, isBreakdown: Boolean): Flow<String> = flow {
         var conn: HttpURLConnection? = null
         try {
             val url = URL(PROXY_BASE + "groq")
@@ -544,42 +566,43 @@ class AiRepository {
                 readTimeout = 120000
                 doOutput = true
             }
-            val temp = if (isBreakdown) 0.2 else 0.0
+            val messages = JSONArray()
+                .put(JSONObject().put("role", "system").put("content", STYLE_RULE))
+                .put(JSONObject().put("role", "user").put("content", prompt))
             val body = JSONObject()
                 .put("model", model)
-                .put("temperature", temp)
-                .put("top_p", 1.0)
-                .put("max_tokens", MAX_TOKENS)
+                .put("messages", messages)
                 .put("stream", true)
-                .put("messages", JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", STYLE_RULE))
-                    .put(JSONObject().put("role", "user").put("content", prompt)))
+                .put("max_tokens", MAX_TOKENS)
+                .put("temperature", 0.7)
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            if (conn.responseCode !in 200..299) {
-                val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull() ?: ""
-                throw Exception("Groq HTTP ${conn.responseCode}: ${err.take(200)}")
-            }
-            val reader: BufferedReader = conn.inputStream.bufferedReader()
+            if (conn.responseCode !in 200..299) throw Exception("Groq ${conn.responseCode}")
+            val reader = BufferedReader(conn.inputStream.bufferedReader())
             var line: String?
             while (reader.readLine().also { line = it } != null) {
                 val l = line!!.trim()
-                if (!l.startsWith("data:")) continue
-                val data = l.removePrefix("data:").trim()
+                if (l.isEmpty() || l == "[DONE]") continue
+                val data = if (l.startsWith("data:")) l.removePrefix("data:").trim() else l
                 if (data.isEmpty() || data == "[DONE]") continue
-                val delta = JSONObject(data)
-                    .optJSONArray("choices")?.optJSONObject(0)
-                    ?.optJSONObject("delta")?.optString("content")
-                if (!delta.isNullOrEmpty()) emit(cleanStreamingChunk(delta))
+                try {
+                    val json = JSONObject(data)
+                    val choices = json.optJSONArray("choices") ?: continue
+                    if (choices.length() == 0) continue
+                    val delta = choices.getJSONObject(0).optJSONObject("delta")
+                    val content = delta?.optString("content") ?: choices.getJSONObject(0).optJSONObject("message")?.optString("content") ?: ""
+                    if (content.isNotEmpty()) emit(cleanStreamingChunk(content))
+                } catch (_: Exception) { }
             }
-        } catch (e: CancellationException) { throw e }
-        finally { runCatching { conn?.disconnect() } }
-    }.flowOn(Dispatchers.IO)
+        } finally {
+            runCatching { conn?.disconnect() }
+        }
+    }
 
-    private fun tryCloudflareStreaming(model: String, prompt: String, isBreakdown: Boolean = false): Flow<String> = flow {
+    private fun tryCloudflareStreaming(model: String, prompt: String, isBreakdown: Boolean): Flow<String> = flow {
         var conn: HttpURLConnection? = null
         try {
-            val url = URL(PROXY_BASE + "cfai")
+            val url = URL(PROXY_BASE + "cloudflare")
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
@@ -588,47 +611,38 @@ class AiRepository {
                 readTimeout = 120000
                 doOutput = true
             }
-            val temp = if (isBreakdown) 0.2 else 0.0
+            val messages = JSONArray()
+                .put(JSONObject().put("role", "system").put("content", STYLE_RULE))
+                .put(JSONObject().put("role", "user").put("content", prompt))
             val body = JSONObject()
                 .put("model", model)
-                .put("temperature", temp)
-                .put("max_tokens", MAX_TOKENS)
+                .put("messages", messages)
                 .put("stream", true)
-                .put("messages", JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", STYLE_RULE))
-                    .put(JSONObject().put("role", "user").put("content", prompt)))
+                .put("max_tokens", MAX_TOKENS)
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            if (conn.responseCode !in 200..299) {
-                val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull() ?: ""
-                throw Exception("Cloudflare HTTP ${conn.responseCode}: ${err.take(200)}")
-            }
-            val reader: BufferedReader = conn.inputStream.bufferedReader()
+            if (conn.responseCode !in 200..299) throw Exception("Cloudflare ${conn.responseCode}")
+            val reader = BufferedReader(conn.inputStream.bufferedReader())
             var line: String?
             while (reader.readLine().also { line = it } != null) {
                 val l = line!!.trim()
-                if (l.isEmpty()) continue
-                // Workers AI can return SSE: data: {"response":"..."} OR OpenAI-style choices
-                val jsonStr = if (l.startsWith("data:")) l.removePrefix("data:").trim() else l
-                if (jsonStr.isEmpty() || jsonStr == "[DONE]") continue
+                if (l.isEmpty() || l == "[DONE]") continue
+                val data = if (l.startsWith("data:")) l.removePrefix("data:").trim() else l
+                if (data.isEmpty() || data == "[DONE]") continue
                 try {
-                    val obj = JSONObject(jsonStr)
-                    // 1. Workers AI native: {"response":"..."}
-                    val resp = obj.optString("response")
-                    if (resp.isNotEmpty()) { emit(cleanStreamingChunk(resp)); continue }
-                    // 2. OpenAI-style: choices[0].delta.content
-                    val delta = obj.optJSONArray("choices")?.optJSONObject(0)
-                        ?.optJSONObject("delta")?.optString("content")
-                    if (!delta.isNullOrEmpty()) { emit(cleanStreamingChunk(delta)); continue }
-                    // 3. Non-streaming: {"result":{"response":"..."}}
-                    val resultResp = obj.optJSONObject("result")?.optString("response")
-                    if (!resultResp.isNullOrEmpty()) { emit(cleanStreamingChunk(resultResp)); continue }
-                } catch (_: Exception) {
-                    // If whole body is plain text, emit it
-                    if (!jsonStr.startsWith("{")) emit(cleanStreamingChunk(jsonStr))
-                }
+                    val json = JSONObject(data)
+                    var content = json.optJSONObject("result")?.optString("response") ?: ""
+                    if (content.isEmpty()) {
+                        val choices = json.optJSONArray("choices")
+                        if (choices != null && choices.length() > 0) {
+                            content = choices.getJSONObject(0).optJSONObject("delta")?.optString("content") ?: ""
+                        }
+                    }
+                    if (content.isNotEmpty()) emit(cleanStreamingChunk(content))
+                } catch (_: Exception) { }
             }
-        } catch (e: CancellationException) { throw e }
-        finally { runCatching { conn?.disconnect() } }
-    }.flowOn(Dispatchers.IO)
+        } finally {
+            runCatching { conn?.disconnect() }
+        }
+    }
 }
