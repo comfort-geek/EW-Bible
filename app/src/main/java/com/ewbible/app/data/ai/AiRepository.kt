@@ -338,6 +338,10 @@ class AiRepository {
                 return false
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
+                // FIX: If we already emitted words, do NOT retry with next model.
+                // Old code returned false here, so next model restarted from word 1
+                // and ViewModel appended it -> "old 2 words" + "new full answer" flash.
+                if (gotAnything) return true
                 errors.add("$provider $model: ${e.message}")
                 if (provider == "Gemini") CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
                 else CrashReporter.groqLog("$provider $model failed: ${e.message}")
