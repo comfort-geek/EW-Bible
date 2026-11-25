@@ -274,7 +274,11 @@ fun AiChatScreen(
 
     val gray = remember { Color.Gray }
     val titleText = "Ask Anything"
-    val thinkingText = "Thinking..."
+    val thinkingText = if (!state.lastProvider.isNullOrBlank()) {
+        "Thinking... ${state.lastProvider}"
+    } else {
+        "Thinking..."
+    }
 
     if (showHistory) {
         ModalBottomSheet(
@@ -375,11 +379,7 @@ fun AiChatScreen(
                 items(state.messages, key = { it.id }, contentType = { if (it.isUser) "user" else "ai" }) { msg ->
                     MessageBubble(text = msg.text, isUser = msg.isUser, textColor = textColor, gold = gold, panel = panel)
                 }
-                val lastMsg = state.messages.lastOrNull()
-                val isDuplicate = lastMsg != null && !lastMsg.isUser &&
-                    state.streamingText.isNotEmpty() &&
-                    cleanMarkdownForDisplay(lastMsg.text) == cleanMarkdownForDisplay(state.streamingText)
-                if (state.isLoading && !isDuplicate) {
+                if (state.isLoading) {
                     item(key = "loading-${state.currentChatId}", contentType = "loading") {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                             Box(
