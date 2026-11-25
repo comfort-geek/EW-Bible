@@ -31,7 +31,7 @@ data class ChatState(
     val streamingText: String = "",
     val dailyCount: Int = 0,
     val error: String? = null,
-    val aiProvider: String = "Gemini",
+    val aiProvider: String = "",
     val chatsLoaded: Boolean = false
 )
 
@@ -279,7 +279,7 @@ class ChatViewModel(
         val userId = withContext(Dispatchers.IO) { bibleDao.insertMessage(userMsg) }
         if (isStillCurrent(chatId)) {
             _state.update {
-                it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
+                it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", aiProvider = "", error = null, dailyCount = todayCount)
             }
         }
         viewModelScope.launch(Dispatchers.IO) {
