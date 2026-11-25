@@ -9,5 +9,9 @@
     "qwen/qwen3.8-27b",
     "openai/gpt-oss-20b"
   ],
-  "version": 4
+  "cloudflare": [
+    "@cf/meta/llama-3.3-70b-instruct",
+    "@cf/meta/llama-3-8b-instruct"
+  ],
+  "version": 5
 }
