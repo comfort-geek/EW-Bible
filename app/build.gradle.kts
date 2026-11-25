@@ -27,9 +27,7 @@ android {
         targetSdk = 36
         versionCode = 3
         versionName = "1.2"
-        buildConfigField("String", "GEMINI_API_KEY", "\"${System.getenv("GEMINI_API_KEY") ?: ""}\"")
-        buildConfigField("String", "GROQ_API_KEY", "\"${System.getenv("GROQ_API_KEY") ?: ""}\"")
-        buildConfigField("String", "TAVILY_API_KEY", "\"${System.getenv("TAVILY_API_KEY") ?: ""}\"")
+        // REMOVED: GEMINI / GROQ / TAVILY keys - now live only in Cloudflare Worker, not in app
     }
     buildTypes {
         debug {
