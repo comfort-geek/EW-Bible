@@ -22,7 +22,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -203,8 +202,9 @@ fun BibleContent(
         val isWide = maxWidth > 600.dp
         val horizontalPadding = if (isWide) 32.dp else 18.dp
 
-        // FIX: key = throw away old chapter completely on swipe.
-        // No reuse, no insert-at-top, new chapter starts fresh at top.
+        // Only fix left: key() throws away old chapter completely on swipe.
+        // New chapter starts fresh at top, summary + Bible together.
+        // No gate, no spinner, summaryLoading ignored on purpose.
         key(safeBookId, safeChapter) {
             Box(
                 modifier = Modifier
@@ -217,63 +217,42 @@ fun BibleContent(
                     modifier = Modifier.fillMaxSize().padding(horizontal = horizontalPadding),
                     contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp)
                 ) {
-                    // FIX: Gate everything on summaryLoading.
-                    // While summary is loading, show ONLY placeholder.
-                    // Don't show new verses yet, or summary will push them down later.
-                    if (summaryLoading) {
-                        item(key = "loading-$safeBookId-$safeChapter", contentType = "loading") {
+                    if (showSummary) {
+                        item(key = "summary-$safeBookId-$safeChapter", contentType = "summary") {
                             Card(
                                 modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                                 colors = CardDefaults.cardColors(containerColor = panel),
                             ) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    CircularProgressIndicator(color = gold)
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Text("Loading...", color = textColor, fontSize = 14.sp)
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(summary!!.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text(summary.whatHappened ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text(summary.application ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
                                 }
                             }
                         }
-                    } else {
-                        if (showSummary) {
-                            item(key = "summary-$safeBookId-$safeChapter", contentType = "summary") {
-                                Card(
-                                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                                    colors = CardDefaults.cardColors(containerColor = panel),
-                                ) {
-                                    Column(modifier = Modifier.padding(16.dp)) {
-                                        Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(summary!!.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                        Text(summary.whatHappened ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                        Text(summary.application ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
-                                    }
-                                }
-                            }
-                        }
+                    }
 
-                        items(
-                            items = versesToShow,
-                            key = { it.verse },
-                            contentType = { "verse" }
-                        ) { verse ->
-                            VerseRow(
-                                verse = verse,
-                                highlight = currentHighlightMap[verse.verse] ?: Color.Transparent,
-                                fontSizeSp = fontSizeSp,
-                                lineHeight = lineHeight,
-                                gold = gold,
-                                textColor = textColor,
-                                onVerseClick = onVerseClick,
-                                onVerseLongClick = onVerseLongClick
-                            )
-                        }
+                    items(
+                        items = versesToShow,
+                        key = { it.verse },
+                        contentType = { "verse" }
+                    ) { verse ->
+                        VerseRow(
+                            verse = verse,
+                            highlight = currentHighlightMap[verse.verse] ?: Color.Transparent,
+                            fontSizeSp = fontSizeSp,
+                            lineHeight = lineHeight,
+                            gold = gold,
+                            textColor = textColor,
+                            onVerseClick = onVerseClick,
+                            onVerseLongClick = onVerseLongClick
+                        )
                     }
                 }
             }
