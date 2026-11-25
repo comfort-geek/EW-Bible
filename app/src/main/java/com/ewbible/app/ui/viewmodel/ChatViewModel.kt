@@ -42,8 +42,6 @@ class ChatViewModel(
 ) : ViewModel() {
 
     private val VERSE_REGEX = Regex("""((?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s+(\d+):(\d+)""")
-
-    // FIX 1: Hoist all Regex out of cleanMarkdown() - was creating 7 Regex per line
     private val NUM_DOT_REGEX = Regex("^\\d+\\.\\s*")
     private val NUM_PAREN_REGEX = Regex("^\\d+\\)\\s*")
     private val SOURCE_BOLD_REGEX = Regex("^\\*\\*Source\\s*\\d*\\s*[-:.]?\\s*\\*\\*\\s*")
@@ -74,7 +72,6 @@ class ChatViewModel(
 
     fun refreshModels(context: Context) {
         viewModelScope.launch {
-            // FIX 2: Network on IO, not Main
             withContext(Dispatchers.IO) {
                 geminiRepository.refreshModels(context)
             }
@@ -86,6 +83,11 @@ class ChatViewModel(
             withContext(Dispatchers.IO) { bibleDao.getTodayUserMessageCountGlobal() }
         }.getOrDefault(0)
 
+    // Helper: are we still on the same chat?
+    private fun isStillCurrent(chatId: Long): Boolean {
+        return _state.value.currentChatId == chatId
+    }
+
     fun loadChats(force: Boolean = false) {
         if (chatsLoading) return
         if (_state.value.chatsLoaded && !force) return
@@ -94,7 +96,6 @@ class ChatViewModel(
             try {
                 val chats = withContext(Dispatchers.IO) { bibleDao.getAllChatsSync() }
                 _state.update { it.copy(chats = chats, chatsLoaded = true) }
-                // FIX: Cloud fetch on IO, don't block UI
                 val cloud = withContext(Dispatchers.IO) { syncManager?.getChatList()?.getOrNull() } ?: return@launch
                 for (c in cloud) {
                     val localId = c.chatId.toLongOrNull() ?: continue
@@ -111,9 +112,11 @@ class ChatViewModel(
     }
 
     fun startNewChat(title: String = "New Chat", type: String = "general", context: String = "", currentRef: String = "") {
+        // New chat = you DID leave old chat, so cancel old streaming
+        sendJob?.cancel()
+        sendJob = null
         viewModelScope.launch {
             val ref = if (type == "bible") context.ifBlank { currentRef } else ""
-            // FIX: DB insert on IO
             val id = withContext(Dispatchers.IO) {
                 val chat = ChatEntity(title = title, ref = ref)
                 bibleDao.insertChat(chat)
@@ -130,7 +133,6 @@ class ChatViewModel(
                     chats = listOf(ChatEntity(id = id, title = title, ref = ref)) + it.chats
                 )
             }
-            // FIX: Don't wait for cloud - fire and forget on IO
             viewModelScope.launch(Dispatchers.IO) {
                 runCatching {
                     syncManager?.createChat(
@@ -152,7 +154,13 @@ class ChatViewModel(
     }
 
     fun openChat(chatId: Long) {
+        // SAME chat - do NOT cancel, keep streaming
         if (_state.value.currentChatId == chatId && _state.value.messages.isNotEmpty()) return
+        // DIFFERENT chat - cancel old streaming, you left that chat
+        if (_state.value.currentChatId != null && _state.value.currentChatId != chatId) {
+            sendJob?.cancel()
+            sendJob = null
+        }
         viewModelScope.launch {
             val messages = withContext(Dispatchers.IO) { bibleDao.getMessagesForChatSync(chatId) }
             val todayCount = getGlobalTodayCount()
@@ -164,12 +172,26 @@ class ChatViewModel(
                 ?: "general"
             if (messages.isNotEmpty()) {
                 _state.update {
-                    it.copy(currentChatId = chatId, currentChatType = type, messages = messages, streamingText = "", dailyCount = todayCount)
+                    it.copy(
+                        currentChatId = chatId,
+                        currentChatType = type,
+                        messages = messages,
+                        streamingText = "",
+                        isLoading = false,
+                        dailyCount = todayCount
+                    )
                 }
                 return@launch
             }
             _state.update {
-                it.copy(currentChatId = chatId, currentChatType = type, messages = emptyList(), streamingText = "", dailyCount = todayCount)
+                it.copy(
+                    currentChatId = chatId,
+                    currentChatType = type,
+                    messages = emptyList(),
+                    streamingText = "",
+                    isLoading = false,
+                    dailyCount = todayCount
+                )
             }
             val cloudMsgs = withContext(Dispatchers.IO) { syncManager?.getMessages(chatId.toString())?.getOrNull() } ?: return@launch
             if (cloudMsgs.isNotEmpty()) {
@@ -182,12 +204,20 @@ class ChatViewModel(
                     }
                     list
                 }
-                _state.update { it.copy(messages = restored) }
+                // Only update UI if still on this chat
+                if (isStillCurrent(chatId)) {
+                    _state.update { it.copy(messages = restored) }
+                }
             }
         }
     }
 
     fun deleteChat(chatId: Long) {
+        // If deleting current chat, cancel its streaming
+        if (_state.value.currentChatId == chatId) {
+            sendJob?.cancel()
+            sendJob = null
+        }
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 bibleDao.deleteMessagesForChat(chatId)
@@ -196,7 +226,13 @@ class ChatViewModel(
             chatTypes.remove(chatId)
             chatContexts.remove(chatId)
             _state.update {
-                if (it.currentChatId == chatId) it.copy(currentChatId = null, messages = emptyList(), chats = it.chats.filterNot { c -> c.id == chatId })
+                if (it.currentChatId == chatId) it.copy(
+                    currentChatId = null,
+                    messages = emptyList(),
+                    streamingText = "",
+                    isLoading = false,
+                    chats = it.chats.filterNot { c -> c.id == chatId }
+                )
                 else it.copy(chats = it.chats.filterNot { c -> c.id == chatId })
             }
             viewModelScope.launch(Dispatchers.IO) { runCatching { syncManager?.deleteChat(chatId.toString()) } }
@@ -247,10 +283,12 @@ class ChatViewModel(
 
         val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
         val userId = withContext(Dispatchers.IO) { bibleDao.insertMessage(userMsg) }
-        _state.update {
-            it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
+        // Only touch UI if still on this chat
+        if (isStillCurrent(chatId)) {
+            _state.update {
+                it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
+            }
         }
-        // FIX: Upload in background - don't block streaming start
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 syncManager?.uploadMessage(
@@ -270,7 +308,6 @@ class ChatViewModel(
             }
         }
 
-        // FIX: Build Bible context on IO - getVerseRange + commentary was blocking Main
         val bibleContext = withContext(Dispatchers.IO) {
             if (chatType == "bible" || chatType == "study" || chatType == "prayer") {
                 buildBibleContext(question, currentRef)
@@ -289,24 +326,31 @@ class ChatViewModel(
                 translation = translation
             ).collect { chunk ->
                 fullAnswer.append(chunk)
+                // Only update streaming UI if still on same chat
+                if (!isStillCurrent(chatId)) return@collect
                 val now = System.currentTimeMillis()
                 if (now - lastStreamEmit >= 120) {
                     lastStreamEmit = now
                     _state.update { it.copy(streamingText = fullAnswer.toString()) }
                 }
             }
-            _state.update { it.copy(streamingText = fullAnswer.toString()) }
+            if (isStillCurrent(chatId)) {
+                _state.update { it.copy(streamingText = fullAnswer.toString()) }
+            }
         } catch (e: CancellationException) {
             if (fullAnswer.isNotBlank()) {
                 val partialText = cleanMarkdown(fullAnswer.toString())
                 val partialMsg = MessageEntity(chatId = chatId, text = partialText, isUser = false)
                 val partialId = withContext(Dispatchers.IO) { bibleDao.insertMessage(partialMsg) }
-                _state.update {
-                    it.copy(
-                        messages = it.messages + partialMsg.copy(id = partialId),
-                        isLoading = false,
-                        streamingText = ""
-                    )
+                // Only touch UI if still on same chat
+                if (isStillCurrent(chatId)) {
+                    _state.update {
+                        it.copy(
+                            messages = it.messages + partialMsg.copy(id = partialId),
+                            isLoading = false,
+                            streamingText = ""
+                        )
+                    }
                 }
                 viewModelScope.launch(Dispatchers.IO) {
                     runCatching {
@@ -327,7 +371,9 @@ class ChatViewModel(
                     }
                 }
             } else {
-                _state.update { it.copy(isLoading = false, streamingText = "") }
+                if (isStillCurrent(chatId)) {
+                    _state.update { it.copy(isLoading = false, streamingText = "") }
+                }
             }
             throw e
         } catch (e: Exception) {
@@ -337,20 +383,25 @@ class ChatViewModel(
             } else {
                 "Failed: ${e.message}"
             }
-            _state.update { it.copy(isLoading = false, streamingText = "", error = friendly) }
+            if (isStillCurrent(chatId)) {
+                _state.update { it.copy(isLoading = false, streamingText = "", error = friendly) }
+            }
             return
         }
 
         val answerText = cleanMarkdown(fullAnswer.toString()).ifBlank { "Sorry, I couldn't answer that." }
         val aiMsg = MessageEntity(chatId = chatId, text = answerText, isUser = false)
         val aiId = withContext(Dispatchers.IO) { bibleDao.insertMessage(aiMsg) }
-        _state.update {
-            it.copy(
-                messages = it.messages + aiMsg.copy(id = aiId),
-                isLoading = false,
-                streamingText = "",
-                dailyCount = todayCount + 1
-            )
+        // Only touch UI if still on same chat - if you left, DB already saved, don't touch new chat
+        if (isStillCurrent(chatId)) {
+            _state.update {
+                it.copy(
+                    messages = it.messages + aiMsg.copy(id = aiId),
+                    isLoading = false,
+                    streamingText = "",
+                    dailyCount = todayCount + 1
+                )
+            }
         }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
@@ -409,7 +460,6 @@ class ChatViewModel(
         }
     }
 
-    // FIXED: Now uses pre-compiled Regex - 0 allocations per line
     private fun cleanMarkdown(text: String): String {
         var cleaned = text
             .replace("**Bold Title:**", "")
