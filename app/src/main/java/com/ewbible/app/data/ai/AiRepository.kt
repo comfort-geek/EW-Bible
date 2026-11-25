@@ -2,7 +2,6 @@ package com.ewbible.app.data.ai
 
 import android.content.Context
 import android.graphics.Bitmap
-import com.ewbible.app.BuildConfig
 import com.ewbible.app.CrashReporter
 import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.CancellationException
@@ -29,12 +28,10 @@ class AiRepository {
     private val _lastProvider = MutableStateFlow("Groq")
     val lastProvider: StateFlow<String> = _lastProvider.asStateFlow()
 
-    private val geminiKey: String
-        get() = try { BuildConfig.GEMINI_API_KEY } catch (_: Exception) { "" }
-    private val groqKey: String
-        get() = try { BuildConfig.GROQ_API_KEY } catch (_: Exception) { "" }
-    private val tavilyKey: String
-        get() = try { BuildConfig.TAVILY_API_KEY } catch (_: Exception) { "" }
+    // Proxy - keys live in Cloudflare, not in the app
+    private val PROXY_BASE = "https://exportdefaultasyncfetchrequestenvconsturl.comfortcha34.workers.dev/"
+    private val PROXY_HEADER = "X-EW-App"
+    private val PROXY_VALUE = "ew-bible-v1"
 
     private val REMOTE_MODELS_URL =
         "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
@@ -49,9 +46,14 @@ class AiRepository {
         "qwen/qwen3.8-27b",
         "openai/gpt-oss-20b"
     )
+    private val FALLBACK_CLOUDFLARE = listOf(
+        "@cf/meta/llama-3.3-70b-instruct",
+        "@cf/meta/llama-3-8b-instruct"
+    )
 
     private var remoteGemini = FALLBACK_GEMINI
     private var remoteGroq = FALLBACK_GROQ
+    private var remoteCloudflare = FALLBACK_CLOUDFLARE
     private var remoteVersion = 3
 
     private val STREAM_TIMEOUT_MS = 120000L
@@ -62,12 +64,58 @@ class AiRepository {
     private var cachedAt = 0L
     private val WEB_CACHE_MS = 10 * 60 * 1000L
 
+    // ===== 10/10: ONE style rule, ONE regex, ONE prompt builder =====
+
+    private companion object {
+        const val STYLE_RULE = "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write short, warm, clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. Use **Bold Title:** at the start of a paragraph when you start a new idea. Do NOT use bullet points, dashes, or numbered lists. Do NOT add a 'Sources:' section. Do NOT list links at the end."
+
+        val BIBLE_BOOKS = listOf(
+            "genesis", "exodus", "leviticus", "numbers", "deuteronomy",
+            "joshua", "judges", "ruth", "samuel", "kings", "chronicles",
+            "ezra", "nehemiah", "esther", "job", "psalm", "proverb",
+            "ecclesiastes", "song of solomon", "isaiah", "jeremiah",
+            "lamentations", "ezekiel", "daniel", "hosea", "joel", "amos",
+            "obadiah", "jonah", "micah", "nahum", "habakkuk", "zephaniah",
+            "haggai", "zechariah", "malachi",
+            "matthew", "mark", "luke", "john", "acts", "romans",
+            "corinthians", "galatians", "ephesians", "philippians",
+            "colossians", "thessalonians", "timothy", "titus", "philemon",
+            "hebrews", "james", "peter", "jude", "revelation"
+        )
+
+        val BIBLE_REF_REGEX = Regex("\\b(${BIBLE_BOOKS.joinToString("|")})s?\\s+\\d+")
+        val NUMBERED_BOOK_REGEX = Regex("\\b[12]\\s+(samuel|kings|chronicles|corinthians|thessalonians|timothy|peter|john)\\s+\\d+")
+
+        val BIBLE_WORDS = setOf(
+            "verse", "chapter", "bible", "scripture", "psalm", "proverb",
+            "jesus", "god", "lord", "church", "pastor",
+            "david", "moses", "apostle", "gospel", "sin", "faith",
+            "salvation", "holy spirit", "baptism", "heaven", "hell",
+            "abraham", "isaac", "jacob", "joseph", "samuel", "elijah",
+            "peter", "paul", "john", "mary", "solomon", "noah"
+        )
+
+        val FACTUAL_INTENT = listOf(
+            "who is", "who won", "who was", "who became", "who appointed",
+            "what happened", "what is happening", "latest", "recent", "current",
+            "today", "yesterday", "this week", "this year",
+            "when did", "when will", "how many", "how much",
+            "election", "results", "president", "minister", "government",
+            "job", "jobs", "hiring", "vacancy", "vacancies", "apply", "salary",
+            "news", "pope", "war", "football", "soccer", "score",
+            "price of", "exchange rate", "weather"
+        )
+
+        val NEWS_BREAK_WORDS = listOf("malawi", "election", "news", "job", "president", "what happened", "who won")
+    }
+
     suspend fun refreshModels(context: Context) {
         val prefs = context.getSharedPreferences("ew_models", Context.MODE_PRIVATE)
         try {
             val savedVersion = prefs.getInt("version", 3)
             val savedGemini = prefs.getString("gemini", null)
             val savedGroq = prefs.getString("groq", null)
+            val savedCf = prefs.getString("cloudflare", null)
             if (savedGemini != null) {
                 val arr = JSONArray(savedGemini)
                 if (arr.length() > 0) remoteGemini = (0 until arr.length()).map { arr.getString(it) }
@@ -75,6 +123,10 @@ class AiRepository {
             if (savedGroq != null) {
                 val arr = JSONArray(savedGroq)
                 if (arr.length() > 0) remoteGroq = (0 until arr.length()).map { arr.getString(it) }
+            }
+            if (savedCf != null) {
+                val arr = JSONArray(savedCf)
+                if (arr.length() > 0) remoteCloudflare = (0 until arr.length()).map { arr.getString(it) }
             }
             remoteVersion = savedVersion
         } catch (_: Exception) { }
@@ -91,13 +143,16 @@ class AiRepository {
                 if (newVersion > remoteVersion) {
                     val g = json.optJSONArray("gemini")
                     val q = json.optJSONArray("groq")
+                    val c = json.optJSONArray("cloudflare")
                     if (g != null && g.length() > 0) remoteGemini = (0 until g.length()).map { g.getString(it) }
                     if (q != null && q.length() > 0) remoteGroq = (0 until q.length()).map { q.getString(it) }
+                    if (c != null && c.length() > 0) remoteCloudflare = (0 until c.length()).map { c.getString(it) }
                     remoteVersion = newVersion
                     prefs.edit()
                         .putInt("version", newVersion)
                         .putString("gemini", JSONArray(remoteGemini).toString())
                         .putString("groq", JSONArray(remoteGroq).toString())
+                        .putString("cloudflare", JSONArray(remoteCloudflare).toString())
                         .apply()
                 }
             }
@@ -105,94 +160,94 @@ class AiRepository {
         } catch (_: Exception) { }
     }
 
-    private fun isBibleQuestion(question: String): Boolean {
-        val q = question.lowercase()
-        val bibleWords = listOf(
-            "verse", "chapter", "bible", "scripture", "psalm", "proverb",
-            "jesus", "god", "lord", "pray", "prayer", "church", "pastor",
-            "david", "moses", "apostle", "gospel", "sin", "faith",
-            "salvation", "holy spirit", "baptism", "heaven", "hell",
-            "abraham", "isaac", "jacob", "joseph", "samuel", "elijah",
-            "peter", "paul", "john", "mary", "solomon", "noah"
-        )
-        return bibleWords.any { q.contains(it) }
-    }
+    private enum class ContextType { BIBLE, BREAKDOWN, NEWS, GENERAL }
+
+    private fun isBibleQuestion(q: String): Boolean = BIBLE_WORDS.any { q.contains(it) }
+
+    private fun isBibleReference(q: String): Boolean =
+        BIBLE_REF_REGEX.containsMatchIn(q) || NUMBERED_BOOK_REGEX.containsMatchIn(q)
 
     private fun needsBreakdown(question: String): Boolean {
         val q = question.lowercase().trim()
-        return q.contains("break down") ||
-            q.contains("breakdown") ||
-            q.contains("break it down") ||
-            q.contains("verse by verse") ||
-            q.contains("portion") ||
-            q.contains("in portions") ||
-            q.contains("in parts") ||
-            q.contains("step by step") ||
-            q.contains("explain this passage") ||
-            q.contains("explain this chapter") ||
-            q.contains("deep study") ||
-            q.contains("deep dive") ||
-            q.contains("go deep")
+        return q.contains("break down") || q.contains("breakdown") || q.contains("break it down") ||
+            q.contains("verse by verse") || q.contains("portion") || q.contains("in portions") ||
+            q.contains("in parts") || q.contains("step by step") ||
+            q.contains("explain this passage") || q.contains("explain this chapter") ||
+            q.contains("deep study") || q.contains("deep dive") || q.contains("go deep")
     }
 
-    private fun needsWebSearch(question: String): Boolean {
+    private fun detectContext(
+        question: String,
+        currentRef: String = "",
+        history: List<MessageEntity> = emptyList()
+    ): ContextType {
         val q = question.lowercase().trim()
+        if (q == "hi" || q == "hello" || q == "hey" || q == "amen") return ContextType.GENERAL
+        if (needsBreakdown(q)) return ContextType.BREAKDOWN
+        if (isBibleReference(q)) return ContextType.BIBLE
+        if (q.contains("in the bible") || q.contains("in bible") || q.contains("according to the bible") ||
+            q.contains("bible says") || q.contains("from scripture") || q.contains("in scripture") ||
+            q.contains("bible verse") || q.contains("bible passage")) return ContextType.BIBLE
 
-        // 1. NEVER SEARCH - creative / spiritual / meaning
-        if (q == "hi" || q == "hello" || q == "hey" || q == "amen") return false
-        if (q.contains("write a prayer") || q.contains("write me a prayer")) return false
-        if (q.contains("write a sermon") || q.contains("pray for me")) return false
-        if (q.contains("what does") && q.contains("mean")) return false
-        if (q.contains("explain") && (q.contains("verse") || q.contains("chapter") || q.contains("passage") || q.contains("psalm"))) return false
-        if (q.contains("meaning of") || q.contains("lesson from") || q.contains("teach me") || q.contains("devotion")) return false
-        if (q.contains("break down") || q.contains("breakdown") || q.contains("verse by verse")) return false
+        if ((q.contains("what does") || q.contains("want does") || q.contains("what dose") || q.contains("wht does")) && q.contains("mean")) return ContextType.BIBLE
+        if (q.contains("does") && q.contains("mean") && isBibleQuestion(q)) return ContextType.BIBLE
+        if (q.contains("meaning of") || q.contains("lesson from") || q.contains("teach me") || q.contains("devotion")) return ContextType.BIBLE
 
-        // 2. ALWAYS SEARCH - fact that can change, no name needed
-        val factualIntent = listOf(
-            "who is", "who won", "who was", "who became", "who appointed",
-            "what happened", "what is happening", "latest", "recent", "current",
-            "today", "yesterday", "this week", "this year",
-            "when did", "when will", "how many", "how much",
-            "election", "results", "president", "minister", "government",
-            "job", "jobs", "hiring", "vacancy", "vacancies", "apply", "salary",
-            "news", "pope", "war", "football", "soccer", "score",
-            "price of", "exchange rate", "weather"
-        )
-        if (factualIntent.any { q.contains(it) }) return true
+        val isReferring = q.contains("this") || q.contains("that") || q.contains("it") ||
+            q.contains("verse") || q.contains("chapter") || q.contains("passage")
+        val isMeaningIntent = q.contains("mean") || q.contains("explain") || q.contains("teach") ||
+            q.contains("lesson") || q.contains("understand") || q.contains("interpret")
+        if (isReferring && isMeaningIntent) return ContextType.BIBLE
+        if (q.contains("explain") && (q.contains("verse") || q.contains("chapter") || q.contains("passage") || q.contains("psalm"))) return ContextType.BIBLE
 
-        // 3. Pure Bible - no search
-        if (isBibleQuestion(q)) return false
+        val ref = currentRef.lowercase().trim()
+        val isInBibleView = ref.isNotBlank() && ref != "home" && !ref.contains("chat")
+        if (isInBibleView && q.length < 80) {
+            if (isMeaningIntent || q.contains("today") || q.contains("now") || q.contains("for me") || q.contains("apply")) {
+                if (NEWS_BREAK_WORDS.none { q.contains(it) }) return ContextType.BIBLE
+            }
+        }
 
-        return false
+        if (history.isNotEmpty()) {
+            val lastTwo = history.takeLast(2).joinToString(" ") { it.text.lowercase() }
+            val wasBible = lastTwo.contains("verse") || lastTwo.contains("bible") || lastTwo.contains("psalm") ||
+                lastTwo.contains("romans") || lastTwo.contains("scripture") || lastTwo.contains("chapter")
+            if (wasBible && NEWS_BREAK_WORDS.none { q.contains(it) }) {
+                if (isMeaningIntent || q.contains("it") || q.contains("this") || q.contains("today") || q.contains("for me")) return ContextType.BIBLE
+            }
+        }
+
+        if (FACTUAL_INTENT.any { q.contains(it) }) return ContextType.NEWS
+        if (isBibleQuestion(q)) return ContextType.BIBLE
+        return ContextType.GENERAL
     }
 
-    private suspend fun getWebContext(question: String): String {
-        if (!needsWebSearch(question)) return ""
+    private fun needsWebSearch(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): Boolean =
+        detectContext(question, currentRef, history) == ContextType.NEWS
+
+    private suspend fun getWebContext(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): String {
+        if (!needsWebSearch(question, currentRef, history)) return ""
         val key = question.trim().lowercase()
-        if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) {
-            return cachedWeb
-        }
+        if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) return cachedWeb
         val lower = question.lowercase()
         val timeRange = if (lower.contains("today") || lower.contains("yesterday") || lower.contains("latest") || lower.contains("news")) "week" else "month"
-        val result = withTimeoutOrNull(4000L) { searchTavily(question, timeRange) } ?: ""
-        return result
+        return withTimeoutOrNull(4000L) { searchTavily(question, timeRange) } ?: ""
     }
 
     private suspend fun searchTavily(query: String, timeRange: String = "month"): String {
-        if (tavilyKey.isBlank()) return ""
         return try {
             var conn: HttpURLConnection? = null
             try {
-                val searchUrl = URL("https://api.tavily.com/search")
+                val searchUrl = URL(PROXY_BASE + "search")
                 conn = (searchUrl.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty(PROXY_HEADER, PROXY_VALUE)
                     connectTimeout = 3000
                     readTimeout = 4000
                     doOutput = true
                 }
                 val body = JSONObject()
-                    .put("api_key", tavilyKey)
                     .put("query", query)
                     .put("search_depth", "basic")
                     .put("max_results", 2)
@@ -223,7 +278,7 @@ class AiRepository {
             } finally {
                 runCatching { conn?.disconnect() }
             }
-        } catch (e: Exception) { "" }
+        } catch (_: Exception) { "" }
     }
 
     fun askStreaming(
@@ -234,10 +289,10 @@ class AiRepository {
         bibleContext: String,
         translation: String = "NKJV"
     ): Flow<String> = flow {
-        val webContext = if (image == null) getWebContext(question) else ""
-
-        val isBreakdown = needsBreakdown(question)
-        val basePrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext, isBreakdown)
+        val context = detectContext(question, currentRef, history)
+        val webContext = if (image == null) getWebContext(question, currentRef, history) else ""
+        val isBreakdown = context == ContextType.BREAKDOWN
+        val basePrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext, isBreakdown, context)
         val errors = mutableListOf<String>()
 
         suspend fun tryOne(provider: String, model: String, stream: Flow<String>): Boolean {
@@ -246,10 +301,7 @@ class AiRepository {
             try {
                 val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                     stream.collect { chunk ->
-                        if (chunk.isNotEmpty()) {
-                            gotAnything = true
-                            emit(chunk)
-                        }
+                        if (chunk.isNotEmpty()) { gotAnything = true; emit(chunk) }
                     }
                     true
                 } ?: false
@@ -259,7 +311,7 @@ class AiRepository {
             catch (e: Exception) {
                 errors.add("$provider $model: ${e.message}")
                 if (provider == "Gemini") CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
-                else CrashReporter.groqLog("Groq $model failed: ${e.message}")
+                else CrashReporter.groqLog("$provider $model failed: ${e.message}")
                 return false
             }
         }
@@ -271,16 +323,16 @@ class AiRepository {
             emit("Could not read the image. Please try again.")
             return@flow
         }
-
-        if (groqKey.isNotBlank()) {
-            for (model in remoteGroq) {
-                if (tryOne("Groq", model, tryGroqStreaming(model, basePrompt, isBreakdown))) return@flow
-            }
+        // ORDER: Groq -> Cloudflare -> Gemini last
+        for (model in remoteGroq) {
+            if (tryOne("Groq", model, tryGroqStreaming(model, basePrompt, isBreakdown))) return@flow
+        }
+        for (model in remoteCloudflare) {
+            if (tryOne("Cloudflare", model, tryCloudflareStreaming(model, basePrompt, isBreakdown))) return@flow
         }
         for (model in remoteGemini) {
             if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, null))) return@flow
         }
-
         if (errors.isNotEmpty() && errors.all { it.contains("429") }) {
             emit("Free daily limit reached for today. Please try again tomorrow.")
         } else {
@@ -289,24 +341,10 @@ class AiRepository {
     }.flowOn(Dispatchers.IO)
 
     suspend fun askQuestion(prompt: String, image: Bitmap? = null): Result<String> {
+        val context = detectContext(prompt)
         val webContext = if (image == null) getWebContext(prompt) else ""
-        val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
-        val isBreakdown = needsBreakdown(prompt)
-        val linkRule = if (webContext.isNotBlank()) {
-            "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write in this style: short, warm, and clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. Use **Bold Title:** at the start of a paragraph when you start a new idea. Do NOT use bullet points, dashes, or numbered lists. Do NOT add a 'Sources:' section. Do NOT list links at the end. If you used a web result, just mention the source naturally in one sentence, like 'According to Reuters...'"
-        } else {
-            "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write in this style: short, warm, and clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. Use **Bold Title:** at the start of a paragraph when you start a new idea. Do NOT use bullet points, dashes, or numbered lists. Do NOT add a 'Sources:' section with websites. Do NOT list blog links. If the question is about the Bible, cite the Bible reference instead, like 2 Samuel 18:9-15."
-        }
-        val breakdownRule = if (isBreakdown) {
-            "The user asked for a breakdown. Break the passage/topic into 3 to 5 portions. For EACH portion: Start with 'Portion 1: [Title]' on its own line, then quote the verse/part, then 1 paragraph for meaning, then 1 paragraph for application. Leave a blank line between portions. Do NOT break down if the user did not ask for it."
-        } else {
-            "Do NOT break into portions. Let the length fit the question - a simple question gets 1 short paragraph, a deeper question gets 2 to 3 spaced paragraphs. Always finish your answer fully. Never stop mid-sentence."
-        }
-        val fullPrompt = if (webContext.isNotBlank()) {
-            "Today is $today. $linkRule $breakdownRule WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results. If the results do NOT contain the answer, say 'Please check your connection and try again.' and do NOT guess names, dates, or election results. Never invent a president, election result, or date:\n${webContext}\n\nUser question: $prompt"
-        } else {
-            "Today is $today. $linkRule $breakdownRule User question: $prompt"
-        }
+        val isBreakdown = context == ContextType.BREAKDOWN
+        val fullPrompt = buildPrompt(prompt, "", emptyList(), "", "NKJV", webContext, isBreakdown, context)
         val sb = StringBuilder()
         return try {
             var lastErr: Exception? = null
@@ -326,20 +364,32 @@ class AiRepository {
                 }
                 return Result.failure(Exception("Could not read the image. Please try again."))
             }
-            if (groqKey.isNotBlank()) {
-                for (model in remoteGroq) {
-                    _lastProvider.value = "Groq"
-                    try {
-                        sb.clear()
-                        val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                            tryGroqStreaming(model, fullPrompt, isBreakdown).collect { sb.append(it) }
-                            true
-                        } ?: false
-                        if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
-                        if (sb.isNotBlank() && !completed) continue
-                    } catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { lastErr = e; sb.clear() }
-                }
+            // ORDER: Groq -> Cloudflare -> Gemini last
+            for (model in remoteGroq) {
+                _lastProvider.value = "Groq"
+                try {
+                    sb.clear()
+                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                        tryGroqStreaming(model, fullPrompt, isBreakdown).collect { sb.append(it) }
+                        true
+                    } ?: false
+                    if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                    if (sb.isNotBlank() && !completed) continue
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { lastErr = e; sb.clear() }
+            }
+            for (model in remoteCloudflare) {
+                _lastProvider.value = "Cloudflare"
+                try {
+                    sb.clear()
+                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                        tryCloudflareStreaming(model, fullPrompt, isBreakdown).collect { sb.append(it) }
+                        true
+                    } ?: false
+                    if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                    if (sb.isNotBlank() && !completed) continue
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { lastErr = e; sb.clear() }
             }
             for (model in remoteGemini) {
                 _lastProvider.value = "Gemini"
@@ -365,31 +415,32 @@ class AiRepository {
         bibleContext: String,
         translation: String,
         webContext: String = "",
-        isBreakdown: Boolean = false
+        isBreakdown: Boolean = false,
+        context: ContextType = ContextType.GENERAL
     ): String {
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
 
-        val linkRule = if (webContext.isNotBlank()) {
-            "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write in this style: short, warm, and clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. Use **Bold Title:** at the start of a paragraph when you start a new idea. Do NOT use bullet points, dashes, or numbered lists. Do NOT add a 'Sources:' section. Do NOT list links at the end. If you used a web result, just mention the source naturally in one sentence, like 'According to Reuters...'"
-        } else {
-            "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write in this style: short, warm, and clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. Use **Bold Title:** at the start of a paragraph when you start a new idea. Do NOT use bullet points, dashes, or numbered lists. Do NOT add a 'Sources:' section with websites. Do NOT list blog links. If the question is about the Bible, cite the Bible reference instead, like 2 Samuel 18:9-15."
-        }
-
         val lengthRule = if (isBreakdown) {
-            "The user asked for a breakdown. Break the passage or topic into 3 to 5 portions. For EACH portion: Start with 'Portion 1: [Title]' on its own line, then quote the verse or key part, then 1 paragraph for meaning, then 1 paragraph for application. Leave a blank line between portions. Always finish fully."
+            "The user asked for a breakdown. Break the passage or topic into 3 to 5 portions. For EACH portion: Start with 'Portion 1: [Title]' on its own line, then quote the verse/part, then 1 paragraph for meaning, then 1 paragraph for application. Leave a blank line between portions. Always finish fully."
         } else {
             "Do NOT break into portions. Let the length fit the question - a simple question gets 1 short paragraph, a deeper question gets 2 to 3 spaced paragraphs. Always finish your answer fully. Never stop mid-sentence or mid-verse."
         }
 
+        val contextRule = when (context) {
+            ContextType.BIBLE -> "CONTEXT: BIBLE. Answer only from Scripture. Quote $translation. If the question is about the Bible, cite the Bible reference instead, like 2 Samuel 18:9-15. Do NOT add news, jobs, or politics. End with application."
+            ContextType.BREAKDOWN -> "CONTEXT: BREAKDOWN. Break into 3-5 portions as instructed."
+            ContextType.NEWS -> "CONTEXT: NEWS / FACT. Answer ONLY from WEB SEARCH RESULTS. If you used a web result, just mention the source naturally in one sentence, like 'According to Reuters...'. Do NOT quote Bible verses. Do NOT turn it into a sermon. Do NOT add prayer at the end."
+            ContextType.GENERAL -> "CONTEXT: GENERAL. Answer clearly and helpfully. Do NOT force Bible verses."
+        }
+
         val sb = StringBuilder()
-        sb.append("You are the EW Bible assistant. Today is $today. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
-        sb.append("Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. You are the EW Bible assistant.\n")
-        sb.append("If the question is about the Bible, answer biblically and warmly. If the question is about news, Malawi, jobs, or general topics, answer clearly and helpfully without forcing Bible verses or turning it into a sermon. Only mention the Bible if the user asked about it or if the question is clearly biblical.\n")
-        sb.append("$linkRule\n$lengthRule\n\n")
-        if (bibleContext.isNotBlank()) sb.append("BIBLE CONTEXT:\n${bibleContext.take(2000)}\n\n")
+        sb.append("Today is $today. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
+        sb.append("$STYLE_RULE\n")
+        sb.append("$contextRule\n$lengthRule\n\n")
+        if (bibleContext.isNotBlank() && context != ContextType.NEWS) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1000)}\n\n")
         if (webContext.isNotBlank()) {
             sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results for factual claims. If the results do NOT contain the answer, say 'Please check your connection and try again.' and do NOT guess names, dates, or election results. Never invent a president, election result, or date:\n${webContext.take(2000)}\n\n")
-        } else if (needsWebSearch(question)) {
+        } else if (context == ContextType.NEWS) {
             sb.append("No web results were available. Do NOT guess names, dates, or election results. If you do not know the fact, say 'Please check your connection and try again.'\n\n")
         }
         if (history.isNotEmpty()) {
@@ -404,7 +455,7 @@ class AiRepository {
     }
 
     private fun cleanMarkdown(text: String): String {
-        var cleaned = text
+        val cleaned = text
             .replace("__", "")
             .replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "")
             .replace("`", "")
@@ -439,11 +490,11 @@ class AiRepository {
     private fun tryGeminiStreaming(model: String, prompt: String, image: Bitmap?): Flow<String> = flow {
         var conn: HttpURLConnection? = null
         try {
-            if (geminiKey.isBlank()) throw Exception("No Gemini API key")
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?alt=sse&key=$geminiKey")
+            val url = URL(PROXY_BASE + "gemini?model=$model")
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
+                setRequestProperty(PROXY_HEADER, PROXY_VALUE)
                 connectTimeout = 3000
                 readTimeout = 120000
                 doOutput = true
@@ -484,12 +535,11 @@ class AiRepository {
     private fun tryGroqStreaming(model: String, prompt: String, isBreakdown: Boolean = false): Flow<String> = flow {
         var conn: HttpURLConnection? = null
         try {
-            if (groqKey.isBlank()) throw Exception("No Groq API key")
-            val url = URL("https://api.groq.com/openai/v1/chat/completions")
+            val url = URL(PROXY_BASE + "groq")
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
-                setRequestProperty("Authorization", "Bearer $groqKey")
+                setRequestProperty(PROXY_HEADER, PROXY_VALUE)
                 connectTimeout = 3000
                 readTimeout = 120000
                 doOutput = true
@@ -502,7 +552,7 @@ class AiRepository {
                 .put("max_tokens", MAX_TOKENS)
                 .put("stream", true)
                 .put("messages", JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write in this style: short, warm, and clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. Use **Bold Title:** at the start of a paragraph when you start a new idea. Do NOT use bullet points, dashes, or numbered lists. Do NOT add a 'Sources:' section. Do NOT list links. If you do not know a fact, say you could not verify it."))
+                    .put(JSONObject().put("role", "system").put("content", STYLE_RULE))
                     .put(JSONObject().put("role", "user").put("content", prompt)))
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
@@ -521,6 +571,62 @@ class AiRepository {
                     .optJSONArray("choices")?.optJSONObject(0)
                     ?.optJSONObject("delta")?.optString("content")
                 if (!delta.isNullOrEmpty()) emit(cleanStreamingChunk(delta))
+            }
+        } catch (e: CancellationException) { throw e }
+        finally { runCatching { conn?.disconnect() } }
+    }.flowOn(Dispatchers.IO)
+
+    private fun tryCloudflareStreaming(model: String, prompt: String, isBreakdown: Boolean = false): Flow<String> = flow {
+        var conn: HttpURLConnection? = null
+        try {
+            val url = URL(PROXY_BASE + "cfai")
+            conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty(PROXY_HEADER, PROXY_VALUE)
+                connectTimeout = 3000
+                readTimeout = 120000
+                doOutput = true
+            }
+            val temp = if (isBreakdown) 0.2 else 0.0
+            val body = JSONObject()
+                .put("model", model)
+                .put("temperature", temp)
+                .put("max_tokens", MAX_TOKENS)
+                .put("stream", true)
+                .put("messages", JSONArray()
+                    .put(JSONObject().put("role", "system").put("content", STYLE_RULE))
+                    .put(JSONObject().put("role", "user").put("content", prompt)))
+                .toString()
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode !in 200..299) {
+                val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull() ?: ""
+                throw Exception("Cloudflare HTTP ${conn.responseCode}: ${err.take(200)}")
+            }
+            val reader: BufferedReader = conn.inputStream.bufferedReader()
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                val l = line!!.trim()
+                if (l.isEmpty()) continue
+                // Workers AI can return SSE: data: {"response":"..."} OR OpenAI-style choices
+                val jsonStr = if (l.startsWith("data:")) l.removePrefix("data:").trim() else l
+                if (jsonStr.isEmpty() || jsonStr == "[DONE]") continue
+                try {
+                    val obj = JSONObject(jsonStr)
+                    // 1. Workers AI native: {"response":"..."}
+                    val resp = obj.optString("response")
+                    if (resp.isNotEmpty()) { emit(cleanStreamingChunk(resp)); continue }
+                    // 2. OpenAI-style: choices[0].delta.content
+                    val delta = obj.optJSONArray("choices")?.optJSONObject(0)
+                        ?.optJSONObject("delta")?.optString("content")
+                    if (!delta.isNullOrEmpty()) { emit(cleanStreamingChunk(delta)); continue }
+                    // 3. Non-streaming: {"result":{"response":"..."}}
+                    val resultResp = obj.optJSONObject("result")?.optString("response")
+                    if (!resultResp.isNullOrEmpty()) { emit(cleanStreamingChunk(resultResp)); continue }
+                } catch (_: Exception) {
+                    // If whole body is plain text, emit it
+                    if (!jsonStr.startsWith("{")) emit(cleanStreamingChunk(jsonStr))
+                }
             }
         } catch (e: CancellationException) { throw e }
         finally { runCatching { conn?.disconnect() } }
