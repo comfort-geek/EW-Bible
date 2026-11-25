@@ -105,9 +105,12 @@ fun SettingsPanel(
     var reminderText by remember { mutableStateOf(ReminderManager.getReminderText(context)) }
 
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    // FIX: was delay(1000) - redrew whole panel every second and collided with click = flash
+    // Now only updates every 30s, and stops cleanly when panel closes
     LaunchedEffect(visible) {
+        if (!visible) return@LaunchedEffect
         while (visible) {
-            delay(1000)
+            delay(30000)
             now = System.currentTimeMillis()
         }
     }
@@ -290,8 +293,11 @@ fun SettingsPanel(
                     .background(panel, RoundedCornerShape(10.dp))
                     .combinedClickable(
                         onClick = {
-                            onClose()
+                            // FIX: was onClose() then onOpenAiChat()
+                            // That showed Bible for 1 frame in-between = flash
+                            // Now open AI first, then close panel
                             onOpenAiChat()
+                            onClose()
                         },
                         onLongClick = { showLogs = true }
                     )
