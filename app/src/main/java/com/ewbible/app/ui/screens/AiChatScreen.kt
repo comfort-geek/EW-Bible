@@ -53,7 +53,6 @@ private fun LinkText(
     modifier: Modifier = Modifier
 ) {
     val uriHandler = LocalUriHandler.current
-    // FIX 1: Remove "Source 1 - ", "Source 2: " numbering for display
     val cleanText = remember(text) { cleanSourceNumbering(text) }
     val annotated = remember(cleanText, color) {
         buildAnnotatedString {
@@ -130,7 +129,6 @@ private fun MessageBubble(
     gold: Color,
     panel: Color,
 ) {
-    // FIX 2: Hold to copy - copies CLEAN text, no "Source 1 -"
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val cleanTextForCopy = remember(text) { cleanSourceNumbering(text) }
@@ -209,7 +207,9 @@ fun AiChatScreen(
         }
     }
 
-    LaunchedEffect(state.messages.size, state.isLoading) {
+    // FIXED: Only ONE scroll effect. No more animateScroll vs scrollToItem fighting.
+    // This is what caused the flash back and forth on every question.
+    LaunchedEffect(state.messages.size, state.isLoading, state.streamingText.length) {
         if (state.messages.isEmpty() && !state.isLoading) return@LaunchedEffect
         val lastIndex = if (state.isLoading) state.messages.size else state.messages.size - 1
         if (lastIndex < 0) return@LaunchedEffect
@@ -217,23 +217,14 @@ fun AiChatScreen(
         val lastVisible = visible.lastOrNull()?.index ?: 0
         val isNearBottom = lastVisible >= lastIndex - 2
         if (isNearBottom) {
-            runCatching { listState.animateScrollToItem(lastIndex) }
-        }
-    }
-
-    LaunchedEffect(state.streamingText.length) {
-        if (!state.isLoading || state.streamingText.isEmpty()) return@LaunchedEffect
-        val lastIndex = state.messages.size
-        val visible = listState.layoutInfo.visibleItemsInfo
-        val lastVisible = visible.lastOrNull()?.index ?: 0
-        if (lastVisible >= lastIndex - 2) {
             runCatching { listState.scrollToItem(lastIndex) }
         }
     }
 
     val gray = remember { Color.Gray }
 
-    val titleText = "Ask EW Bible"
+    // FIXED: Title now says Ask Anything
+    val titleText = "Ask Anything"
     val thinkingText = "Thinking..."
 
     if (showHistory) {
