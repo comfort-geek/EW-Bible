@@ -36,7 +36,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.ui.viewmodel.ChatViewModel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -223,29 +222,28 @@ fun AiChatScreen(
         }
     }
 
-    // FIX 1: DON'T reload on every open. Only init once.
-    // Old code: loadChats() + delay(350) + openChat(first) every time = flash empty -> first chat
-    // New: if we already have a chat open, do NOTHING. Keep what user was reading.
+    // FIXED INIT: 2 separate effects, no delay(350), no re-open
+    // 1) Kick off load once
     LaunchedEffect(Unit) {
-        val s = viewModel.state.value
-        if (s.currentChatId != null) return@LaunchedEffect // already open, keep it
-        if (s.chats.isNotEmpty()) return@LaunchedEffect // chats already loaded, wait for user
         viewModel.refreshModels(context)
         viewModel.loadChats()
-        // No delay(350) - that was the visible blank flash
-        // Do NOT auto-open first chat. Let ViewModel decide, or user picks from History.
-        // If you MUST auto-open, do it only if chats were empty at start:
-        // viewModel.startNewChat(currentRef) is now handled by ViewModel after load
+    }
+    // 2) Only when load is DONE and we still have no chat open, open first / create new.
+    LaunchedEffect(state.chatsLoaded) {
+        if (!state.chatsLoaded) return@LaunchedEffect
+        if (state.currentChatId != null) return@LaunchedEffect
+        if (state.chats.isNotEmpty()) {
+            viewModel.openChat(state.chats.first().id)
+        } else {
+            viewModel.startNewChat(currentRef)
+        }
     }
 
-    // FIX 2: Scroll ONLY when message count changes, NOT on every streaming char.
-    // Old code watched streamingText.length -> scrollToItem 20x/sec = flicker
+    // FIXED SCROLL: Scroll only when a real message is added or loading starts/stops.
     LaunchedEffect(state.messages.size, state.isLoading) {
         if (state.messages.isEmpty() && !state.isLoading) return@LaunchedEffect
         val lastIndex = if (state.isLoading) state.messages.size else state.messages.size - 1
         if (lastIndex < 0) return@LaunchedEffect
-        // Small delay lets LazyColumn settle, prevents 1-frame jump
-        delay(50)
         val visible = listState.layoutInfo.visibleItemsInfo
         val lastVisible = visible.lastOrNull()?.index ?: 0
         val isNearBottom = lastVisible >= lastIndex - 2
@@ -254,17 +252,14 @@ fun AiChatScreen(
         }
     }
 
-    // FIX 3: Gentle streaming scroll - max 1 scroll per 300ms, only if user is at bottom
-    LaunchedEffect(state.isLoading) {
+    // Gentle streaming follow: fires only every ~200 chars, not every char - no flash
+    LaunchedEffect(state.streamingText.length / 200) {
         if (!state.isLoading) return@LaunchedEffect
-        while (state.isLoading) {
-            delay(300)
-            val lastIndex = state.messages.size // loading item index
-            val visible = listState.layoutInfo.visibleItemsInfo
-            val lastVisible = visible.lastOrNull()?.index ?: 0
-            if (lastVisible >= lastIndex - 2) {
-                runCatching { listState.scrollToItem(lastIndex) }
-            }
+        val lastIndex = state.messages.size
+        val visible = listState.layoutInfo.visibleItemsInfo
+        val lastVisible = visible.lastOrNull()?.index ?: 0
+        if (lastVisible >= lastIndex - 2) {
+            runCatching { listState.scrollToItem(lastIndex) }
         }
     }
 
