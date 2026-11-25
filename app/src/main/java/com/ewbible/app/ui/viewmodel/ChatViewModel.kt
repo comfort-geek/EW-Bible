@@ -29,7 +29,8 @@ data class ChatState(
     val streamingText: String = "",
     val dailyCount: Int = 0,
     val error: String? = null,
-    val aiProvider: String = "Gemini"
+    val aiProvider: String = "Gemini",
+    val chatsLoaded: Boolean = false
 )
 
 class ChatViewModel(
@@ -49,6 +50,7 @@ class ChatViewModel(
 
     private var sendJob: Job? = null
     private var lastStreamEmit = 0L
+    private var chatsLoading = false
 
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -70,18 +72,27 @@ class ChatViewModel(
     private suspend fun getGlobalTodayCount(): Int =
         runCatching { bibleDao.getTodayUserMessageCountGlobal() }.getOrDefault(0)
 
-    fun loadChats() {
+    // FIX: load only once. Before, every time you opened Ask AI from Settings,
+    // loadChats() re-ran, re-set chats, and raced with openChat() = flash.
+    fun loadChats(force: Boolean = false) {
+        if (chatsLoading) return
+        if (_state.value.chatsLoaded && !force) return
+        chatsLoading = true
         viewModelScope.launch {
-            val chats = bibleDao.getAllChatsSync()
-            _state.update { it.copy(chats = chats) }
-            val cloud = syncManager?.getChatList()?.getOrNull() ?: return@launch
-            for (c in cloud) {
-                val localId = c.chatId.toLongOrNull() ?: continue
-                chatTypes[localId] = c.type.ifBlank { "general" }
-                chatContexts[localId] = c.context.ifBlank { c.bibleRef }
-            }
-            _state.value.currentChatId?.let { id ->
-                _state.update { it.copy(currentChatType = chatTypes[id] ?: it.currentChatType) }
+            try {
+                val chats = bibleDao.getAllChatsSync()
+                _state.update { it.copy(chats = chats, chatsLoaded = true) }
+                val cloud = syncManager?.getChatList()?.getOrNull() ?: return@launch
+                for (c in cloud) {
+                    val localId = c.chatId.toLongOrNull() ?: continue
+                    chatTypes[localId] = c.type.ifBlank { "general" }
+                    chatContexts[localId] = c.context.ifBlank { c.bibleRef }
+                }
+                _state.value.currentChatId?.let { id ->
+                    _state.update { it.copy(currentChatType = chatTypes[id] ?: it.currentChatType) }
+                }
+            } finally {
+                chatsLoading = false
             }
         }
     }
@@ -93,10 +104,18 @@ class ChatViewModel(
             val id = bibleDao.insertChat(chat)
             chatTypes[id] = type
             chatContexts[id] = context.ifBlank { ref }
+            // FIX: was 2 separate updates - first one flashed empty screen.
+            // Now ONE single update.
             _state.update {
-                it.copy(currentChatId = id, currentChatType = type, messages = emptyList(), streamingText = "", isLoading = false)
+                it.copy(
+                    currentChatId = id,
+                    currentChatType = type,
+                    messages = emptyList(),
+                    streamingText = "",
+                    isLoading = false,
+                    chats = listOf(chat.copy(id = id)) + it.chats
+                )
             }
-            _state.update { it.copy(chats = listOf(chat.copy(id = id)) + it.chats) }
             syncManager?.createChat(
                 chatId = id.toString(),
                 title = title,
@@ -114,6 +133,9 @@ class ChatViewModel(
     }
 
     fun openChat(chatId: Long) {
+        // FIX: don't reload same chat again - that was re-flashing same messages
+        // when you came back from Settings.
+        if (_state.value.currentChatId == chatId && _state.value.messages.isNotEmpty()) return
         viewModelScope.launch {
             val messages = bibleDao.getMessagesForChatSync(chatId)
             val todayCount = getGlobalTodayCount()
@@ -121,20 +143,27 @@ class ChatViewModel(
             val type = chatTypes[chatId]
                 ?: local?.let { if (it.ref.isBlank()) "general" else "bible" }
                 ?: "general"
-            _state.update {
-                it.copy(currentChatId = chatId, currentChatType = type, messages = messages, streamingText = "", dailyCount = todayCount)
-            }
-            if (messages.isEmpty()) {
-                val cloudMsgs = syncManager?.getMessages(chatId.toString())?.getOrNull() ?: return@launch
-                if (cloudMsgs.isNotEmpty()) {
-                    val restored = cloudMsgs.map { cm ->
-                        MessageEntity(chatId = chatId, text = cm.text, isUser = cm.role == "user", timestamp = cm.timestamp)
-                    }
-                    for (m in restored) {
-                        val newId = bibleDao.insertMessage(m)
-                        _state.update { it.copy(messages = it.messages + m.copy(id = newId)) }
-                    }
+            // If local messages exist, show them in ONE update - done.
+            if (messages.isNotEmpty()) {
+                _state.update {
+                    it.copy(currentChatId = chatId, currentChatType = type, messages = messages, streamingText = "", dailyCount = todayCount)
                 }
+                return@launch
+            }
+            // Only if local is empty, try cloud - but batch it.
+            _state.update {
+                it.copy(currentChatId = chatId, currentChatType = type, messages = emptyList(), streamingText = "", dailyCount = todayCount)
+            }
+            val cloudMsgs = syncManager?.getMessages(chatId.toString())?.getOrNull() ?: return@launch
+            if (cloudMsgs.isNotEmpty()) {
+                val restored = mutableListOf<MessageEntity>()
+                for (cm in cloudMsgs) {
+                    val m = MessageEntity(chatId = chatId, text = cm.text, isUser = cm.role == "user", timestamp = cm.timestamp)
+                    val newId = bibleDao.insertMessage(m)
+                    restored.add(m.copy(id = newId))
+                }
+                // FIX: was one update PER message = flash x N. Now ONE update for all.
+                _state.update { it.copy(messages = restored) }
             }
         }
     }
@@ -228,7 +257,8 @@ class ChatViewModel(
             ).collect { chunk ->
                 fullAnswer.append(chunk)
                 val now = System.currentTimeMillis()
-                if (now - lastStreamEmit >= 25) {
+                // FIX: was 25ms = ~40 redraws/sec = flicker. 120ms is smooth.
+                if (now - lastStreamEmit >= 120) {
                     lastStreamEmit = now
                     _state.update { it.copy(streamingText = fullAnswer.toString()) }
                 }
