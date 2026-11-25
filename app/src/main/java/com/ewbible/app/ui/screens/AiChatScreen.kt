@@ -40,6 +40,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private fun cleanSourceNumbering(text: String): String {
+    return text
+        .replace(Regex("(?m)^Source\\s*\\d+\\s*[-:.]\\s*"), "")
+        .replace(Regex("(?m)^\\d+\\.\\s*Source\\s*[-:.]\\s*"), "")
+}
+
 @Composable
 private fun LinkText(
     text: String,
@@ -47,16 +53,10 @@ private fun LinkText(
     modifier: Modifier = Modifier
 ) {
     val uriHandler = LocalUriHandler.current
-    // FIX 1: Remove "Source 1 - ", "Source 2: ", "Source 3 - " numbering for display
-    val cleanText = remember(text) {
-        text
-            .replace(Regex("(?m)^Source\\s*\\d+\\s*[-:.]\\s*"), "")
-            .replace(Regex("(?m)^\\d+\\.\\s*Source\\s*[-:.]\\s*"), "")
-            .replace(Regex("Source\\s*\\d+\\s*[-:.]\\s*"), "")
-    }
+    // FIX 1: Remove "Source 1 - ", "Source 2: " numbering for display
+    val cleanText = remember(text) { cleanSourceNumbering(text) }
     val annotated = remember(cleanText, color) {
         buildAnnotatedString {
-            // Matches: **bold** OR [Title](url) OR raw https://url
             val regex = Regex("""\*\*(.+?)\*\*|\[([^\]]+)\]\((https?://[^)]+)\)|(https?://[^\s)]+)""")
             var lastIndex = 0
             regex.findAll(cleanText).forEach { match ->
@@ -130,9 +130,10 @@ private fun MessageBubble(
     gold: Color,
     panel: Color,
 ) {
-    // FIX 2: Hold to copy
+    // FIX 2: Hold to copy - copies CLEAN text, no "Source 1 -"
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val cleanTextForCopy = remember(text) { cleanSourceNumbering(text) }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -144,15 +145,15 @@ private fun MessageBubble(
             modifier = Modifier
                 .fillMaxWidth(0.85f)
                 .background(if (isUser) gold else panel, RoundedCornerShape(12.dp))
+                .padding(10.dp)
                 .pointerInput(text) {
                     detectTapGestures(
                         onLongPress = {
-                            clipboard.setText(AnnotatedString(text))
+                            clipboard.setText(AnnotatedString(cleanTextForCopy))
                             Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
-                .padding(10.dp)
         )
     }
 }
