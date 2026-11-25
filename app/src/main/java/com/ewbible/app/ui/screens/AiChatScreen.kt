@@ -137,22 +137,53 @@ private fun MessageBubble(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
-        LinkText(
-            text = text,
-            color = if (isUser) Color.White else textColor,
+        Box(
             modifier = Modifier
                 .fillMaxWidth(0.85f)
                 .background(if (isUser) gold else panel, RoundedCornerShape(12.dp))
-                .padding(10.dp)
-                .pointerInput(text) {
-                    detectTapGestures(
-                        onLongPress = {
-                            clipboard.setText(AnnotatedString(cleanTextForCopy))
-                            Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                        }
+                .padding(
+                    start = 10.dp,
+                    end = 10.dp,
+                    top = 10.dp,
+                    bottom = if (isUser) 10.dp else 28.dp
+                )
+        ) {
+            LinkText(
+                text = text,
+                color = if (isUser) Color.White else textColor,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pointerInput(text) {
+                        detectTapGestures(
+                            onLongPress = {
+                                clipboard.setText(AnnotatedString(cleanTextForCopy))
+                                Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
+            )
+
+            // Copy icon - AI ONLY, bottom corner
+            if (!isUser) {
+                IconButton(
+                    onClick = {
+                        clipboard.setText(AnnotatedString(cleanTextForCopy))
+                        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(28.dp)
+                        .padding(2.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = "Copy",
+                        tint = Color.Gray,
+                        modifier = Modifier.size(16.dp)
                     )
                 }
-        )
+            }
+        }
     }
 }
 
