@@ -83,7 +83,6 @@ class ChatViewModel(
             withContext(Dispatchers.IO) { bibleDao.getTodayUserMessageCountGlobal() }
         }.getOrDefault(0)
 
-    // Helper: are we still on the same chat?
     private fun isStillCurrent(chatId: Long): Boolean {
         return _state.value.currentChatId == chatId
     }
@@ -112,7 +111,6 @@ class ChatViewModel(
     }
 
     fun startNewChat(title: String = "New Chat", type: String = "general", context: String = "", currentRef: String = "") {
-        // New chat = you DID leave old chat, so cancel old streaming
         sendJob?.cancel()
         sendJob = null
         viewModelScope.launch {
@@ -154,9 +152,7 @@ class ChatViewModel(
     }
 
     fun openChat(chatId: Long) {
-        // SAME chat - do NOT cancel, keep streaming
         if (_state.value.currentChatId == chatId && _state.value.messages.isNotEmpty()) return
-        // DIFFERENT chat - cancel old streaming, you left that chat
         if (_state.value.currentChatId != null && _state.value.currentChatId != chatId) {
             sendJob?.cancel()
             sendJob = null
@@ -204,7 +200,6 @@ class ChatViewModel(
                     }
                     list
                 }
-                // Only update UI if still on this chat
                 if (isStillCurrent(chatId)) {
                     _state.update { it.copy(messages = restored) }
                 }
@@ -213,7 +208,6 @@ class ChatViewModel(
     }
 
     fun deleteChat(chatId: Long) {
-        // If deleting current chat, cancel its streaming
         if (_state.value.currentChatId == chatId) {
             sendJob?.cancel()
             sendJob = null
@@ -283,7 +277,6 @@ class ChatViewModel(
 
         val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
         val userId = withContext(Dispatchers.IO) { bibleDao.insertMessage(userMsg) }
-        // Only touch UI if still on this chat
         if (isStillCurrent(chatId)) {
             _state.update {
                 it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
@@ -326,7 +319,6 @@ class ChatViewModel(
                 translation = translation
             ).collect { chunk ->
                 fullAnswer.append(chunk)
-                // Only update streaming UI if still on same chat
                 if (!isStillCurrent(chatId)) return@collect
                 val now = System.currentTimeMillis()
                 if (now - lastStreamEmit >= 120) {
@@ -342,7 +334,6 @@ class ChatViewModel(
                 val partialText = cleanMarkdown(fullAnswer.toString())
                 val partialMsg = MessageEntity(chatId = chatId, text = partialText, isUser = false)
                 val partialId = withContext(Dispatchers.IO) { bibleDao.insertMessage(partialMsg) }
-                // Only touch UI if still on same chat
                 if (isStillCurrent(chatId)) {
                     _state.update {
                         it.copy(
@@ -392,7 +383,6 @@ class ChatViewModel(
         val answerText = cleanMarkdown(fullAnswer.toString()).ifBlank { "Sorry, I couldn't answer that." }
         val aiMsg = MessageEntity(chatId = chatId, text = answerText, isUser = false)
         val aiId = withContext(Dispatchers.IO) { bibleDao.insertMessage(aiMsg) }
-        // Only touch UI if still on same chat - if you left, DB already saved, don't touch new chat
         if (isStillCurrent(chatId)) {
             _state.update {
                 it.copy(
@@ -460,15 +450,34 @@ class ChatViewModel(
         }
     }
 
+    // FIXED: Strip single * completely, keep **bold**
     private fun cleanMarkdown(text: String): String {
         var cleaned = text
             .replace("**Bold Title:**", "")
             .replace("**Bold Title**", "")
             .replace("Bold Title:", "")
             .replace("Bold Title", "")
-            .replace("__", "")
             .replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "")
             .replace("`", "")
+
+        // 1. Protect **bold** so we don't kill it
+        val bolds = mutableListOf<String>()
+        cleaned = Regex("\\*\\*(.+?)\\*\\*").replace(cleaned) { m ->
+            bolds.add(m.groupValues[1])
+            "\u0000BOLD${bolds.size - 1}\u0000"
+        }
+
+        // 2. Strip ALL leftover single * and _italic_
+        // *"quote"* -> "quote", *italic* -> italic
+        cleaned = cleaned.replace("*", "")
+        cleaned = cleaned.replace(Regex("_(.+?)_"), "$1")
+        cleaned = cleaned.replace("__", "")
+
+        // 3. Restore **bold**
+        bolds.forEachIndexed { i, b ->
+            cleaned = cleaned.replace("\u0000BOLD$i\u0000", "**$b**")
+        }
+
         return cleaned.lines().joinToString("\n") { line ->
             var l = line.trimStart()
             l = l.replace(NUM_DOT_REGEX, "")
@@ -476,7 +485,7 @@ class ChatViewModel(
             l = l.replace(SOURCE_BOLD_REGEX, "")
             l = l.replace(SOURCE_DASH_REGEX, "")
             l = l.replace(SOURCE_PLAIN_REGEX, "")
-            l = l.removePrefix("- ").removePrefix("* ").removePrefix("• ").removePrefix("> ")
+            l = l.removePrefix("- ").removePrefix("• ").removePrefix("> ")
             l = l.replace(SOURCE_BOLD_REGEX, "")
             l = l.replace(SOURCE_DASH_REGEX, "")
             l
