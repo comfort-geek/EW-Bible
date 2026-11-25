@@ -22,10 +22,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
@@ -180,15 +182,9 @@ fun BibleContent(
     val maxChapter = remember(safeBookId) { BookCatalog.chapters(safeBookId) }
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
 
-    // FAST: No cache, no LaunchedEffect for data.
-    // Parent already gives correct verses for this chapter.
-    // Old code: versesList -> LaunchedEffect -> cachedVerses -> recompose = 2 frames late.
-    // Now: versesList -> show immediately, 0 extra frames.
     val versesToShow = versesList
     val showSummary = summary != null && summary.bookId == safeBookId && summary.chapter == safeChapter
 
-    // Only ONE LaunchedEffect left: scroll to top when chapter changes.
-    // Key is just chapter, not the whole list.
     LaunchedEffect(safeBookId, safeChapter) {
         if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
             listState.scrollToItem(0)
@@ -207,56 +203,78 @@ fun BibleContent(
         val isWide = maxWidth > 600.dp
         val horizontalPadding = if (isWide) 32.dp else 18.dp
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .align(Alignment.TopCenter)
-                .widthIn(max = 720.dp)
-        ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize().padding(horizontal = horizontalPadding),
-                contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp)
+        // FIX: key = throw away old chapter completely on swipe.
+        // No reuse, no insert-at-top, new chapter starts fresh at top.
+        key(safeBookId, safeChapter) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .align(Alignment.TopCenter)
+                    .widthIn(max = 720.dp)
             ) {
-                if (showSummary) {
-                    item(key = "summary-$safeBookId-$safeChapter", contentType = "summary") {
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                            colors = CardDefaults.cardColors(containerColor = panel),
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(summary!!.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                Text(summary.whatHappened ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                Text(summary.application ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().padding(horizontal = horizontalPadding),
+                    contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp)
+                ) {
+                    // FIX: Gate everything on summaryLoading.
+                    // While summary is loading, show ONLY placeholder.
+                    // Don't show new verses yet, or summary will push them down later.
+                    if (summaryLoading) {
+                        item(key = "loading-$safeBookId-$safeChapter", contentType = "loading") {
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                                colors = CardDefaults.cardColors(containerColor = panel),
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    CircularProgressIndicator(color = gold)
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text("Loading...", color = textColor, fontSize = 14.sp)
+                                }
                             }
                         }
-                    }
-                }
+                    } else {
+                        if (showSummary) {
+                            item(key = "summary-$safeBookId-$safeChapter", contentType = "summary") {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = panel),
+                                ) {
+                                    Column(modifier = Modifier.padding(16.dp)) {
+                                        Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(summary!!.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Text(summary.whatHappened ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Text(summary.application ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                    }
+                                }
+                            }
+                        }
 
-                // FAST: key = verse number only.
-                // Old key included book+chapter, so Compose destroyed every row on swipe.
-                // Now rows are REUSED, only text updates = instant.
-                items(
-                    items = versesToShow,
-                    key = { it.verse },
-                    contentType = { "verse" }
-                ) { verse ->
-                    VerseRow(
-                        verse = verse,
-                        highlight = currentHighlightMap[verse.verse] ?: Color.Transparent,
-                        fontSizeSp = fontSizeSp,
-                        lineHeight = lineHeight,
-                        gold = gold,
-                        textColor = textColor,
-                        onVerseClick = onVerseClick,
-                        onVerseLongClick = onVerseLongClick
-                    )
+                        items(
+                            items = versesToShow,
+                            key = { it.verse },
+                            contentType = { "verse" }
+                        ) { verse ->
+                            VerseRow(
+                                verse = verse,
+                                highlight = currentHighlightMap[verse.verse] ?: Color.Transparent,
+                                fontSizeSp = fontSizeSp,
+                                lineHeight = lineHeight,
+                                gold = gold,
+                                textColor = textColor,
+                                onVerseClick = onVerseClick,
+                                onVerseLongClick = onVerseLongClick
+                            )
+                        }
+                    }
                 }
             }
         }
