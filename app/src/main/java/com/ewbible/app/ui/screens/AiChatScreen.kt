@@ -43,6 +43,35 @@ private fun cleanSourceNumbering(text: String): String {
         .replace(Regex("(?m)^\\d+\\.\\s*Source\\s*[-:.]\\s*"), "")
 }
 
+// Strip headings + incomplete markdown, KEEP **bold** so LinkText can render it
+private fun cleanMarkdownForDisplay(text: String): String {
+    var t = cleanSourceNumbering(text)
+    t = t.replace(Regex("(?m)^#{1,6}\\s*"), "")
+    t = t.replace("```", "")
+    // Do NOT strip ** here - LinkText needs it
+    // If last ** is incomplete (streaming cut it), drop that one lone **
+    val boldCount = Regex("\\*\\*").findAll(t).count()
+    if (boldCount % 2 == 1) {
+        val last = t.lastIndexOf("**")
+        if (last >= 0) t = t.removeRange(last, last + 2)
+    }
+    // Lone trailing # or ` from incomplete chunk
+    t = t.replace(Regex("[#`]+\\s*$"), "")
+    // Lone trailing single * - but not if it's part of **
+    val trimmed = t.trimEnd()
+    if (trimmed.endsWith("*") && !trimmed.endsWith("**")) {
+        t = trimmed.dropLast(1)
+    }
+    return t.trim()
+}
+
+// For copy: plain text, no ** at all
+private fun cleanForCopy(text: String): String {
+    return cleanMarkdownForDisplay(text)
+        .replace(Regex("\\*\\*(.+?)\\*\\*"), "$1")
+        .replace(Regex("__(.+?)__"), "$1")
+}
+
 @Composable
 private fun LinkText(
     text: String,
@@ -50,7 +79,7 @@ private fun LinkText(
     modifier: Modifier = Modifier
 ) {
     val uriHandler = LocalUriHandler.current
-    val cleanText = remember(text) { cleanSourceNumbering(text) }
+    val cleanText = remember(text) { cleanMarkdownForDisplay(text) }
     val annotated = remember(cleanText, color) {
         buildAnnotatedString {
             val regex = Regex("""\*\*(.+?)\*\*|\[([^\]]+)\]\((https?://[^)]+)\)|(https?://[^\s)]+)""")
@@ -63,7 +92,6 @@ private fun LinkText(
                 val linkTitle = match.groups[2]?.value
                 val linkUrl = match.groups[3]?.value
                 val rawUrl = match.groups[4]?.value
-
                 when {
                     boldText != null -> {
                         withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
@@ -106,7 +134,6 @@ private fun LinkText(
             }
         }
     }
-
     ClickableText(
         text = annotated,
         style = LocalTextStyle.current.copy(color = color, fontSize = 15.sp),
@@ -128,12 +155,7 @@ private fun MessageBubble(
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
-    val cleanTextForCopy = remember(text) { cleanSourceNumbering(text) }
-
-    // FIX: Copy button is NO LONGER inside the bubble Box.
-    // Old code: IconButton(align = BottomEnd) inside same Box = floated over last line "help."
-    // New code: Column -> Bubble Box (text only) + separate Row below it for copy button.
-    // It physically cannot overlap text anymore.
+    val cleanTextForCopy = remember(text) { cleanForCopy(text) }
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
@@ -150,7 +172,6 @@ private fun MessageBubble(
                 modifier = Modifier.fillMaxWidth()
             )
         }
-
         if (!isUser) {
             IconButton(
                 onClick = {
@@ -207,13 +228,10 @@ fun AiChatScreen(
         }
     }
 
-    // FIXED INIT: 2 separate effects, no delay(350), no re-open
-    // 1) Kick off load once
     LaunchedEffect(Unit) {
         viewModel.refreshModels(context)
         viewModel.loadChats()
     }
-    // 2) Only when load is DONE and we still have no chat open, open first / create new.
     LaunchedEffect(state.chatsLoaded) {
         if (!state.chatsLoaded) return@LaunchedEffect
         if (state.currentChatId != null) return@LaunchedEffect
@@ -224,12 +242,9 @@ fun AiChatScreen(
         }
     }
 
-    // FIXED SCROLL: ONE effect only. Old code had 2 effects fighting each other.
-    // Fires on new message, loading start/stop, and every ~300 chars while streaming.
-    // No jump, no flash.
     LaunchedEffect(state.messages.size, state.isLoading, state.streamingText.length / 300) {
         if (state.messages.isEmpty() && !state.isLoading) return@LaunchedEffect
-        val lastIndex = state.messages.size // loading bubble is at the end
+        val lastIndex = state.messages.size
         val visible = listState.layoutInfo.visibleItemsInfo
         val lastVisible = visible.lastOrNull()?.index ?: 0
         val isNearBottom = lastVisible >= lastIndex - 2
@@ -306,7 +321,6 @@ fun AiChatScreen(
                     )
                     IconButton(onClick = { viewModel.startNewChat(currentRef) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
                 }
-
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -342,23 +356,36 @@ fun AiChatScreen(
                 items(state.messages, key = { it.id }, contentType = { if (it.isUser) "user" else "ai" }) { msg ->
                     MessageBubble(text = msg.text, isUser = msg.isUser, textColor = textColor, gold = gold, panel = panel)
                 }
-                if (state.isLoading) {
+                val lastMsg = state.messages.lastOrNull()
+                val isDuplicate = lastMsg != null && !lastMsg.isUser &&
+                    state.streamingText.isNotEmpty() &&
+                    cleanMarkdownForDisplay(lastMsg.text) == cleanMarkdownForDisplay(state.streamingText)
+                if (state.isLoading && !isDuplicate) {
                     item(key = "loading-${state.currentChatId}", contentType = "loading") {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                            // FIX: Plain Text while streaming, NOT LinkText.
-                            // Old code re-ran Regex over the whole answer on every char = stutter/flash.
-                            // Links are parsed only after the message is finished, in MessageBubble.
-                            Text(
-                                text = if (state.streamingText.isNotEmpty()) state.streamingText else thinkingText,
-                                color = textColor,
-                                fontSize = 15.sp,
-                                modifier = Modifier.fillMaxWidth(0.85f).background(panel, RoundedCornerShape(12.dp)).padding(10.dp)
-                            )
+                            Box(
+                                modifier = Modifier.fillMaxWidth(0.85f)
+                                    .background(panel, RoundedCornerShape(12.dp))
+                                    .padding(10.dp)
+                            ) {
+                                if (state.streamingText.isNotEmpty()) {
+                                    LinkText(
+                                        text = state.streamingText,
+                                        color = textColor,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                } else {
+                                    Text(
+                                        text = thinkingText,
+                                        color = textColor,
+                                        fontSize = 15.sp
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
-
             if (selectedImage != null) {
                 Row(
                     modifier = Modifier.fillMaxWidth().background(background).padding(horizontal = 8.dp),
@@ -368,7 +395,6 @@ fun AiChatScreen(
                     TextButton(onClick = { selectedImage = null }) { Text("Remove") }
                 }
             }
-
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
