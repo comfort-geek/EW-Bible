@@ -130,48 +130,41 @@ private fun MessageBubble(
     val context = LocalContext.current
     val cleanTextForCopy = remember(text) { cleanSourceNumbering(text) }
 
-    Row(
+    // FIX: Copy button is NO LONGER inside the bubble Box.
+    // Old code: IconButton(align = BottomEnd) inside same Box = floated over last line "help."
+    // New code: Column -> Bubble Box (text only) + separate Row below it for copy button.
+    // It physically cannot overlap text anymore.
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.85f)
                 .background(if (isUser) gold else panel, RoundedCornerShape(12.dp))
-                .padding(
-                    start = 10.dp,
-                    end = 10.dp,
-                    top = 10.dp,
-                    bottom = if (isUser) 10.dp else 28.dp
-                )
+                .padding(10.dp)
         ) {
-            // FIX: Removed pointerInput(text) + detectTapGestures here.
-            // It was recreating on every streaming char and fighting ClickableText.
-            // Copy now works only from the copy button - stable, no flash.
             LinkText(
                 text = text,
                 color = if (isUser) Color.White else textColor,
                 modifier = Modifier.fillMaxWidth()
             )
+        }
 
-            if (!isUser) {
-                IconButton(
-                    onClick = {
-                        clipboard.setText(AnnotatedString(cleanTextForCopy))
-                        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                    },
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .size(28.dp)
-                        .padding(2.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ContentCopy,
-                        contentDescription = "Copy",
-                        tint = Color.Gray,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
+        if (!isUser) {
+            IconButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(cleanTextForCopy))
+                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ContentCopy,
+                    contentDescription = "Copy",
+                    tint = Color.Gray,
+                    modifier = Modifier.size(16.dp)
+                )
             }
         }
     }
@@ -350,7 +343,7 @@ fun AiChatScreen(
                     MessageBubble(text = msg.text, isUser = msg.isUser, textColor = textColor, gold = gold, panel = panel)
                 }
                 if (state.isLoading) {
-                    item(key = "loading", contentType = "loading") {
+                    item(key = "loading-${state.currentChatId}", contentType = "loading") {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                             // FIX: Plain Text while streaming, NOT LinkText.
                             // Old code re-ran Regex over the whole answer on every char = stutter/flash.
