@@ -95,6 +95,7 @@ class AiRepository {
             "peter", "paul", "john", "mary", "solomon", "noah"
         )
 
+        // UPDATED: Added factual / "tell me about" triggers
         val FACTUAL_INTENT = listOf(
             "who is", "who won", "who was", "who became", "who appointed",
             "what happened", "what is happening", "latest", "recent", "current",
@@ -103,7 +104,12 @@ class AiRepository {
             "election", "results", "president", "minister", "government",
             "job", "jobs", "hiring", "vacancy", "vacancies", "apply", "salary",
             "news", "pope", "war", "football", "soccer", "score",
-            "price of", "exchange rate", "weather"
+            "price of", "exchange rate", "weather",
+            // NEW - factual general
+            "tell me about", "about",
+            "biography", "biography of", "history of",
+            "what is", "what are", "who are",
+            "facts about", "define", "definition"
         )
 
         val NEWS_BREAK_WORDS = listOf("malawi", "election", "news", "job", "president", "what happened", "who won")
@@ -214,6 +220,13 @@ class AiRepository {
                 lastTwo.contains("romans") || lastTwo.contains("scripture") || lastTwo.contains("chapter")
             if (wasBible && NEWS_BREAK_WORDS.none { q.contains(it) }) {
                 if (isMeaningIntent || q.contains("it") || q.contains("this") || q.contains("today") || q.contains("for me")) return ContextType.BIBLE
+            }
+        }
+
+        // FIXED: Bible protection for "tell me about David" before FACTUAL check
+        if (isBibleQuestion(q) && NEWS_BREAK_WORDS.none { q.contains(it) }) {
+            if (q.contains("tell me about") || q.contains("about") || q.contains("who is")) {
+                return ContextType.BIBLE
             }
         }
 
