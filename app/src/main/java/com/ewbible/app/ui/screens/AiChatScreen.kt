@@ -2,10 +2,12 @@ package com.ewbible.app.ui.screens
 
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,8 +21,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -42,14 +47,21 @@ private fun LinkText(
     modifier: Modifier = Modifier
 ) {
     val uriHandler = LocalUriHandler.current
-    val annotated = remember(text, color) {
+    // FIX 1: Remove "Source 1 - ", "Source 2: ", "Source 3 - " numbering for display
+    val cleanText = remember(text) {
+        text
+            .replace(Regex("(?m)^Source\\s*\\d+\\s*[-:.]\\s*"), "")
+            .replace(Regex("(?m)^\\d+\\.\\s*Source\\s*[-:.]\\s*"), "")
+            .replace(Regex("Source\\s*\\d+\\s*[-:.]\\s*"), "")
+    }
+    val annotated = remember(cleanText, color) {
         buildAnnotatedString {
             // Matches: **bold** OR [Title](url) OR raw https://url
             val regex = Regex("""\*\*(.+?)\*\*|\[([^\]]+)\]\((https?://[^)]+)\)|(https?://[^\s)]+)""")
             var lastIndex = 0
-            regex.findAll(text).forEach { match ->
+            regex.findAll(cleanText).forEach { match ->
                 if (match.range.first > lastIndex) {
-                    append(text.substring(lastIndex, match.range.first))
+                    append(cleanText.substring(lastIndex, match.range.first))
                 }
                 val boldText = match.groups[1]?.value
                 val linkTitle = match.groups[2]?.value
@@ -93,8 +105,8 @@ private fun LinkText(
                 }
                 lastIndex = match.range.last + 1
             }
-            if (lastIndex < text.length) {
-                append(text.substring(lastIndex))
+            if (lastIndex < cleanText.length) {
+                append(cleanText.substring(lastIndex))
             }
         }
     }
@@ -118,6 +130,10 @@ private fun MessageBubble(
     gold: Color,
     panel: Color,
 ) {
+    // FIX 2: Hold to copy
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
@@ -128,6 +144,14 @@ private fun MessageBubble(
             modifier = Modifier
                 .fillMaxWidth(0.85f)
                 .background(if (isUser) gold else panel, RoundedCornerShape(12.dp))
+                .pointerInput(text) {
+                    detectTapGestures(
+                        onLongPress = {
+                            clipboard.setText(AnnotatedString(text))
+                            Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                }
                 .padding(10.dp)
         )
     }
