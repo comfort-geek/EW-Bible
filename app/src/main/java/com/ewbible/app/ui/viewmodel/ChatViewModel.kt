@@ -38,7 +38,6 @@ class ChatViewModel(
     private val syncManager: SyncManager? = null
 ) : ViewModel() {
 
-    // FIXED: matches multi-word books - Song of Solomon 2:7, 1 Corinthians 13:4, 1 John 3:16
     private val VERSE_REGEX = Regex("""((?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s+(\d+):(\d+)""")
 
     private val contextCache = object : LinkedHashMap<String, String>(20, 0.75f, true) {
@@ -62,7 +61,6 @@ class ChatViewModel(
         }
     }
 
-    // NEW: Download latest models from GitHub - call this once on app start
     fun refreshModels(context: Context) {
         viewModelScope.launch {
             geminiRepository.refreshModels(context)
@@ -172,8 +170,6 @@ class ChatViewModel(
         }
     }
 
-    // FREE $0: No hard daily limit - provider quota handles it
-    // FAST + ASK WHILE STREAMING: no isLoading block, old job cancelled, new starts instantly
     fun send(question: String, currentRef: String, image: Bitmap?, translation: String = "NKJV") {
         val chatId = _state.value.currentChatId ?: return
         sendJob?.cancel()
@@ -188,7 +184,6 @@ class ChatViewModel(
         sendJob = null
     }
 
-    // FIXED: suspend only - does NOT launch its own job
     private suspend fun doSend(chatId: Long, question: String, currentRef: String, image: Bitmap?, translation: String, todayCount: Int) {
         val historySnapshot = _state.value.messages
         val chatType = _state.value.currentChatType
@@ -233,16 +228,13 @@ class ChatViewModel(
             ).collect { chunk ->
                 fullAnswer.append(chunk)
                 val now = System.currentTimeMillis()
-                // FAST: 25ms instead of 120ms - chunks appear instantly
                 if (now - lastStreamEmit >= 25) {
                     lastStreamEmit = now
                     _state.update { it.copy(streamingText = fullAnswer.toString()) }
                 }
             }
-            // FAST: final flush - don't lose last chunk
             _state.update { it.copy(streamingText = fullAnswer.toString()) }
         } catch (e: CancellationException) {
-            // NEW: User asked new question or pressed Stop - save partial answer, don't lose it
             if (fullAnswer.isNotBlank()) {
                 val partialText = cleanMarkdown(fullAnswer.toString())
                 val partialMsg = MessageEntity(chatId = chatId, text = partialText, isUser = false)
@@ -254,7 +246,6 @@ class ChatViewModel(
                         streamingText = ""
                     )
                 }
-                // Sync partial too
                 syncManager?.uploadMessage(
                     chatId.toString(),
                     CloudMessage(
@@ -272,7 +263,7 @@ class ChatViewModel(
             } else {
                 _state.update { it.copy(isLoading = false, streamingText = "") }
             }
-            throw e // cancel is not an error, don't show "Failed"
+            throw e
         } catch (e: Exception) {
             val msg = e.message ?: ""
             val friendly = if (msg.contains("429") || msg.contains("quota", ignoreCase = true) || msg.contains("Rate limit", ignoreCase = true) || msg.contains("rate limit", ignoreCase = true)) {
@@ -284,7 +275,6 @@ class ChatViewModel(
             return
         }
 
-        // FIXED: Clean markdown / bullets from final answer before saving
         val answerText = cleanMarkdown(fullAnswer.toString()).ifBlank { "Sorry, I couldn't answer that." }
         val aiMsg = MessageEntity(chatId = chatId, text = answerText, isUser = false)
         val aiId = bibleDao.insertMessage(aiMsg)
@@ -349,18 +339,24 @@ class ChatViewModel(
         }
     }
 
-    // FIXED: Strips bullets, numbers, >, *, - at start of lines + markdown
+    // FIXED: Keep **bold** and [Title](URL) - AiChatScreen needs them to render
     private fun cleanMarkdown(text: String): String {
         var cleaned = text
-            .replace("**", "")
+            .replace("**Bold Title:**", "")
+            .replace("**Bold Title**", "")
+            .replace("Bold Title:", "")
+            .replace("Bold Title", "")
             .replace("__", "")
             .replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "")
             .replace("`", "")
+        // Keep **bold** and [Title](URL) links - do NOT strip them
         return cleaned.lines().joinToString("\n") { line ->
             var l = line.trimStart()
-            l = l.removePrefix("- ").removePrefix("* ").removePrefix("• ").removePrefix("> ")
-            l = l.replace(Regex("^\\d+\\.\\s"), "")
-            l = l.replace(Regex("^\\d+\\)\\s"), "")
+            if (!l.startsWith("Source ")) {
+                l = l.removePrefix("- ").removePrefix("* ").removePrefix("• ").removePrefix("> ")
+                l = l.replace(Regex("^\\d+\\.\\s"), "")
+                l = l.replace(Regex("^\\d+\\)\\s"), "")
+            }
             l
         }.trim()
     }
