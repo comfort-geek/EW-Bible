@@ -27,8 +27,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -181,10 +183,46 @@ fun BibleContent(
     val maxChapter = remember(safeBookId) { BookCatalog.chapters(safeBookId) }
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
 
-    val versesToShow = versesList
-    val showSummary = summary != null && summary.bookId == safeBookId && summary.chapter == safeChapter
+    // FIX: Hold last COMPLETE chapter. Never show new verses with old/missing summary.
+    // Complete = verses are for this chapter AND summary load finished
+    // AND (summary is for this chapter OR there is truly no summary).
+    var lastBook by remember { mutableStateOf(safeBookId) }
+    var lastChapter by remember { mutableStateOf(safeChapter) }
+    var lastVerses by remember { mutableStateOf<List<VerseEntity>>(emptyList()) }
+    var lastSummary by remember { mutableStateOf<SummaryEntity?>(null) }
+    var lastHighlights by remember { mutableStateOf<Map<Int, Color>>(emptyMap()) }
 
-    LaunchedEffect(safeBookId, safeChapter) {
+    val firstVerse = versesList.firstOrNull()
+    val versesAreForThisChapter = firstVerse != null &&
+        firstVerse.bookId == safeBookId && firstVerse.chapter == safeChapter
+    val summaryIsForThisChapter = summary != null &&
+        summary.bookId == safeBookId && summary.chapter == safeChapter
+
+    // If summaryLoading == false, DB finished. If summary is still null then,
+    // this chapter really has no summary - don't wait forever.
+    val isComplete = versesAreForThisChapter && !summaryLoading &&
+        (summaryIsForThisChapter || summary == null)
+
+    if (isComplete) {
+        lastBook = safeBookId
+        lastChapter = safeChapter
+        lastVerses = versesList
+        lastSummary = summary
+        lastHighlights = currentHighlightMap
+    }
+
+    // First ever load: no last chapter yet, show whatever we have so screen isn't blank.
+    // After that: always show last complete chapter until new one is complete.
+    val hasLast = lastVerses.isNotEmpty()
+    val displayBook = if (hasLast) lastBook else safeBookId
+    val displayChapter = if (hasLast) lastChapter else safeChapter
+    val versesToShow = if (hasLast) lastVerses else versesList
+    val summaryToShow = if (hasLast) lastSummary else summary
+    val highlightsToShow = if (hasLast) lastHighlights else currentHighlightMap
+    val showSummary = summaryToShow != null &&
+        summaryToShow.bookId == displayBook && summaryToShow.chapter == displayChapter
+
+    LaunchedEffect(displayBook, displayChapter) {
         if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
             listState.scrollToItem(0)
         }
@@ -202,10 +240,7 @@ fun BibleContent(
         val isWide = maxWidth > 600.dp
         val horizontalPadding = if (isWide) 32.dp else 18.dp
 
-        // Only fix left: key() throws away old chapter completely on swipe.
-        // New chapter starts fresh at top, summary + Bible together.
-        // No gate, no spinner, summaryLoading ignored on purpose.
-        key(safeBookId, safeChapter) {
+        key(displayBook, displayChapter) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -218,7 +253,7 @@ fun BibleContent(
                     contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp)
                 ) {
                     if (showSummary) {
-                        item(key = "summary-$safeBookId-$safeChapter", contentType = "summary") {
+                        item(key = "summary-$displayBook-$displayChapter", contentType = "summary") {
                             Card(
                                 modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                                 colors = CardDefaults.cardColors(containerColor = panel),
@@ -226,13 +261,13 @@ fun BibleContent(
                                 Column(modifier = Modifier.padding(16.dp)) {
                                     Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    Text(summary!!.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                    Text(summaryToShow!!.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    Text(summary.whatHappened ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                    Text(summaryToShow.whatHappened ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    Text(summary.application ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                    Text(summaryToShow.application ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
                                 }
                             }
                         }
@@ -245,7 +280,7 @@ fun BibleContent(
                     ) { verse ->
                         VerseRow(
                             verse = verse,
-                            highlight = currentHighlightMap[verse.verse] ?: Color.Transparent,
+                            highlight = highlightsToShow[verse.verse] ?: Color.Transparent,
                             fontSizeSp = fontSizeSp,
                             lineHeight = lineHeight,
                             gold = gold,
