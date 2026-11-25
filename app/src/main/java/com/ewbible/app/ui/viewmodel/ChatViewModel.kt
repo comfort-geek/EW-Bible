@@ -13,12 +13,14 @@ import com.ewbible.app.data.database.MessageEntity
 import com.ewbible.app.data.sync.CloudMessage
 import com.ewbible.app.data.sync.SyncManager
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class ChatState(
     val chats: List<ChatEntity> = emptyList(),
@@ -40,6 +42,13 @@ class ChatViewModel(
 ) : ViewModel() {
 
     private val VERSE_REGEX = Regex("""((?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s+(\d+):(\d+)""")
+
+    // FIX 1: Hoist all Regex out of cleanMarkdown() - was creating 7 Regex per line
+    private val NUM_DOT_REGEX = Regex("^\\d+\\.\\s*")
+    private val NUM_PAREN_REGEX = Regex("^\\d+\\)\\s*")
+    private val SOURCE_BOLD_REGEX = Regex("^\\*\\*Source\\s*\\d*\\s*[-:.]?\\s*\\*\\*\\s*")
+    private val SOURCE_DASH_REGEX = Regex("^Source\\s*\\d*\\s*[-:.]\\s*")
+    private val SOURCE_PLAIN_REGEX = Regex("^Source\\s*\\d*\\s*")
 
     private val contextCache = object : LinkedHashMap<String, String>(20, 0.75f, true) {
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 20
@@ -65,24 +74,28 @@ class ChatViewModel(
 
     fun refreshModels(context: Context) {
         viewModelScope.launch {
-            geminiRepository.refreshModels(context)
+            // FIX 2: Network on IO, not Main
+            withContext(Dispatchers.IO) {
+                geminiRepository.refreshModels(context)
+            }
         }
     }
 
     private suspend fun getGlobalTodayCount(): Int =
-        runCatching { bibleDao.getTodayUserMessageCountGlobal() }.getOrDefault(0)
+        runCatching {
+            withContext(Dispatchers.IO) { bibleDao.getTodayUserMessageCountGlobal() }
+        }.getOrDefault(0)
 
-    // FIX: load only once. Before, every time you opened Ask AI from Settings,
-    // loadChats() re-ran, re-set chats, and raced with openChat() = flash.
     fun loadChats(force: Boolean = false) {
         if (chatsLoading) return
         if (_state.value.chatsLoaded && !force) return
         chatsLoading = true
         viewModelScope.launch {
             try {
-                val chats = bibleDao.getAllChatsSync()
+                val chats = withContext(Dispatchers.IO) { bibleDao.getAllChatsSync() }
                 _state.update { it.copy(chats = chats, chatsLoaded = true) }
-                val cloud = syncManager?.getChatList()?.getOrNull() ?: return@launch
+                // FIX: Cloud fetch on IO, don't block UI
+                val cloud = withContext(Dispatchers.IO) { syncManager?.getChatList()?.getOrNull() } ?: return@launch
                 for (c in cloud) {
                     val localId = c.chatId.toLongOrNull() ?: continue
                     chatTypes[localId] = c.type.ifBlank { "general" }
@@ -100,12 +113,13 @@ class ChatViewModel(
     fun startNewChat(title: String = "New Chat", type: String = "general", context: String = "", currentRef: String = "") {
         viewModelScope.launch {
             val ref = if (type == "bible") context.ifBlank { currentRef } else ""
-            val chat = ChatEntity(title = title, ref = ref)
-            val id = bibleDao.insertChat(chat)
+            // FIX: DB insert on IO
+            val id = withContext(Dispatchers.IO) {
+                val chat = ChatEntity(title = title, ref = ref)
+                bibleDao.insertChat(chat)
+            }
             chatTypes[id] = type
             chatContexts[id] = context.ifBlank { ref }
-            // FIX: was 2 separate updates - first one flashed empty screen.
-            // Now ONE single update.
             _state.update {
                 it.copy(
                     currentChatId = id,
@@ -113,17 +127,22 @@ class ChatViewModel(
                     messages = emptyList(),
                     streamingText = "",
                     isLoading = false,
-                    chats = listOf(chat.copy(id = id)) + it.chats
+                    chats = listOf(ChatEntity(id = id, title = title, ref = ref)) + it.chats
                 )
             }
-            syncManager?.createChat(
-                chatId = id.toString(),
-                title = title,
-                type = type,
-                context = context.ifBlank { ref },
-                bibleRef = if (type == "bible") ref else "",
-                translation = ""
-            )
+            // FIX: Don't wait for cloud - fire and forget on IO
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching {
+                    syncManager?.createChat(
+                        chatId = id.toString(),
+                        title = title,
+                        type = type,
+                        context = context.ifBlank { ref },
+                        bibleRef = if (type == "bible") ref else "",
+                        translation = ""
+                    )
+                }
+            }
         }
     }
 
@@ -133,36 +152,36 @@ class ChatViewModel(
     }
 
     fun openChat(chatId: Long) {
-        // FIX: don't reload same chat again - that was re-flashing same messages
-        // when you came back from Settings.
         if (_state.value.currentChatId == chatId && _state.value.messages.isNotEmpty()) return
         viewModelScope.launch {
-            val messages = bibleDao.getMessagesForChatSync(chatId)
+            val messages = withContext(Dispatchers.IO) { bibleDao.getMessagesForChatSync(chatId) }
             val todayCount = getGlobalTodayCount()
-            val local = _state.value.chats.find { it.id == chatId } ?: bibleDao.getChatById(chatId)
+            val local = withContext(Dispatchers.IO) {
+                _state.value.chats.find { it.id == chatId } ?: bibleDao.getChatById(chatId)
+            }
             val type = chatTypes[chatId]
                 ?: local?.let { if (it.ref.isBlank()) "general" else "bible" }
                 ?: "general"
-            // If local messages exist, show them in ONE update - done.
             if (messages.isNotEmpty()) {
                 _state.update {
                     it.copy(currentChatId = chatId, currentChatType = type, messages = messages, streamingText = "", dailyCount = todayCount)
                 }
                 return@launch
             }
-            // Only if local is empty, try cloud - but batch it.
             _state.update {
                 it.copy(currentChatId = chatId, currentChatType = type, messages = emptyList(), streamingText = "", dailyCount = todayCount)
             }
-            val cloudMsgs = syncManager?.getMessages(chatId.toString())?.getOrNull() ?: return@launch
+            val cloudMsgs = withContext(Dispatchers.IO) { syncManager?.getMessages(chatId.toString())?.getOrNull() } ?: return@launch
             if (cloudMsgs.isNotEmpty()) {
-                val restored = mutableListOf<MessageEntity>()
-                for (cm in cloudMsgs) {
-                    val m = MessageEntity(chatId = chatId, text = cm.text, isUser = cm.role == "user", timestamp = cm.timestamp)
-                    val newId = bibleDao.insertMessage(m)
-                    restored.add(m.copy(id = newId))
+                val restored = withContext(Dispatchers.IO) {
+                    val list = mutableListOf<MessageEntity>()
+                    for (cm in cloudMsgs) {
+                        val m = MessageEntity(chatId = chatId, text = cm.text, isUser = cm.role == "user", timestamp = cm.timestamp)
+                        val newId = bibleDao.insertMessage(m)
+                        list.add(m.copy(id = newId))
+                    }
+                    list
                 }
-                // FIX: was one update PER message = flash x N. Now ONE update for all.
                 _state.update { it.copy(messages = restored) }
             }
         }
@@ -170,32 +189,40 @@ class ChatViewModel(
 
     fun deleteChat(chatId: Long) {
         viewModelScope.launch {
-            bibleDao.deleteMessagesForChat(chatId)
-            bibleDao.deleteChat(chatId)
+            withContext(Dispatchers.IO) {
+                bibleDao.deleteMessagesForChat(chatId)
+                bibleDao.deleteChat(chatId)
+            }
             chatTypes.remove(chatId)
             chatContexts.remove(chatId)
             _state.update {
                 if (it.currentChatId == chatId) it.copy(currentChatId = null, messages = emptyList(), chats = it.chats.filterNot { c -> c.id == chatId })
                 else it.copy(chats = it.chats.filterNot { c -> c.id == chatId })
             }
-            syncManager?.deleteChat(chatId.toString())
+            viewModelScope.launch(Dispatchers.IO) { runCatching { syncManager?.deleteChat(chatId.toString()) } }
         }
     }
 
     fun renameChat(chatId: Long, newTitle: String) {
         viewModelScope.launch {
-            val chat = _state.value.chats.find { it.id == chatId } ?: bibleDao.getChatById(chatId) ?: return@launch
+            val chat = withContext(Dispatchers.IO) {
+                _state.value.chats.find { it.id == chatId } ?: bibleDao.getChatById(chatId)
+            } ?: return@launch
             val updated = chat.copy(title = newTitle)
-            bibleDao.updateChat(updated)
+            withContext(Dispatchers.IO) { bibleDao.updateChat(updated) }
             _state.update { it.copy(chats = it.chats.map { c -> if (c.id == chatId) updated else c }) }
-            syncManager?.createChat(
-                chatId = chatId.toString(),
-                title = newTitle,
-                type = chatTypes[chatId] ?: "general",
-                context = chatContexts[chatId] ?: chat.ref,
-                bibleRef = if ((chatTypes[chatId] ?: "general") == "bible") chat.ref else "",
-                translation = ""
-            )
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching {
+                    syncManager?.createChat(
+                        chatId = chatId.toString(),
+                        title = newTitle,
+                        type = chatTypes[chatId] ?: "general",
+                        context = chatContexts[chatId] ?: chat.ref,
+                        bibleRef = if ((chatTypes[chatId] ?: "general") == "bible") chat.ref else "",
+                        translation = ""
+                    )
+                }
+            }
         }
     }
 
@@ -219,29 +246,35 @@ class ChatViewModel(
         val chatContext = chatContexts[chatId] ?: currentRef
 
         val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
-        val userId = bibleDao.insertMessage(userMsg)
+        val userId = withContext(Dispatchers.IO) { bibleDao.insertMessage(userMsg) }
         _state.update {
             it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
         }
-        syncManager?.uploadMessage(
-            chatId.toString(),
-            CloudMessage(
-                messageId = userId.toString(),
-                chatId = chatId.toString(),
-                role = "user",
-                type = if (image != null) "image" else "text",
-                text = question,
-                context = chatContext,
-                bibleRef = if (chatType == "bible") chatContext else "",
-                imageUrl = "",
-                timestamp = userMsg.timestamp
-            )
-        )
+        // FIX: Upload in background - don't block streaming start
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                syncManager?.uploadMessage(
+                    chatId.toString(),
+                    CloudMessage(
+                        messageId = userId.toString(),
+                        chatId = chatId.toString(),
+                        role = "user",
+                        type = if (image != null) "image" else "text",
+                        text = question,
+                        context = chatContext,
+                        bibleRef = if (chatType == "bible") chatContext else "",
+                        imageUrl = "",
+                        timestamp = userMsg.timestamp
+                    )
+                )
+            }
+        }
 
-        val bibleContext = if (chatType == "bible" || chatType == "study" || chatType == "prayer") {
-            buildBibleContext(question, currentRef)
-        } else {
-            ""
+        // FIX: Build Bible context on IO - getVerseRange + commentary was blocking Main
+        val bibleContext = withContext(Dispatchers.IO) {
+            if (chatType == "bible" || chatType == "study" || chatType == "prayer") {
+                buildBibleContext(question, currentRef)
+            } else ""
         }
 
         val fullAnswer = StringBuilder(2000)
@@ -257,7 +290,6 @@ class ChatViewModel(
             ).collect { chunk ->
                 fullAnswer.append(chunk)
                 val now = System.currentTimeMillis()
-                // FIX: was 25ms = ~40 redraws/sec = flicker. 120ms is smooth.
                 if (now - lastStreamEmit >= 120) {
                     lastStreamEmit = now
                     _state.update { it.copy(streamingText = fullAnswer.toString()) }
@@ -268,7 +300,7 @@ class ChatViewModel(
             if (fullAnswer.isNotBlank()) {
                 val partialText = cleanMarkdown(fullAnswer.toString())
                 val partialMsg = MessageEntity(chatId = chatId, text = partialText, isUser = false)
-                val partialId = bibleDao.insertMessage(partialMsg)
+                val partialId = withContext(Dispatchers.IO) { bibleDao.insertMessage(partialMsg) }
                 _state.update {
                     it.copy(
                         messages = it.messages + partialMsg.copy(id = partialId),
@@ -276,20 +308,24 @@ class ChatViewModel(
                         streamingText = ""
                     )
                 }
-                syncManager?.uploadMessage(
-                    chatId.toString(),
-                    CloudMessage(
-                        messageId = partialId.toString(),
-                        chatId = chatId.toString(),
-                        role = "ai",
-                        type = "text",
-                        text = partialText,
-                        context = chatContext,
-                        bibleRef = if (chatType == "bible") chatContext else "",
-                        imageUrl = "",
-                        timestamp = partialMsg.timestamp
-                    )
-                )
+                viewModelScope.launch(Dispatchers.IO) {
+                    runCatching {
+                        syncManager?.uploadMessage(
+                            chatId.toString(),
+                            CloudMessage(
+                                messageId = partialId.toString(),
+                                chatId = chatId.toString(),
+                                role = "ai",
+                                type = "text",
+                                text = partialText,
+                                context = chatContext,
+                                bibleRef = if (chatType == "bible") chatContext else "",
+                                imageUrl = "",
+                                timestamp = partialMsg.timestamp
+                            )
+                        )
+                    }
+                }
             } else {
                 _state.update { it.copy(isLoading = false, streamingText = "") }
             }
@@ -307,7 +343,7 @@ class ChatViewModel(
 
         val answerText = cleanMarkdown(fullAnswer.toString()).ifBlank { "Sorry, I couldn't answer that." }
         val aiMsg = MessageEntity(chatId = chatId, text = answerText, isUser = false)
-        val aiId = bibleDao.insertMessage(aiMsg)
+        val aiId = withContext(Dispatchers.IO) { bibleDao.insertMessage(aiMsg) }
         _state.update {
             it.copy(
                 messages = it.messages + aiMsg.copy(id = aiId),
@@ -316,20 +352,24 @@ class ChatViewModel(
                 dailyCount = todayCount + 1
             )
         }
-        syncManager?.uploadMessage(
-            chatId.toString(),
-            CloudMessage(
-                messageId = aiId.toString(),
-                chatId = chatId.toString(),
-                role = "ai",
-                type = "text",
-                text = answerText,
-                context = chatContext,
-                bibleRef = if (chatType == "bible") chatContext else "",
-                imageUrl = "",
-                timestamp = aiMsg.timestamp
-            )
-        )
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                syncManager?.uploadMessage(
+                    chatId.toString(),
+                    CloudMessage(
+                        messageId = aiId.toString(),
+                        chatId = chatId.toString(),
+                        role = "ai",
+                        type = "text",
+                        text = answerText,
+                        context = chatContext,
+                        bibleRef = if (chatType == "bible") chatContext else "",
+                        imageUrl = "",
+                        timestamp = aiMsg.timestamp
+                    )
+                )
+            }
+        }
     }
 
     private suspend fun buildBibleContext(question: String, currentRef: String): String {
@@ -369,8 +409,7 @@ class ChatViewModel(
         }
     }
 
-    // FIXED: Keep **bold** and [Title](URL) - AiChatScreen needs them to render
-    // FIXED 2: Strip "Source 1 -", "Source 2:", "Source 3 -" numbering, keep only the title/link
+    // FIXED: Now uses pre-compiled Regex - 0 allocations per line
     private fun cleanMarkdown(text: String): String {
         var cleaned = text
             .replace("**Bold Title:**", "")
@@ -380,24 +419,16 @@ class ChatViewModel(
             .replace("__", "")
             .replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "")
             .replace("`", "")
-        // Keep **bold** and [Title](URL) links - do NOT strip them
         return cleaned.lines().joinToString("\n") { line ->
             var l = line.trimStart()
-            // Strip Source numbering in all forms:
-            // "Source 1 - [Title](url)" -> "[Title](url)"
-            // "Source 2: Title" -> "Title"
-            // "**Source 1 -** [Title]" -> "[Title]"
-            // "1. Source 1 - Title" -> "Title"
-            l = l.replace(Regex("^\\d+\\.\\s*"), "")
-            l = l.replace(Regex("^\\d+\\)\\s*"), "")
-            l = l.replace(Regex("^\\*\\*Source\\s*\\d*\\s*[-:.]?\\s*\\*\\*\\s*"), "")
-            l = l.replace(Regex("^Source\\s*\\d*\\s*[-:.]\\s*"), "")
-            l = l.replace(Regex("^Source\\s*\\d*\\s*"), "")
-            // Only clean bullets for non-source lines, source lines already cleaned above
+            l = l.replace(NUM_DOT_REGEX, "")
+            l = l.replace(NUM_PAREN_REGEX, "")
+            l = l.replace(SOURCE_BOLD_REGEX, "")
+            l = l.replace(SOURCE_DASH_REGEX, "")
+            l = l.replace(SOURCE_PLAIN_REGEX, "")
             l = l.removePrefix("- ").removePrefix("* ").removePrefix("• ").removePrefix("> ")
-            // Re-strip in case bullet was before Source: "- Source 1 - Title"
-            l = l.replace(Regex("^\\*\\*Source\\s*\\d*\\s*[-:.]?\\s*\\*\\*\\s*"), "")
-            l = l.replace(Regex("^Source\\s*\\d*\\s*[-:.]\\s*"), "")
+            l = l.replace(SOURCE_BOLD_REGEX, "")
+            l = l.replace(SOURCE_DASH_REGEX, "")
             l
         }.trim()
     }
