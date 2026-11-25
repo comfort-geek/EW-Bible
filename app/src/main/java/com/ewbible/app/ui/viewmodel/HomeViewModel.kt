@@ -233,14 +233,14 @@ class HomeViewModel(
             }
         }
 
-        // SINGLE SOURCE: ViewModel drives summary + commentary on chapter change.
-        // HomeScreen must NOT also call loadSummary/loadCommentary or it cancels this job.
         viewModelScope.launch {
             bookChapterKey
                 .distinctUntilChanged()
                 .collectLatest { (bookId, chapter) ->
                     loadSummary(bookId, chapter)
                     loadCommentary(bookId, chapter)
+                    // FIX: prefetch summary too, not just commentary, so next swipe is instant
+                    prefetchSummaryForNeighbours(bookId, chapter)
                 }
         }
 
@@ -440,30 +440,30 @@ class HomeViewModel(
         }
     }
 
-    // FIXED: Never clear old summary while loading new one.
-    // Old summary stays until new one arrives. BibleContent also checks
-    // bookId/chapter, so old summary never shows for wrong chapter.
+    // FIXED: Cache hit must clear summaryLoading, otherwise BibleContent gate sticks on true.
+    // Also set loading synchronously before launching, so gate knows new chapter is coming.
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
         synchronized(summaryCache) { summaryCache.get(key) }?.let { cached ->
             if (bookId == currentBookId.value && chapter == selectedChapter.value) {
                 summaryState.value = cached
+                _summaryLoading.value = false
             }
             return
         }
         summaryJob?.cancel()
+        // Set loading NOW, not inside the launched job, so UI holds old chapter immediately
+        if (bookId == currentBookId.value && chapter == selectedChapter.value) {
+            _summaryLoading.value = true
+        }
         summaryJob = viewModelScope.launch {
             try {
-                val isCurrentAtStart = bookId == currentBookId.value && chapter == selectedChapter.value
-                if (isCurrentAtStart) _summaryLoading.value = true
                 val s = runCatching { withContext(Dispatchers.IO) { dao.getSummary(bookId, chapter) } }.getOrNull()
                 val isCurrentNow = bookId == currentBookId.value && chapter == selectedChapter.value
                 if (s != null) {
                     synchronized(summaryCache) { summaryCache.put(key, s) }
                     if (isCurrentNow) summaryState.value = s
                 } else {
-                    // Only clear if this chapter really has no summary AND is still current.
-                    // Don't clear old summary for a stale chapter.
                     if (isCurrentNow) summaryState.value = null
                 }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -474,6 +474,28 @@ class HomeViewModel(
                 }
             }
         }
+    }
+
+    // FIXED: Prefetch summary for next/prev so swipe is instant from cache
+    fun prefetchSummary(bookId: Int, chapter: Int) {
+        if (bookId !in 1..66) return
+        if (chapter !in 1..BookCatalog.chapters(bookId)) return
+        val key = "$bookId-$chapter"
+        synchronized(summaryCache) { if (summaryCache.get(key) != null) return }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val s = dao.getSummary(bookId, chapter) ?: return@launch
+                synchronized(summaryCache) { summaryCache.put(key, s) }
+            }
+        }
+    }
+
+    private fun prefetchSummaryForNeighbours(bookId: Int, chapter: Int) {
+        val max = BookCatalog.chapters(bookId)
+        if (chapter < max) prefetchSummary(bookId, chapter + 1)
+        else if (bookId < 66) prefetchSummary(bookId + 1, 1)
+        if (chapter > 1) prefetchSummary(bookId, chapter - 1)
+        else if (bookId > 1) prefetchSummary(bookId - 1, BookCatalog.chapters(bookId - 1))
     }
 
     fun loadLinkedVerse(bookName: String, chapter: Int, verse: Int, endVerse: Int = verse) {
