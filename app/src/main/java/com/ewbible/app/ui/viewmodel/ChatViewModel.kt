@@ -340,6 +340,7 @@ class ChatViewModel(
     }
 
     // FIXED: Keep **bold** and [Title](URL) - AiChatScreen needs them to render
+    // FIXED 2: Strip "Source 1 -", "Source 2:", "Source 3 -" numbering, keep only the title/link
     private fun cleanMarkdown(text: String): String {
         var cleaned = text
             .replace("**Bold Title:**", "")
@@ -352,11 +353,21 @@ class ChatViewModel(
         // Keep **bold** and [Title](URL) links - do NOT strip them
         return cleaned.lines().joinToString("\n") { line ->
             var l = line.trimStart()
-            if (!l.startsWith("Source ")) {
-                l = l.removePrefix("- ").removePrefix("* ").removePrefix("• ").removePrefix("> ")
-                l = l.replace(Regex("^\\d+\\.\\s"), "")
-                l = l.replace(Regex("^\\d+\\)\\s"), "")
-            }
+            // Strip Source numbering in all forms:
+            // "Source 1 - [Title](url)" -> "[Title](url)"
+            // "Source 2: Title" -> "Title"
+            // "**Source 1 -** [Title]" -> "[Title]"
+            // "1. Source 1 - Title" -> "Title"
+            l = l.replace(Regex("^\\d+\\.\\s*"), "")
+            l = l.replace(Regex("^\\d+\\)\\s*"), "")
+            l = l.replace(Regex("^\\*\\*Source\\s*\\d*\\s*[-:.]?\\s*\\*\\*\\s*"), "")
+            l = l.replace(Regex("^Source\\s*\\d*\\s*[-:.]\\s*"), "")
+            l = l.replace(Regex("^Source\\s*\\d*\\s*"), "")
+            // Only clean bullets for non-source lines, source lines already cleaned above
+            l = l.removePrefix("- ").removePrefix("* ").removePrefix("• ").removePrefix("> ")
+            // Re-strip in case bullet was before Source: "- Source 1 - Title"
+            l = l.replace(Regex("^\\*\\*Source\\s*\\d*\\s*[-:.]?\\s*\\*\\*\\s*"), "")
+            l = l.replace(Regex("^Source\\s*\\d*\\s*[-:.]\\s*"), "")
             l
         }.trim()
     }
