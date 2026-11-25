@@ -154,17 +154,10 @@ fun HomeScreen(
     val effectiveCommentaryHtml = if (isCommentaryForCurrent) state.commentaryHtml else ""
     val isCommentaryLoading = false
 
-    // FIXED: Don't reload summary if already here.
-    // This stops summary = null -> verses only -> summary inserts on top -> push-down.
+    // FIXED: ViewModel already loads summary + commentary on bookChapterKey change.
+    // Don't call loadSummary / loadCommentary here again - that cancels the first job.
+    // HomeScreen only prefetches neighbours here.
     LaunchedEffect(state.currentBookId, state.selectedChapter) {
-        val summaryAlreadyHere = state.summary?.bookId == state.currentBookId &&
-            state.summary?.chapter == state.selectedChapter
-
-        if (!summaryAlreadyHere) {
-            viewModel.loadSummary(state.currentBookId, state.selectedChapter)
-        }
-
-        viewModel.loadCommentary(state.currentBookId, state.selectedChapter)
         val max = BookCatalog.chapters(state.currentBookId)
         if (state.selectedChapter < max) {
             viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter + 1)
