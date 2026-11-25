@@ -28,7 +28,6 @@ class AiRepository {
     private val _lastProvider = MutableStateFlow("Groq")
     val lastProvider: StateFlow<String> = _lastProvider.asStateFlow()
 
-    // Proxy - keys live in Cloudflare, not in the app
     private val PROXY_BASE = "https://exportdefaultasyncfetchrequestenvconsturl.comfortcha34.workers.dev/"
     private val PROXY_HEADER = "X-EW-App"
     private val PROXY_VALUE = "ew-bible-v1"
@@ -36,20 +35,9 @@ class AiRepository {
     private val REMOTE_MODELS_URL =
         "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
 
-    private val FALLBACK_GEMINI = listOf(
-        "gemini-4-hydrogen",
-        "gemini-3.8-flash",
-        "gemini-3.5-flash-lite"
-    )
-    private val FALLBACK_GROQ = listOf(
-        "openai/gpt-oss-120b",
-        "qwen/qwen3.8-27b",
-        "openai/gpt-oss-20b"
-    )
-    private val FALLBACK_CLOUDFLARE = listOf(
-        "@cf/meta/llama-3.3-70b-instruct",
-        "@cf/meta/llama-3-8b-instruct"
-    )
+    private val FALLBACK_GEMINI = listOf("gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.5-flash-lite")
+    private val FALLBACK_GROQ = listOf("openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b")
+    private val FALLBACK_CLOUDFLARE = listOf("@cf/meta/llama-3.3-70b-instruct", "@cf/meta/llama-3-8b-instruct")
 
     private var remoteGemini = FALLBACK_GEMINI
     private var remoteGroq = FALLBACK_GROQ
@@ -64,10 +52,8 @@ class AiRepository {
     private var cachedAt = 0L
     private val WEB_CACHE_MS = 10 * 60 * 1000L
 
-    // ===== FIXED: Bold Title + Sources =====
-
     private companion object {
-        const val STYLE_RULE = "You are the EW Bible assistant. Never mention Meta AI, Groq, Gemini, or what AI model you are. Never say 'as an AI'. Write short, warm, clear. Use short paragraphs, 1 to 3 sentences each. Leave a blank line between every paragraph. When you start a new idea, start the paragraph with a bold heading on its own line, like **Economic Impact**. Never write the words 'Bold Title:' or 'Bold Title'. Do NOT use bullet points, dashes, or numbered lists. For BIBLE and GENERAL answers, do NOT add a Sources section. For NEWS / FACT answers, you MUST end with a Sources section with at least 2 sources."
+        const val STYLE_RULE = "You are a helpful assistant. Answer naturally like a knowledgeable friend. Do not mention what model you are. Do not say 'as an AI'. Match your length to the question: short question = short answer, deep question = deeper answer. Use paragraphs, headings or lists only if they help clarity — do not force them. Do not force Bible verses, prayer, or a Sources section unless the question actually needs it."
 
         val BIBLE_BOOKS = listOf(
             "genesis", "exodus", "leviticus", "numbers", "deuteronomy",
@@ -95,7 +81,6 @@ class AiRepository {
             "peter", "paul", "john", "mary", "solomon", "noah"
         )
 
-        // UPDATED: Added factual / "tell me about" triggers
         val FACTUAL_INTENT = listOf(
             "who is", "who won", "who was", "who became", "who appointed",
             "what happened", "what is happening", "latest", "recent", "current",
@@ -105,14 +90,22 @@ class AiRepository {
             "job", "jobs", "hiring", "vacancy", "vacancies", "apply", "salary",
             "news", "pope", "war", "football", "soccer", "score",
             "price of", "exchange rate", "weather",
-            // NEW - factual general
-            "tell me about", "about",
-            "biography", "biography of", "history of",
-            "what is", "what are", "who are",
-            "facts about", "define", "definition"
+            "tell me about", "biography", "history of",
+            "what is", "what are", "who are", "facts about", "define", "definition"
         )
 
-        val NEWS_BREAK_WORDS = listOf("malawi", "election", "news", "job", "president", "what happened", "who won")
+        val GENERAL_TOPICS = listOf(
+            "coding", "python", "java", "javascript", "programming", "developer",
+            "computer", "laptop", "phone", "android", "app", "website",
+            "cooking", "recipe", "football", "soccer", "music", "movie",
+            "school", "exam", "business", "money", "job", "car", "house"
+        )
+
+        val BREAKDOWN_PHRASES = listOf(
+            "break down", "breakdown", "break it down", "verse by verse",
+            "in portions", "in parts", "deep study", "deep dive", "go deep",
+            "explain this passage", "explain this chapter"
+        )
     }
 
     suspend fun refreshModels(context: Context) {
@@ -168,75 +161,94 @@ class AiRepository {
 
     private enum class ContextType { BIBLE, BREAKDOWN, NEWS, GENERAL }
 
-    private fun isBibleQuestion(q: String): Boolean = BIBLE_WORDS.any { q.contains(it) }
-
-    private fun isBibleReference(q: String): Boolean =
-        BIBLE_REF_REGEX.containsMatchIn(q) || NUMBERED_BOOK_REGEX.containsMatchIn(q)
-
-    private fun needsBreakdown(question: String): Boolean {
-        val q = question.lowercase().trim()
-        return q.contains("break down") || q.contains("breakdown") || q.contains("break it down") ||
-            q.contains("verse by verse") || q.contains("portion") || q.contains("in portions") ||
-            q.contains("in parts") || q.contains("step by step") ||
-            q.contains("explain this passage") || q.contains("explain this chapter") ||
-            q.contains("deep study") || q.contains("deep dive") || q.contains("go deep")
-    }
-
     private fun detectContext(
         question: String,
         currentRef: String = "",
         history: List<MessageEntity> = emptyList()
     ): ContextType {
         val q = question.lowercase().trim()
-        if (q == "hi" || q == "hello" || q == "hey" || q == "amen") return ContextType.GENERAL
-        if (needsBreakdown(q)) return ContextType.BREAKDOWN
-        if (isBibleReference(q)) return ContextType.BIBLE
-        if (q.contains("in the bible") || q.contains("in bible") || q.contains("according to the bible") ||
-            q.contains("bible says") || q.contains("from scripture") || q.contains("in scripture") ||
-            q.contains("bible verse") || q.contains("bible passage")) return ContextType.BIBLE
+        if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you")) return ContextType.GENERAL
 
-        if ((q.contains("what does") || q.contains("want does") || q.contains("what dose") || q.contains("wht does")) && q.contains("mean")) return ContextType.BIBLE
-        if (q.contains("does") && q.contains("mean") && isBibleQuestion(q)) return ContextType.BIBLE
-        if (q.contains("meaning of") || q.contains("lesson from") || q.contains("teach me") || q.contains("devotion")) return ContextType.BIBLE
+        var bibleScore = 0.0
+        var breakdownScore = 0.0
+        var newsScore = 0.0
+        var generalScore = 1.0
 
-        val isReferring = q.contains("this") || q.contains("that") || q.contains("it") ||
-            q.contains("verse") || q.contains("chapter") || q.contains("passage")
-        val isMeaningIntent = q.contains("mean") || q.contains("explain") || q.contains("teach") ||
-            q.contains("lesson") || q.contains("understand") || q.contains("interpret")
-        if (isReferring && isMeaningIntent) return ContextType.BIBLE
-        if (q.contains("explain") && (q.contains("verse") || q.contains("chapter") || q.contains("passage") || q.contains("psalm"))) return ContextType.BIBLE
+        val hasBibleRef = BIBLE_REF_REGEX.containsMatchIn(q) || NUMBERED_BOOK_REGEX.containsMatchIn(q)
+        if (hasBibleRef) bibleScore += 10
+
+        if (q.contains("in the bible") || q.contains("bible says") || q.contains("according to the bible") || q.contains("from scripture")) bibleScore += 10
+
+        val bibleWordCount = BIBLE_WORDS.count { q.contains(it) }
+        bibleScore += minOf(bibleWordCount * 2.0, 6.0)
+
+        val hasBreakdownPhrase = BREAKDOWN_PHRASES.any { q.contains(it) }
+        val hasStepByStep = q.contains("step by step")
+        if (hasBreakdownPhrase) {
+            if (hasBibleRef || bibleWordCount > 0) breakdownScore += 9
+            else if (q.contains("this") || q.contains("that") || q.contains("passage") || q.contains("chapter")) breakdownScore += 4
+            else breakdownScore += 0.5
+        }
+        if (hasStepByStep) {
+            if (hasBibleRef || bibleWordCount > 0) breakdownScore += 8
+            else generalScore += 3
+        }
+
+        val hasMeaning = listOf("mean", "explain", "teach", "lesson", "understand", "interpret").any { q.contains(it) }
+        val isReferring = listOf("this", "that", "it", "verse", "chapter", "passage").any { q.contains(it) }
+        if (hasMeaning && isReferring) {
+            if (hasBibleRef || bibleWordCount > 0) bibleScore += 4
+            else generalScore += 2
+        }
+        if (q.contains("teach me") && !q.contains("bible") && !q.contains("verse")) {
+            generalScore += 3
+        }
+
+        val generalTopicCount = GENERAL_TOPICS.count { q.contains(it) }
+        if (generalTopicCount > 0) {
+            generalScore += generalTopicCount * 4.0
+            bibleScore -= generalTopicCount * 5.0
+            breakdownScore -= generalTopicCount * 5.0
+        }
+        if (q.contains("how do i start") || q.contains("how to start") || q.contains("learn")) {
+            if (bibleWordCount == 0 && !hasBibleRef) generalScore += 4
+        }
+
+        val factualCount = FACTUAL_INTENT.count { q.contains(it) }
+        newsScore += factualCount * 3.0
+        if (q.contains("malawi") && (q.contains("election") || q.contains("news") || q.contains("president") || q.contains("job"))) newsScore += 6
 
         val ref = currentRef.lowercase().trim()
         val isInBibleView = ref.isNotBlank() && ref != "home" && !ref.contains("chat")
-        if (isInBibleView && q.length < 80) {
-            if (isMeaningIntent || q.contains("today") || q.contains("now") || q.contains("for me") || q.contains("apply")) {
-                if (NEWS_BREAK_WORDS.none { q.contains(it) }) return ContextType.BIBLE
-            }
+        if (isInBibleView && q.length < 80 && (hasMeaning || q.contains("today") || q.contains("apply") || q.contains("for me"))) {
+            bibleScore += 1.5
         }
-
         if (history.isNotEmpty()) {
             val lastTwo = history.takeLast(2).joinToString(" ") { it.text.lowercase() }
-            val wasBible = lastTwo.contains("verse") || lastTwo.contains("bible") || lastTwo.contains("psalm") ||
-                lastTwo.contains("romans") || lastTwo.contains("scripture") || lastTwo.contains("chapter")
-            if (wasBible && NEWS_BREAK_WORDS.none { q.contains(it) }) {
-                if (isMeaningIntent || q.contains("it") || q.contains("this") || q.contains("today") || q.contains("for me")) return ContextType.BIBLE
-            }
+            val wasBible = lastTwo.contains("verse") || lastTwo.contains("bible") || lastTwo.contains("psalm") || lastTwo.contains("scripture")
+            val wasNews = lastTwo.contains("election") || lastTwo.contains("news") || lastTwo.contains("president")
+            if (wasBible && isReferring && hasMeaning) bibleScore += 1.5
+            if (wasNews && (q.contains("it") || q.contains("that"))) newsScore += 1.5
         }
 
-        // FIXED: Bible protection for "tell me about David" before FACTUAL check
-        if (isBibleQuestion(q) && NEWS_BREAK_WORDS.none { q.contains(it) }) {
-            if (q.contains("tell me about") || q.contains("about") || q.contains("who is")) {
-                return ContextType.BIBLE
-            }
-        }
-
-        if (FACTUAL_INTENT.any { q.contains(it) }) return ContextType.NEWS
-        if (isBibleQuestion(q)) return ContextType.BIBLE
+        if (breakdownScore >= 8 && breakdownScore > bibleScore && breakdownScore > newsScore && breakdownScore > generalScore) return ContextType.BREAKDOWN
+        if (bibleScore >= 4 && bibleScore >= newsScore && bibleScore >= generalScore) return ContextType.BIBLE
+        if (newsScore >= 6 && newsScore >= generalScore) return ContextType.NEWS
         return ContextType.GENERAL
     }
 
-    private fun needsWebSearch(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): Boolean =
-        detectContext(question, currentRef, history) == ContextType.NEWS
+    // CHANGED: NEWS + GENERAL get Tavily, BIBLE + BREAKDOWN do NOT
+    private fun needsWebSearch(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): Boolean {
+        val context = detectContext(question, currentRef, history)
+        if (context == ContextType.NEWS) return true
+        if (context == ContextType.GENERAL) {
+            val q = question.lowercase().trim()
+            if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you")) return false
+            if (q.length < 10) return false
+            return true
+        }
+        return false
+    }
 
     private suspend fun getWebContext(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): String {
         if (!needsWebSearch(question, currentRef, history)) return ""
@@ -278,7 +290,7 @@ class AiRepository {
                 if (results != null) {
                     for (i in 0 until minOf(results.length(), 3)) {
                         val r = results.getJSONObject(i)
-                        sb.append("SOURCE ${i + 1}:\n")
+                        sb.append("SOURCE:\n")
                         sb.append("Title: ${r.optString("title")}\n")
                         sb.append("URL: ${r.optString("url")}\n")
                         sb.append("Content: ${r.optString("content").take(500)}\n")
@@ -340,7 +352,6 @@ class AiRepository {
             emit("Could not read the image. Please try again.")
             return@flow
         }
-        // ORDER: Groq -> Cloudflare -> Gemini last
         for (model in remoteGroq) {
             if (tryOne("Groq", model, tryGroqStreaming(model, basePrompt, isBreakdown))) return@flow
         }
@@ -381,7 +392,6 @@ class AiRepository {
                 }
                 return Result.failure(Exception("Could not read the image. Please try again."))
             }
-            // ORDER: Groq -> Cloudflare -> Gemini last
             for (model in remoteGroq) {
                 _lastProvider.value = "Groq"
                 try {
@@ -438,27 +448,27 @@ class AiRepository {
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
 
         val lengthRule = if (isBreakdown) {
-            "The user asked for a breakdown. Break the passage or topic into 3 to 5 portions. For EACH portion: Start with 'Portion 1: [Title]' on its own line, then quote the verse/part, then 1 paragraph for meaning, then 1 paragraph for application. Leave a blank line between portions. Always finish fully."
+            "The user explicitly asked for a detailed breakdown. You may organise it into 3 to 5 natural sections if that helps. For each section, give the verse, then meaning, then application. Finish fully."
         } else {
-            "Do NOT break into portions. Let the length fit the question - a simple question gets 1 short paragraph, a deeper question gets 2 to 3 spaced paragraphs. Always finish your answer fully. Never stop mid-sentence or mid-verse."
+            "Let the length fit the question. Simple question = short answer. Complex question = fuller answer. Always finish fully, never stop mid-sentence."
         }
 
         val contextRule = when (context) {
-            ContextType.BIBLE -> "CONTEXT: BIBLE. Answer only from Scripture. Quote $translation. If the question is about the Bible, cite the Bible reference instead, like 2 Samuel 18:9-15. Do NOT add news, jobs, or politics. End with application. Do NOT add a Sources section."
-            ContextType.BREAKDOWN -> "CONTEXT: BREAKDOWN. Break into 3-5 portions as instructed. Do NOT add a Sources section."
-            ContextType.NEWS -> "CONTEXT: NEWS / FACT. Answer ONLY from WEB SEARCH RESULTS. Do NOT quote Bible verses. Do NOT turn it into a sermon. Do NOT add prayer at the end. At the very end, you MUST add a Sources section. Format it exactly like this:\n\n**Sources**\nSource 1 - [Title from SOURCE 1](URL from SOURCE 1)\nSource 2 - [Title from SOURCE 2](URL from SOURCE 2)\n\nUse at least 2 different sources if 2 or more are given. If only 1 source is given, use only that 1. Use ONLY the URLs given in WEB SEARCH RESULTS. Never invent a URL, title, or date."
-            ContextType.GENERAL -> "CONTEXT: GENERAL. Answer clearly and helpfully. Do NOT force Bible verses. Do NOT add a Sources section."
+            ContextType.BIBLE -> "This looks like a Bible question. Answer from Scripture, quote $translation where helpful, and end with a practical application if natural. Do not force news or a Sources section."
+            ContextType.BREAKDOWN -> "This looks like a Bible breakdown request. Go verse by verse / section by section in a natural way."
+            ContextType.NEWS -> "This looks like a factual / news question. Answer ONLY from the WEB SEARCH RESULTS below. If the results do not contain the answer, say you don't have verified info and don't guess names, dates or results. If results are provided, list Sources at the end as a plain list using ONLY the titles and URLs given, like:\n**Sources**\n[Title](URL)\n[Title](URL)\nDo NOT number them. Do NOT write Source 1, Source 2, 1. or 1). Never invent a URL, title or date."
+            ContextType.GENERAL -> "This looks like a general question. Answer helpfully and directly. If WEB SEARCH RESULTS are provided below, use them for facts. Do not force Bible verses. Only list Sources if results were provided, as a plain list like [Title](URL) — do NOT number them, do NOT write Source 1, Source 2."
         }
 
         val sb = StringBuilder()
         sb.append("Today is $today. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
         sb.append("$STYLE_RULE\n")
         sb.append("$contextRule\n$lengthRule\n\n")
-        if (bibleContext.isNotBlank() && context != ContextType.NEWS) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1000)}\n\n")
+        if (bibleContext.isNotBlank() && (context == ContextType.BIBLE || context == ContextType.BREAKDOWN)) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1000)}\n\n")
         if (webContext.isNotBlank()) {
-            sb.append("WEB SEARCH RESULTS - TRUE FACTS AS OF $today. Answer ONLY from these results for factual claims. If the results do NOT contain the answer, say 'Please check your connection and try again.' and do NOT guess names, dates, or election results. Never invent a president, election result, or date:\n${webContext.take(3000)}\n\n")
+            sb.append("WEB SEARCH RESULTS (true facts as of $today):\n${webContext.take(3000)}\n\n")
         } else if (context == ContextType.NEWS) {
-            sb.append("No web results were available. Do NOT guess names, dates, or election results. If you do not know the fact, say 'Please check your connection and try again.'\n\n")
+            sb.append("No web results were available. Do not guess. Say you don't have verified info.\n\n")
         }
         if (history.isNotEmpty()) {
             sb.append("CONVERSATION HISTORY (last 4):\n")
@@ -471,7 +481,6 @@ class AiRepository {
         return sb.toString()
     }
 
-    // ===== FIX 2: cleanMarkdown - strips **Bold Title:** fully, keeps **bold** + links =====
     private fun cleanMarkdown(text: String): String {
         var cleaned = text
             .replace("**Bold Title:**", "")
@@ -479,21 +488,14 @@ class AiRepository {
             .replace("Bold Title:", "")
             .replace("Bold Title", "")
             .replace("__", "")
-            .replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "")
+            .replace("### ", "").replace("## ", "").replace("# ", "")
             .replace("`", "")
-        // Keep **bold** and [Title](URL) links - do NOT strip them
-        return cleaned.lines().joinToString("\n") { line ->
-            var l = line.trimStart()
-            if (!l.startsWith("Source ")) {
-                l = l.removePrefix("- ").removePrefix("* ").removePrefix("• ").removePrefix("> ")
-                l = l.replace(Regex("^\\d+\\.\\s"), "")
-                l = l.replace(Regex("^\\d+\\)\\s"), "")
-            }
-            l
-        }.trim()
+        cleaned = cleaned.replace(Regex("(?m)^\\s*Source\\s*\\d+\\s*[-:.]\\s*"), "")
+        cleaned = cleaned.replace(Regex("(?m)^\\s*\\d+\\.\\s*(?=\\[)"), "")
+        cleaned = cleaned.replace(Regex("(?m)^\\s*\\d+\\)\\s*(?=\\[)"), "")
+        return cleaned.trim()
     }
 
-    // ===== FIX 3: cleanStreamingChunk - same cleaning as cleanMarkdown =====
     private fun cleanStreamingChunk(text: String): String {
         return text
             .replace("**Bold Title:**", "")
@@ -580,7 +582,7 @@ class AiRepository {
                 doOutput = true
             }
             val messages = JSONArray()
-                .put(JSONObject().put("role", "system").put("content", STYLE_RULE))
+                .put(JSONObject().put("role", "system").put("content", "You are the EW Bible assistant."))
                 .put(JSONObject().put("role", "user").put("content", prompt))
             val body = JSONObject()
                 .put("model", model)
@@ -625,7 +627,7 @@ class AiRepository {
                 doOutput = true
             }
             val messages = JSONArray()
-                .put(JSONObject().put("role", "system").put("content", STYLE_RULE))
+                .put(JSONObject().put("role", "system").put("content", "You are the EW Bible assistant."))
                 .put(JSONObject().put("role", "user").put("content", prompt))
             val body = JSONObject()
                 .put("model", model)
