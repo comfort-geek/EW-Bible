@@ -135,9 +135,6 @@ fun HomeScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val listState = rememberLazyListState()
 
-    // FIXED: No local lastSyncMillis.
-    // ViewModel is single source of truth via state.lastSyncMillis / markSynced()
-
     val gold = remember { Color(0xFFC9A227) }
     val background = remember(isDark) { if (isDark) Color(0xFF1E1E22) else Color(0xFFFDF8EF) }
     val panel = remember(isDark) { if (isDark) Color(0xFF2A2A30) else Color(0xFFF0EAD9) }
@@ -157,8 +154,16 @@ fun HomeScreen(
     val effectiveCommentaryHtml = if (isCommentaryForCurrent) state.commentaryHtml else ""
     val isCommentaryLoading = false
 
+    // FIXED: Don't reload summary if already here.
+    // This stops summary = null -> verses only -> summary inserts on top -> push-down.
     LaunchedEffect(state.currentBookId, state.selectedChapter) {
-        viewModel.loadSummary(state.currentBookId, state.selectedChapter)
+        val summaryAlreadyHere = state.summary?.bookId == state.currentBookId &&
+            state.summary?.chapter == state.selectedChapter
+
+        if (!summaryAlreadyHere) {
+            viewModel.loadSummary(state.currentBookId, state.selectedChapter)
+        }
+
         viewModel.loadCommentary(state.currentBookId, state.selectedChapter)
         val max = BookCatalog.chapters(state.currentBookId)
         if (state.selectedChapter < max) {
@@ -342,7 +347,6 @@ fun HomeScreen(
         }
     }
 
-    // ✅ FIX: Pass isOnline + hasUnsyncedChanges - was missing, so SettingsPanel defaulted to online
     SettingsPanel(
         visible = settingsOpen, isLoggedIn = state.isLoggedIn, userName = state.userName, userEmail = state.userEmail,
         lastSyncMillis = state.lastSyncMillis,
