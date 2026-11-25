@@ -274,8 +274,8 @@ fun AiChatScreen(
 
     val gray = remember { Color.Gray }
     val titleText = "Ask Anything"
-    val thinkingText = if (!state.lastProvider.isNullOrBlank()) {
-        "Thinking... ${state.lastProvider}"
+    val thinkingText = if (state.aiProvider.isNotBlank()) {
+        "Thinking... ${state.aiProvider}"
     } else {
         "Thinking..."
     }
