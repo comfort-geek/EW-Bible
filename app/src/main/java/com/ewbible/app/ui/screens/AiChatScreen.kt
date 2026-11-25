@@ -7,7 +7,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,7 +20,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -147,19 +145,13 @@ private fun MessageBubble(
                     bottom = if (isUser) 10.dp else 28.dp
                 )
         ) {
+            // FIX: Removed pointerInput(text) + detectTapGestures here.
+            // It was recreating on every streaming char and fighting ClickableText.
+            // Copy now works only from the copy button - stable, no flash.
             LinkText(
                 text = text,
                 color = if (isUser) Color.White else textColor,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .pointerInput(text) {
-                        detectTapGestures(
-                            onLongPress = {
-                                clipboard.setText(AnnotatedString(cleanTextForCopy))
-                                Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                    }
+                modifier = Modifier.fillMaxWidth()
             )
 
             if (!isUser) {
@@ -239,26 +231,16 @@ fun AiChatScreen(
         }
     }
 
-    // FIXED SCROLL: Scroll only when a real message is added or loading starts/stops.
-    LaunchedEffect(state.messages.size, state.isLoading) {
+    // FIXED SCROLL: ONE effect only. Old code had 2 effects fighting each other.
+    // Fires on new message, loading start/stop, and every ~300 chars while streaming.
+    // No jump, no flash.
+    LaunchedEffect(state.messages.size, state.isLoading, state.streamingText.length / 300) {
         if (state.messages.isEmpty() && !state.isLoading) return@LaunchedEffect
-        val lastIndex = if (state.isLoading) state.messages.size else state.messages.size - 1
-        if (lastIndex < 0) return@LaunchedEffect
+        val lastIndex = state.messages.size // loading bubble is at the end
         val visible = listState.layoutInfo.visibleItemsInfo
         val lastVisible = visible.lastOrNull()?.index ?: 0
         val isNearBottom = lastVisible >= lastIndex - 2
         if (isNearBottom) {
-            runCatching { listState.scrollToItem(lastIndex) }
-        }
-    }
-
-    // Gentle streaming follow: fires only every ~200 chars, not every char - no flash
-    LaunchedEffect(state.streamingText.length / 200) {
-        if (!state.isLoading) return@LaunchedEffect
-        val lastIndex = state.messages.size
-        val visible = listState.layoutInfo.visibleItemsInfo
-        val lastVisible = visible.lastOrNull()?.index ?: 0
-        if (lastVisible >= lastIndex - 2) {
             runCatching { listState.scrollToItem(lastIndex) }
         }
     }
@@ -370,9 +352,13 @@ fun AiChatScreen(
                 if (state.isLoading) {
                     item(key = "loading", contentType = "loading") {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                            LinkText(
+                            // FIX: Plain Text while streaming, NOT LinkText.
+                            // Old code re-ran Regex over the whole answer on every char = stutter/flash.
+                            // Links are parsed only after the message is finished, in MessageBubble.
+                            Text(
                                 text = if (state.streamingText.isNotEmpty()) state.streamingText else thinkingText,
                                 color = textColor,
+                                fontSize = 15.sp,
                                 modifier = Modifier.fillMaxWidth(0.85f).background(panel, RoundedCornerShape(12.dp)).padding(10.dp)
                             )
                         }
