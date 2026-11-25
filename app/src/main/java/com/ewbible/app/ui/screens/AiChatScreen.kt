@@ -163,7 +163,6 @@ private fun MessageBubble(
                     }
             )
 
-            // Copy icon - AI ONLY, bottom corner
             if (!isUser) {
                 IconButton(
                     onClick = {
@@ -224,26 +223,29 @@ fun AiChatScreen(
         }
     }
 
+    // FIX 1: DON'T reload on every open. Only init once.
+    // Old code: loadChats() + delay(350) + openChat(first) every time = flash empty -> first chat
+    // New: if we already have a chat open, do NOTHING. Keep what user was reading.
     LaunchedEffect(Unit) {
+        val s = viewModel.state.value
+        if (s.currentChatId != null) return@LaunchedEffect // already open, keep it
+        if (s.chats.isNotEmpty()) return@LaunchedEffect // chats already loaded, wait for user
         viewModel.refreshModels(context)
         viewModel.loadChats()
-        delay(350)
-        val s = viewModel.state.value
-        if (s.currentChatId == null) {
-            if (s.chats.isNotEmpty()) {
-                viewModel.openChat(s.chats.first().id)
-            } else {
-                viewModel.startNewChat(currentRef)
-            }
-        }
+        // No delay(350) - that was the visible blank flash
+        // Do NOT auto-open first chat. Let ViewModel decide, or user picks from History.
+        // If you MUST auto-open, do it only if chats were empty at start:
+        // viewModel.startNewChat(currentRef) is now handled by ViewModel after load
     }
 
-    // FIXED: Only ONE scroll effect. No more animateScroll vs scrollToItem fighting.
-    // This is what caused the flash back and forth on every question.
-    LaunchedEffect(state.messages.size, state.isLoading, state.streamingText.length) {
+    // FIX 2: Scroll ONLY when message count changes, NOT on every streaming char.
+    // Old code watched streamingText.length -> scrollToItem 20x/sec = flicker
+    LaunchedEffect(state.messages.size, state.isLoading) {
         if (state.messages.isEmpty() && !state.isLoading) return@LaunchedEffect
         val lastIndex = if (state.isLoading) state.messages.size else state.messages.size - 1
         if (lastIndex < 0) return@LaunchedEffect
+        // Small delay lets LazyColumn settle, prevents 1-frame jump
+        delay(50)
         val visible = listState.layoutInfo.visibleItemsInfo
         val lastVisible = visible.lastOrNull()?.index ?: 0
         val isNearBottom = lastVisible >= lastIndex - 2
@@ -252,9 +254,21 @@ fun AiChatScreen(
         }
     }
 
-    val gray = remember { Color.Gray }
+    // FIX 3: Gentle streaming scroll - max 1 scroll per 300ms, only if user is at bottom
+    LaunchedEffect(state.isLoading) {
+        if (!state.isLoading) return@LaunchedEffect
+        while (state.isLoading) {
+            delay(300)
+            val lastIndex = state.messages.size // loading item index
+            val visible = listState.layoutInfo.visibleItemsInfo
+            val lastVisible = visible.lastOrNull()?.index ?: 0
+            if (lastVisible >= lastIndex - 2) {
+                runCatching { listState.scrollToItem(lastIndex) }
+            }
+        }
+    }
 
-    // FIXED: Title now says Ask Anything
+    val gray = remember { Color.Gray }
     val titleText = "Ask Anything"
     val thinkingText = "Thinking..."
 
