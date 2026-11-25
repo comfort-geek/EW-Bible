@@ -94,7 +94,6 @@ class HomeViewModel(
     private var cloudSyncDone = false
     private var lastCommentaryKey = ""
 
-    // ✅ FIX: Counter, not boolean. One upload finishing must not clear another pending upload.
     private var pendingUploads = 0
     private val pendingLock = Any()
 
@@ -146,7 +145,6 @@ class HomeViewModel(
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
-    // ✅ FIX: markSynced only clears if no pending uploads remain
     private fun markSynced() {
         synchronized(pendingLock) {
             if (pendingUploads > 0) return
@@ -235,6 +233,8 @@ class HomeViewModel(
             }
         }
 
+        // SINGLE SOURCE: ViewModel drives summary + commentary on chapter change.
+        // HomeScreen must NOT also call loadSummary/loadCommentary or it cancels this job.
         viewModelScope.launch {
             bookChapterKey
                 .distinctUntilChanged()
@@ -316,15 +316,11 @@ class HomeViewModel(
                     }
                 }
             }
-            // ✅ FIX: Do NOT call markSynced() here if local uploads are still pending.
-            // Download success does not mean upload success.
             if (notesResult.isSuccess && highlightsResult.isSuccess && progressResult.isSuccess) {
                 markSynced()
             } else {
                 cloudSyncDone = false
                 markUnsynced()
-                // Undo the +1 from markUnsynced if it was only download failure, keep flag true
-                // markUnsynced already set flag, no extra work needed
             }
         } catch (e: Exception) {
             cloudSyncDone = false
@@ -444,6 +440,9 @@ class HomeViewModel(
         }
     }
 
+    // FIXED: Never clear old summary while loading new one.
+    // Old summary stays until new one arrives. BibleContent also checks
+    // bookId/chapter, so old summary never shows for wrong chapter.
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
         synchronized(summaryCache) { summaryCache.get(key) }?.let { cached ->
@@ -463,6 +462,8 @@ class HomeViewModel(
                     synchronized(summaryCache) { summaryCache.put(key, s) }
                     if (isCurrentNow) summaryState.value = s
                 } else {
+                    // Only clear if this chapter really has no summary AND is still current.
+                    // Don't clear old summary for a stale chapter.
                     if (isCurrentNow) summaryState.value = null
                 }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
