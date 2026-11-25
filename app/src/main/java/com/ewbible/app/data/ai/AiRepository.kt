@@ -35,7 +35,7 @@ class AiRepository {
     private val REMOTE_MODELS_URL =
         "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
 
-    // --- DO NOT CHANGE - YOUR CURRENT MODELS ONLY ---
+    // --- DO NOT CHANGE THESE LISTS - YOUR CURRENT MODELS ONLY ---
     private val FALLBACK_GEMINI = listOf("gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.5-flash-lite")
     private val FALLBACK_GROQ = listOf("openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b")
     private val FALLBACK_CLOUDFLARE = listOf("@cf/meta/llama-3.3-70b-instruct", "@cf/meta/llama-3-8b-instruct")
@@ -53,7 +53,7 @@ class AiRepository {
     private var cachedAt = 0L
     private val WEB_CACHE_MS = 10 * 60 * 1000L
 
-    // --- Provider health ---
+    // --- Provider health - skip dead / 429 models for 5 min ---
     private data class FailState(var count: Int = 0, var blockedUntil: Long = 0L)
     private val failMap = mutableMapOf<String, FailState>()
     private fun isBlocked(model: String): Boolean {
@@ -97,7 +97,7 @@ class AiRepository {
         }
     }
 
-    // --- AUTO-PICK: 3 providers ---
+    // --- AUTO-PICK: 3 providers, order depends on question ---
     private fun autoPickProviders(context: ContextType, isBreakdown: Boolean, hasImage: Boolean): List<String> {
         if (hasImage) return listOf("Gemini")
         return when {
@@ -153,7 +153,7 @@ class AiRepository {
             "salvation", "holy spirit", "baptism", "baptise", "heaven", "hell",
             "abraham", "isaac", "jacob", "joseph", "samuel", "elijah", "elisha",
             "peter", "paul", "john", "mary", "solomon", "noah", "adam", "eve",
-            "disciple", "kingdom", "prayer", "pray", "worship", "sermon", "parable",
+            "disciple", "kingdom", "worship", "sermon", "parable",
             "covenant", "grace", "mercy", "repent", "forgiveness", "anointing",
             "tithe", "offering", "fasting", "temptation", "blessing", "miracle"
         )
@@ -189,7 +189,6 @@ class AiRepository {
             "explain daniel", "explain psalm", "explain john", "explain matthew"
         )
 
-        // PRAYER_PHRASES REMOVED - no prayer auto-boost
         val DEVOTIONAL_PHRASES = listOf("devotion", "daily verse", "verse of the day", "morning devotion", "devotional", "verse for today")
         val GREETINGS = setOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you", "good morning", "good evening", "good afternoon", "yo", "hie", "hello there")
     }
@@ -276,7 +275,6 @@ class AiRepository {
 
         if (q.contains("in the bible") || q.contains("bible says") || q.contains("according to the bible") || q.contains("from scripture") || q.contains("bible verse")) bibleScore += 10
         if (q.contains("what does the bible say") || q.contains("bible teach")) bibleScore += 5
-        // PRAYER boost REMOVED
         if (DEVOTIONAL_PHRASES.any { q.contains(it) }) bibleScore += 7
 
         val bibleWordCount = BIBLE_WORDS.count { q.contains(it) }
@@ -328,7 +326,7 @@ class AiRepository {
 
         val ref = currentRef.lowercase().trim()
         val isInBibleView = ref.isNotBlank() && ref != "home" && !ref.contains("chat")
-        if (isInBibleView && q.length < 80 && (hasMeaning || q.contains("today") || q.contains("apply") || q.contains("for me") || q.contains("mean"))) {
+        if (isInBibleView && q.length < 80 && (hasMeaning || q.contains("today") || q.contains("apply") || q.contains("mean"))) {
             bibleScore += 1.5
         }
         if (history.isNotEmpty()) {
@@ -373,7 +371,7 @@ class AiRepository {
             lower.contains("history") || lower.contains("biography") -> "year"
             else -> "month"
         }
-        return withTimeoutOrNull(4000L) { searchTavily(question, timeRange) } ?: ""
+        return withTimeoutOrNull(12000L) { searchTavily(question, timeRange) } ?: ""
     }
 
     private suspend fun searchTavily(query: String, timeRange: String = "month"): String {
@@ -385,8 +383,8 @@ class AiRepository {
                     requestMethod = "POST"
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty(PROXY_HEADER, PROXY_VALUE)
-                    connectTimeout = 3000
-                    readTimeout = 4000
+                    connectTimeout = 8000
+                    readTimeout = 12000
                     doOutput = true
                 }
                 val body = JSONObject().put("query", query).put("search_depth", "basic").put("max_results", 5).put("include_answer", true).put("time_range", timeRange).toString()
@@ -524,7 +522,7 @@ class AiRepository {
         sb.append("$contextRule\n$lengthRule\n\n")
         if (bibleContext.isNotBlank() && (context == ContextType.BIBLE || context == ContextType.BREAKDOWN)) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
         if (webContext.isNotBlank()) sb.append("WEB SEARCH RESULTS (true facts as of $today):\n${webContext.take(3500)}\n\n")
-        else if (context == ContextType.NEWS) sb.append("No web results were available. Do not guess. Say you don't have verified info.\n\n")
+        else if (context == ContextType.NEWS) sb.append("Web search returned no results this time. Answer from general knowledge if you can, but say clearly 'not verified from live search' and do not invent specific dates, names or URLs.\n\n")
         if (history.isNotEmpty()) {
             sb.append("CONVERSATION HISTORY (last 4):\n")
             history.takeLast(4).forEach { sb.append(if (it.isUser) "User: " else "Assistant: ").append(it.text.take(500)).append("\n") }
