@@ -26,6 +26,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ewbible.app.ui.viewmodel.ChatViewModel
@@ -43,26 +44,57 @@ private fun LinkText(
     val uriHandler = LocalUriHandler.current
     val annotated = remember(text, color) {
         buildAnnotatedString {
-            append(text)
-            val regex = Regex("https?://[^\\s]+")
+            // Matches: **bold** OR [Title](url) OR raw https://url
+            val regex = Regex("""\*\*(.+?)\*\*|\[([^\]]+)\]\((https?://[^)]+)\)|(https?://[^\s)]+)""")
+            var lastIndex = 0
             regex.findAll(text).forEach { match ->
-                var url = match.value
-                var end = match.range.last + 1
-                while (url.endsWith(".") || url.endsWith(",") || url.endsWith(")") || url.endsWith("]")) {
-                    url = url.dropLast(1)
-                    end -= 1
+                if (match.range.first > lastIndex) {
+                    append(text.substring(lastIndex, match.range.first))
                 }
-                addStyle(
-                    style = SpanStyle(color = Color(0xFF1A73E8), textDecoration = TextDecoration.Underline),
-                    start = match.range.first,
-                    end = end
-                )
-                addStringAnnotation(
-                    tag = "URL",
-                    annotation = url,
-                    start = match.range.first,
-                    end = end
-                )
+                val boldText = match.groups[1]?.value
+                val linkTitle = match.groups[2]?.value
+                val linkUrl = match.groups[3]?.value
+                val rawUrl = match.groups[4]?.value
+
+                when {
+                    boldText != null -> {
+                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                            append(boldText)
+                        }
+                    }
+                    linkTitle != null && linkUrl != null -> {
+                        val start = length
+                        append(linkTitle)
+                        addStyle(
+                            style = SpanStyle(
+                                color = Color(0xFF1A73E8),
+                                textDecoration = TextDecoration.Underline,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            start = start,
+                            end = length
+                        )
+                        addStringAnnotation("URL", linkUrl, start, length)
+                    }
+                    rawUrl != null -> {
+                        var url = rawUrl
+                        while (url.endsWith(".") || url.endsWith(",") || url.endsWith(")") || url.endsWith("]")) {
+                            url = url.dropLast(1)
+                        }
+                        val start = length
+                        append(url)
+                        addStyle(
+                            style = SpanStyle(color = Color(0xFF1A73E8), textDecoration = TextDecoration.Underline),
+                            start = start,
+                            end = length
+                        )
+                        addStringAnnotation("URL", url, start, length)
+                    }
+                }
+                lastIndex = match.range.last + 1
+            }
+            if (lastIndex < text.length) {
+                append(text.substring(lastIndex))
             }
         }
     }
@@ -176,8 +208,8 @@ fun AiChatScreen(
 
     val gray = remember { Color.Gray }
 
-    val titleText = if (state.aiProvider == "Groq") "Ask Groq" else "Ask Gemini"
-    val thinkingText = if (state.aiProvider == "Groq") "Groq is connecting..." else "Gemini is thinking..."
+    val titleText = "Ask EW Bible"
+    val thinkingText = "Thinking..."
 
     if (showHistory) {
         ModalBottomSheet(
@@ -209,17 +241,14 @@ fun AiChatScreen(
         }
     }
 
-    // ✅ FIX: Scaffold pins topBar, only body moves with keyboard
     Scaffold(
         containerColor = background,
         topBar = {
-            // ✅ FIXED: added .statusBarsPadding() - was missing, top bar went under notch
             Column(
                 modifier = Modifier
                     .background(background)
                     .statusBarsPadding()
             ) {
-                // --- Top bar - PINNED, never moves ---
                 Row(
                     modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -247,7 +276,6 @@ fun AiChatScreen(
                     IconButton(onClick = { viewModel.startNewChat(currentRef) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
                 }
 
-                // --- Translation chips - also pinned with top bar ---
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -274,7 +302,6 @@ fun AiChatScreen(
                 .background(background)
                 .imePadding()
         ) {
-            // --- Messages ---
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
@@ -297,7 +324,6 @@ fun AiChatScreen(
                 }
             }
 
-            // --- Image attached banner ---
             if (selectedImage != null) {
                 Row(
                     modifier = Modifier.fillMaxWidth().background(background).padding(horizontal = 8.dp),
@@ -308,7 +334,6 @@ fun AiChatScreen(
                 }
             }
 
-            // --- Input ---
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
