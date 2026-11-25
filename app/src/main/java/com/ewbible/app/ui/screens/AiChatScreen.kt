@@ -43,33 +43,52 @@ private fun cleanSourceNumbering(text: String): String {
         .replace(Regex("(?m)^\\d+\\.\\s*Source\\s*[-:.]\\s*"), "")
 }
 
-// Strip headings + incomplete markdown, KEEP **bold** so LinkText can render it
+// Strip headings + single * completely, KEEP **bold** so LinkText can render it
+// Works for streaming AND final, because both use this same function.
 private fun cleanMarkdownForDisplay(text: String): String {
     var t = cleanSourceNumbering(text)
     t = t.replace(Regex("(?m)^#{1,6}\\s*"), "")
     t = t.replace("```", "")
-    // Do NOT strip ** here - LinkText needs it
+    t = t.replace(Regex("(?m)^---\\s*$"), "")
+
     // If last ** is incomplete (streaming cut it), drop that one lone **
     val boldCount = Regex("\\*\\*").findAll(t).count()
     if (boldCount % 2 == 1) {
         val last = t.lastIndexOf("**")
         if (last >= 0) t = t.removeRange(last, last + 2)
     }
-    // Lone trailing # or ` from incomplete chunk
-    t = t.replace(Regex("[#`]+\\s*$"), "")
-    // Lone trailing single * - but not if it's part of **
-    val trimmed = t.trimEnd()
-    if (trimmed.endsWith("*") && !trimmed.endsWith("**")) {
-        t = trimmed.dropLast(1)
+
+    // 1. PROTECT **bold** so we don't strip its stars by mistake
+    val bolds = mutableListOf<String>()
+    t = Regex("\\*\\*(.+?)\\*\\*").replace(t) { match ->
+        bolds.add(match.groupValues[1])
+        "\u0000BOLD${bolds.size - 1}\u0000"
     }
+
+    // 2. Strip ALL leftover single * - this is the *"verse"* in your screenshot
+    // *italic* -> italic, *"quote"* -> "quote", * bullet -> bullet
+    t = t.replace("*", "")
+
+    // 3. Also strip _italic_ and `code`
+    t = t.replace(Regex("_(.+?)_"), "$1")
+    t = t.replace("`", "")
+
+    // 4. Restore **bold** - LinkText will render it bold
+    bolds.forEachIndexed { index, bold ->
+        t = t.replace("\u0000BOLD$index\u0000", "**$bold**")
+    }
+
+    // Lone trailing # from incomplete heading
+    t = t.replace(Regex("#+\\s*$"), "")
     return t.trim()
 }
 
-// For copy: plain text, no ** at all
+// For copy: plain text, no **, no single * at all
 private fun cleanForCopy(text: String): String {
     return cleanMarkdownForDisplay(text)
         .replace(Regex("\\*\\*(.+?)\\*\\*"), "$1")
         .replace(Regex("__(.+?)__"), "$1")
+        .replace("*", "")
 }
 
 @Composable
