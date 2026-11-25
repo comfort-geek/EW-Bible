@@ -77,7 +77,7 @@ private fun LinkText(
                         addStringAnnotation("URL", linkUrl, start, length)
                     }
                     rawUrl != null -> {
-                        var url = rawUrl
+                        var url: String = rawUrl
                         while (url.endsWith(".") || url.endsWith(",") || url.endsWith(")") || url.endsWith("]")) {
                             url = url.dropLast(1)
                         }
