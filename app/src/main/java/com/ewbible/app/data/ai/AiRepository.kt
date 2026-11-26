@@ -163,7 +163,7 @@ class AiRepository {
     private enum class ContextType { BIBLE, BREAKDOWN, NEWS, GENERAL, MIXED }
 
     // IMPROVEMENT 3: Action Detection - WHAT user wants AI to DO
-    private enum class ActionType { NONE, PRAY, COMPARE, SUMMARIZE, TRANSLATE, LIST, EXPLAIN, TEACH }
+    private enum class ActionType { NONE, RECOMMEND, COMPARE, SUMMARIZE, TRANSLATE, LIST, EXPLAIN, TEACH }
 
     private data class Decision(
         val type: ContextType,
@@ -191,8 +191,16 @@ class AiRepository {
 
     private fun detectAction(q: String): ActionType {
         val s = q.lowercase().trim()
-        // Order matters: pray first, because "pray for me about John 3:16" is still PRAY
-        if (s.contains("pray for") || s.startsWith("pray") || s.contains("prayer for") || s.contains("please pray")) return ActionType.PRAY
+        // RECOMMEND first - user wants ideas to get things right / solved
+        if (s.contains("recommend") || s.contains("suggest") || s.contains("what should i do") ||
+            s.contains("what do you recommend") || s.contains("advice") ||
+            s.contains("how do i fix") || s.contains("how to fix") ||
+            s.contains("how do i solve") || s.contains("how to solve") ||
+            s.contains("how to get") || s.contains("how can i get") ||
+            s.contains("give me ideas") || s.contains("ideas to") ||
+            s.contains("help me decide") || s.contains("which one should") ||
+            s.contains("best way to") || s.contains("best option")
+        ) return ActionType.RECOMMEND
         if (s.contains("compare") || s.contains("difference between") || s.contains("vs ") || s.contains("versus")) return ActionType.COMPARE
         if (s.contains("summar") || s.contains("shorten") || s.contains("make it short") || s.contains("in short") || s.contains("tl;dr")) return ActionType.SUMMARIZE
         if (s.startsWith("translate") || s.contains("translate this") || s.contains("translate to") || s.contains("in chichewa") || s.contains("in english")) return ActionType.TRANSLATE
@@ -220,13 +228,6 @@ class AiRepository {
             return Decision(ContextType.GENERAL, listOf(ContextType.GENERAL), ActionType.NONE, 1.0)
 
         val action = detectAction(q)
-
-        // PRAY is strong - it wins even if mixed, because user wants prayer not study
-        if (action == ActionType.PRAY) {
-            val base = decideWithoutAction(question, currentRef, history)
-            return base.copy(action = action)
-        }
-
         val d = decideWithoutAction(question, currentRef, history)
         return d.copy(action = action)
     }
@@ -262,16 +263,12 @@ class AiRepository {
             var best = scores.best()
 
             // IMPROVEMENT 1: If follow-up and weak signal, inherit last intent
-            // e.g. "and verse 17?" after John 3:16 -> still BIBLE
-            // e.g. "and his vice?" after election -> still NEWS
             if (isFollowUp && lastIntent != null && top[0].second < 6.0) {
                 best = lastIntent
             }
 
             // IMPROVEMENT 2: If ambiguous in single question, keep both as MIXED candidates
-            // We handle this after loop by checking gap
             if (segments.size == 1 && gap < 1.5 && top[0].second >= 4.0 && top[1].second >= 4.0) {
-                // e.g. BIBLE 10 vs NEWS 9 -> don't guess, return MIXED
                 val both = listOf(top[0].first, top[1].first).distinct()
                 return Decision(ContextType.MIXED, both, ActionType.NONE, confidence = 0.5)
             }
@@ -300,24 +297,19 @@ class AiRepository {
     // IMPROVEMENT 1: Follow-up detection + last intent
     private fun isFollowUpSegment(seg: String): Boolean {
         val s = seg.lowercase().trim()
-        // Short + referring words = follow-up
         val referring = listOf("it", "that", "this", "he", "she", "his", "her", "them", "verse", "chapter").any { s.contains(it) }
         val short = s.length < 60
         val startsWithAnd = s.startsWith("and ") || s.startsWith("what about") || s.startsWith("and what")
-        // "verse 17", "chapter 4", "and his vice" are follow-ups even without it/that
         val bareRef = BIBLE_REF_REGEX.containsMatchIn(s) || s.contains("verse") || s.contains("his ") || s.contains("her ")
         return (short && referring) || startsWithAnd || (short && bareRef)
     }
 
     private fun getLastIntent(history: List<MessageEntity>): ContextType? {
         if (history.isEmpty()) return null
-        // Look at last 4 messages, last user question is most important
         val lastUser = history.lastOrNull { it.isUser } ?: return null
         val lastText = lastUser.text.lowercase()
-        // Score last question WITHOUT history to avoid recursion
         val scores = scoreOne(lastText, "", emptyList(), isSegment = false)
         val best = scores.best()
-        // Only trust it if it was strong
         val topScore = scores.topTwo()[0].second
         if (topScore < 4.0) return null
         return best
@@ -615,7 +607,7 @@ class AiRepository {
 
         // IMPROVEMENT 3: Action changes HOW to answer, not just WHAT topic
         val actionRule = when (action) {
- 
+            ActionType.RECOMMEND -> "ACTION: RECOMMEND. Recommend the user on some ideas to get things right and solved. Give 3 to 5 practical ideas, explain briefly why each one works, then end with 1 clear best pick and the first step to take. Keep it practical, not theoretical."
             ActionType.COMPARE -> "ACTION: COMPARE. Show similarities and differences clearly, side by side if helpful. End with a short conclusion."
             ActionType.SUMMARIZE -> "ACTION: SUMMARIZE. Keep it very short. Give only the main points, no long explanation."
             ActionType.TRANSLATE -> "ACTION: TRANSLATE. Only translate the text given. Do not add explanation unless asked."
