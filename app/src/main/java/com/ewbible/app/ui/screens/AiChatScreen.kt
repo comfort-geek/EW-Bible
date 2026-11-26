@@ -95,10 +95,11 @@ private fun cleanForCopy(text: String): String {
 private fun LinkText(
     text: String,
     color: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isUser: Boolean = false
 ) {
     val uriHandler = LocalUriHandler.current
-    val cleanText = remember(text) { cleanMarkdownForDisplay(text) }
+    val cleanText = remember(text, isUser) { if (isUser) text else cleanMarkdownForDisplay(text) }
     val annotated = remember(cleanText, color) {
         buildAnnotatedString {
             val regex = Regex("""\*\*(.+?)\*\*|\[([^\]]+)\]\((https?://[^)]+)\)|(https?://[^\s)]+)""")
@@ -188,7 +189,8 @@ private fun MessageBubble(
             LinkText(
                 text = text,
                 color = if (isUser) Color.White else textColor,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                isUser = isUser
             )
         }
         if (!isUser) {
@@ -226,7 +228,7 @@ fun AiChatScreen(
     var selectedImage by remember { mutableStateOf<Bitmap?>(null) }
     var showHistory by remember { mutableStateOf(false) }
     var selectedTranslation by remember { mutableStateOf("NKJV") }
-    val translations = remember { listOf("NKJV", "KJV", "NIV", "ESV") }
+    val translations = remember { listOf("NKJV", "KJV", "NIV", "ESV", "CSB") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -274,11 +276,7 @@ fun AiChatScreen(
 
     val gray = remember { Color.Gray }
     val titleText = "Ask Anything"
-    val thinkingText = if (state.aiProvider.isNotBlank()) {
-        "Thinking... ${state.aiProvider}"
-    } else {
-        "Thinking..."
-    }
+    val thinkingText = "Thinking..."
 
     if (showHistory) {
         ModalBottomSheet(
@@ -346,17 +344,25 @@ fun AiChatScreen(
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     translations.forEach { t ->
                         val isSelected = selectedTranslation == t
                         Box(
                             modifier = Modifier
+                                .weight(1f)
                                 .background(if (isSelected) gold else panel, shape = RoundedCornerShape(16.dp))
                                 .clickable { selectedTranslation = t }
-                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Text(t, color = if (isSelected) Color.White else textColor, fontSize = 13.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                            Text(
+                                t,
+                                color = if (isSelected) Color.White else textColor,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                maxLines = 1
+                            )
                         }
                     }
                 }
@@ -411,38 +417,4 @@ fun AiChatScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Image attached ✓", color = gold, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { selectedImage = null }) { Text("Remove") }
-                }
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(background)
-                    .navigationBarsPadding()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = { picker.launch("image/*") }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Image, null, tint = gold) }
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    placeholder = { Text(if (state.isLoading) "Type next question..." else "Ask anything...", maxLines = 1) },
-                    modifier = Modifier.weight(1f),
-                    maxLines = 4,
-                    enabled = true
-                )
-                IconButton(
-                    onClick = {
-                        val q = input.trim()
-                        if (q.isBlank()) return@IconButton
-                        viewModel.send(q, currentRef, selectedImage, selectedTranslation)
-                        input = ""
-                        selectedImage = null
-                    },
-                    enabled = input.isNotBlank(),
-                    modifier = Modifier.size(40.dp)
-                ) { Icon(Icons.Default.Send, null, tint = if (input.isNotBlank()) gold else gray) }
-            }
-        }
-    }
-}
+                    TextButton(onClick = { selectedImage = null }) { Text("Remove")
