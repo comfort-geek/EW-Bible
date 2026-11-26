@@ -212,6 +212,7 @@ fun AiChatScreen(
     var selectedImage by remember { mutableStateOf<Bitmap?>(null) }
     var showHistory by remember { mutableStateOf(false) }
     var selectedTranslation by remember { mutableStateOf("NKJV") }
+    // CSB kept last so it sits at far right, same row as the rest
     val translations = remember { listOf("NKJV", "KJV", "NIV", "ESV", "CSB") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -326,15 +327,18 @@ fun AiChatScreen(
                     )
                     IconButton(onClick = { viewModel.startNewChat(currentRef) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
                 }
+                // Translation row - all 5 in ONE row, same height, CSB at far right
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     translations.forEach { t ->
                         val isSelected = selectedTranslation == t
                         Box(
                             modifier = Modifier
                                 .weight(1f)
+                                .height(32.dp)
                                 .background(if (isSelected) gold else panel, shape = RoundedCornerShape(16.dp))
                                 .clickable { selectedTranslation = t }
                                 .padding(horizontal = 4.dp, vertical = 6.dp),
