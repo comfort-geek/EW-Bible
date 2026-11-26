@@ -41,9 +41,6 @@ class ChatViewModel(
 ) : ViewModel() {
 
     private val VERSE_REGEX = Regex("""((?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s+(\d+):(\d+)""")
-    private val SOURCE_BOLD_REGEX = Regex("^\\*\\*Source\\s*\\d*\\s*[-:.]?\\s*\\*\\*\\s*")
-    private val SOURCE_DASH_REGEX = Regex("^Source\\s*\\d*\\s*[-:.]\\s*")
-    private val SOURCE_PLAIN_REGEX = Regex("^Source\\s*\\d*\\s*")
 
     private val contextCache = object : LinkedHashMap<String, String>(20, 0.75f, true) {
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 20
@@ -440,6 +437,7 @@ class ChatViewModel(
     }
 
     // FIXED: Strip single * completely, keep **bold**, keep 1. / - / • lists
+    // FIXED RAG: Do NOT strip Sources - model needs to show [Title](URL) citations
     private fun cleanMarkdown(text: String): String {
         var cleaned = text
             .replace("**Bold Title:**", "")
@@ -457,7 +455,6 @@ class ChatViewModel(
         }
 
         // 2. Strip ALL leftover single * and _italic_
-        // *"quote"* -> "quote", *italic* -> italic
         cleaned = cleaned.replace("*", "")
         cleaned = cleaned.replace(Regex("_(.+?)_"), "$1")
         cleaned = cleaned.replace("__", "")
@@ -468,14 +465,7 @@ class ChatViewModel(
         }
 
         return cleaned.lines().joinToString("\n") { line ->
-            var l = line.trimStart()
-            // KEEP 1. / 1) / - / • — RECOMMEND / LIST need them
-            l = l.replace(SOURCE_BOLD_REGEX, "")
-            l = l.replace(SOURCE_DASH_REGEX, "")
-            l = l.replace(SOURCE_PLAIN_REGEX, "")
-            l = l.replace(SOURCE_BOLD_REGEX, "")
-            l = l.replace(SOURCE_DASH_REGEX, "")
-            l
+            line.trimStart()
         }.trim()
     }
 
