@@ -25,7 +25,7 @@ import java.util.Locale
 
 class AiRepository {
 
-    private val _lastProvider = MutableStateFlow("Groq")
+    private val _lastProvider = MutableStateFlow("")
     val lastProvider: StateFlow<String> = _lastProvider.asStateFlow()
 
     private val PROXY_BASE = "https://exportdefaultasyncfetchrequestenvconsturl.comfortcha34.workers.dev/"
@@ -35,7 +35,6 @@ class AiRepository {
     private val REMOTE_MODELS_URL =
         "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
 
-    // --- DO NOT CHANGE THESE LISTS - YOUR CURRENT MODELS ONLY ---
     private val FALLBACK_GEMINI = listOf("gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.5-flash-lite")
     private val FALLBACK_GROQ = listOf("openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b")
     private val FALLBACK_CLOUDFLARE = listOf("@cf/meta/llama-3.3-70b-instruct", "@cf/meta/llama-3-8b-instruct")
@@ -53,76 +52,6 @@ class AiRepository {
     private var cachedAt = 0L
     private val WEB_CACHE_MS = 10 * 60 * 1000L
 
-    // --- Provider health - skip dead / 429 models for 5 min ---
-    private data class FailState(var count: Int = 0, var blockedUntil: Long = 0L)
-    private val failMap = mutableMapOf<String, FailState>()
-    private fun isBlocked(model: String): Boolean {
-        val s = failMap[model] ?: return false
-        if (System.currentTimeMillis() > s.blockedUntil) { s.count = 0; s.blockedUntil = 0L; return false }
-        return true
-    }
-    private fun markFail(model: String, is429: Boolean) {
-        val s = failMap.getOrPut(model) { FailState() }
-        s.count++
-        if (is429 || s.count >= 3) s.blockedUntil = System.currentTimeMillis() + 5 * 60 * 1000L
-    }
-    private fun markOk(model: String) { failMap.remove(model) }
-
-    // --- Model data - YOUR models only ---
-    private data class ModelInfo(
-        val provider: String,
-        val model: String,
-        val strength: Int,
-        val speed: Int,
-        val bestForBible: Boolean,
-        val bestForBreakdown: Boolean,
-        val bestForNews: Boolean,
-        val supportsImage: Boolean,
-        val maxTokens: Int,
-        val contextWindow: Int,
-        val isReasoning: Boolean
-    )
-
-    private fun modelInfo(provider: String, model: String): ModelInfo {
-        return when (model) {
-            "gemini-4-hydrogen" -> ModelInfo(provider, model, 10, 7, true, true, true, true, 8192, 1000000, true)
-            "gemini-3.8-flash" -> ModelInfo(provider, model, 8, 9, true, true, true, true, 4096, 1000000, false)
-            "gemini-3.5-flash-lite" -> ModelInfo(provider, model, 6, 10, false, false, true, true, 4096, 1000000, false)
-            "openai/gpt-oss-120b" -> ModelInfo(provider, model, 10, 6, true, true, true, false, 4096, 131072, true)
-            "qwen/qwen3.8-27b" -> ModelInfo(provider, model, 8, 8, true, true, false, false, 4096, 131072, false)
-            "openai/gpt-oss-20b" -> ModelInfo(provider, model, 6, 10, false, false, true, false, 4096, 131072, false)
-            "@cf/meta/llama-3.3-70b-instruct" -> ModelInfo(provider, model, 8, 7, true, true, false, false, 4096, 131072, false)
-            "@cf/meta/llama-3-8b-instruct" -> ModelInfo(provider, model, 5, 10, false, false, true, false, 4096, 131072, false)
-            else -> ModelInfo(provider, model, 5, 5, false, false, false, false, 4096, 32000, false)
-        }
-    }
-
-    // --- AUTO-PICK: 3 providers, order depends on question ---
-    private fun autoPickProviders(context: ContextType, isBreakdown: Boolean, hasImage: Boolean): List<String> {
-        if (hasImage) return listOf("Gemini")
-        return when {
-            isBreakdown || context == ContextType.BIBLE -> listOf("Groq", "Gemini", "Cloudflare")
-            context == ContextType.NEWS -> listOf("Groq", "Cloudflare", "Gemini")
-            else -> listOf("Groq", "Cloudflare", "Gemini")
-        }
-    }
-
-    private fun orderedModels(provider: String, list: List<String>, context: ContextType, isBreakdown: Boolean, questionLen: Int = 0): List<String> {
-        val usable = list.filter { !isBlocked(it) }
-        if (usable.isEmpty()) return emptyList()
-        val infos = usable.map { modelInfo(provider, it) }
-        return when {
-            isBreakdown || context == ContextType.BIBLE -> infos.sortedWith(
-                compareByDescending<ModelInfo> { it.strength }.thenByDescending { it.contextWindow }
-            ).map { it.model }
-            context == ContextType.NEWS -> infos.sortedWith(
-                compareByDescending<ModelInfo> { it.speed }.thenByDescending { if (it.bestForNews) 1 else 0 }
-            ).map { it.model }
-            questionLen > 300 -> infos.sortedByDescending { it.contextWindow }.map { it.model }
-            else -> infos.sortedByDescending { it.speed }.map { it.model }
-        }
-    }
-
     private companion object {
         const val STYLE_RULE = "You are a helpful assistant. Answer naturally like a knowledgeable friend. Do not mention what model you are. Do not say 'as an AI'. Match your length to the question: short question = short answer, deep question = deeper answer. Use paragraphs, headings or lists only if they help clarity — do not force them. Do not force Bible verses, prayer, or a Sources section unless the question actually needs it."
 
@@ -130,7 +59,7 @@ class AiRepository {
             "genesis", "exodus", "leviticus", "numbers", "deuteronomy",
             "joshua", "judges", "ruth", "samuel", "kings", "chronicles",
             "ezra", "nehemiah", "esther", "job", "psalm", "proverb",
-            "ecclesiastes", "song of solomon", "song of songs", "isaiah", "jeremiah",
+            "ecclesiastes", "song of solomon", "isaiah", "jeremiah",
             "lamentations", "ezekiel", "daniel", "hosea", "joel", "amos",
             "obadiah", "jonah", "micah", "nahum", "habakkuk", "zephaniah",
             "haggai", "zechariah", "malachi",
@@ -141,69 +70,42 @@ class AiRepository {
         )
 
         val BIBLE_REF_REGEX = Regex("\\b(${BIBLE_BOOKS.joinToString("|")})s?\\s+\\d+")
-        val NUMBERED_BOOK_REGEX = Regex("\\b[12]\\s+(samuel|kings|chronicles|corinthians|thessalonians|timothy|peter|john|cor)\\s+\\d+")
-        val SHORT_BOOK_REGEX = Regex("\\b(1\\s?cor|2\\s?cor|1\\s?john|2\\s?john|3\\s?john|1\\s?pet|2\\s?pet|1\\s?tim|2\\s?tim|phil|col|gal|eph|rom|heb|jas|jud)\\s+\\d+")
-        val FULL_REF_REGEX = Regex("\\b(${BIBLE_BOOKS.joinToString("|")})s?\\s+\\d+\\s*:\\s*\\d+(\\s*-\\s*\\d+)?", RegexOption.IGNORE_CASE)
-        val CHAPTER_ONLY_REGEX = Regex("\\b(${BIBLE_BOOKS.joinToString("|")})s?\\s+\\d+\\b", RegexOption.IGNORE_CASE)
+        val NUMBERED_BOOK_REGEX = Regex("\\b[12]\\s+(samuel|kings|chronicles|corinthians|thessalonians|timothy|peter|john)\\s+\\d+")
 
         val BIBLE_WORDS = setOf(
-            "verse", "verses", "chapter", "bible", "scripture", "psalm", "psalms", "proverb", "proverbs",
-            "jesus", "christ", "god", "lord", "church", "pastor", "pastors", "prophet", "prophecy",
-            "david", "moses", "apostle", "apostles", "gospel", "sin", "faith",
-            "salvation", "holy spirit", "baptism", "baptise", "heaven", "hell",
-            "abraham", "isaac", "jacob", "joseph", "samuel", "elijah", "elisha",
-            "peter", "paul", "john", "mary", "solomon", "noah", "adam", "eve",
-            "disciple", "kingdom", "worship", "sermon", "parable",
-            "covenant", "grace", "mercy", "repent", "forgiveness", "anointing",
-            "tithe", "offering", "fasting", "temptation", "blessing", "miracle"
+            "verse", "chapter", "bible", "scripture", "psalm", "proverb",
+            "jesus", "god", "lord", "church", "pastor",
+            "david", "moses", "apostle", "gospel", "sin", "faith",
+            "salvation", "holy spirit", "baptism", "heaven", "hell",
+            "abraham", "isaac", "jacob", "joseph", "samuel", "elijah",
+            "peter", "paul", "john", "mary", "solomon", "noah"
         )
 
         val FACTUAL_INTENT = listOf(
-            "who is", "who won", "who was", "who became", "who appointed", "who is the",
+            "who is", "who won", "who was", "who became", "who appointed",
             "what happened", "what is happening", "latest", "recent", "current",
-            "today", "yesterday", "this week", "this year", "this month",
+            "today", "yesterday", "this week", "this year",
             "when did", "when will", "how many", "how much",
-            "election", "elections", "results", "president", "minister", "government", "parliament",
-            "job", "jobs", "hiring", "vacancy", "vacancies", "apply", "salary", "interview",
-            "news", "pope", "war", "football", "soccer", "score", "scores",
-            "price of", "exchange rate", "weather", "fuel price", "maize price",
+            "election", "results", "president", "minister", "government",
+            "job", "jobs", "hiring", "vacancy", "vacancies", "apply", "salary",
+            "news", "pope", "war", "football", "soccer", "score",
+            "price of", "exchange rate", "weather",
             "tell me about", "biography", "history of",
-            "what is", "what are", "who are", "facts about", "define", "definition",
-            "did malawi", "malawi won", "malawi lost"
+            "what is", "what are", "who are", "facts about", "define", "definition"
         )
 
         val GENERAL_TOPICS = listOf(
-            "coding", "python", "java", "javascript", "kotlin", "programming", "developer",
-            "computer", "laptop", "phone", "android", "app", "website", "software",
-            "cooking", "recipe", "football", "soccer", "music", "movie", "movies",
-            "school", "exam", "business", "money", "job", "car", "house", "farming",
-            "health", "doctor", "medicine", "study", "university", "college"
+            "coding", "python", "java", "javascript", "programming", "developer",
+            "computer", "laptop", "phone", "android", "app", "website",
+            "cooking", "recipe", "football", "soccer", "music", "movie",
+            "school", "exam", "business", "money", "job", "car", "house"
         )
 
         val BREAKDOWN_PHRASES = listOf(
             "break down", "breakdown", "break it down", "verse by verse",
             "in portions", "in parts", "deep study", "deep dive", "go deep",
-            "explain this passage", "explain this chapter", "explain this verse",
-            "line by line", "step by step breakdown", "analyse this", "analyze this",
-            "what does this mean", "meaning of this verse", "unpack this",
-            "explain daniel", "explain psalm", "explain john", "explain matthew"
+            "explain this passage", "explain this chapter"
         )
-
-        val DEVOTIONAL_PHRASES = listOf("devotion", "daily verse", "verse of the day", "morning devotion", "devotional", "verse for today")
-        val GREETINGS = setOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you", "good morning", "good evening", "good afternoon", "yo", "hie", "hello there")
-    }
-
-    private fun cleanQuery(q: String): String {
-        var t = q.trim().replace(Regex("\\s+"), " ")
-        t = t.replace(Regex("(?i)(daniel|psalm|john|matthew|genesis|romans|isaiah)(\\d)"), "$1 $2")
-        return t
-    }
-
-    private fun extractRefs(question: String): List<String> {
-        val found = mutableListOf<String>()
-        FULL_REF_REGEX.findAll(question).forEach { found.add(it.value.trim()) }
-        if (found.isEmpty()) CHAPTER_ONLY_REGEX.findAll(question).forEach { found.add(it.value.trim()) }
-        return found.distinct().take(3)
     }
 
     suspend fun refreshModels(context: Context) {
@@ -227,6 +129,7 @@ class AiRepository {
             }
             remoteVersion = savedVersion
         } catch (_: Exception) { }
+
         try {
             val conn = URL(REMOTE_MODELS_URL).openConnection() as HttpURLConnection
             conn.connectTimeout = 3000
@@ -238,10 +141,10 @@ class AiRepository {
                 val newVersion = json.optInt("version", 0)
                 if (newVersion > remoteVersion) {
                     val g = json.optJSONArray("gemini")
-                    val qq = json.optJSONArray("groq")
+                    val q = json.optJSONArray("groq")
                     val c = json.optJSONArray("cloudflare")
                     if (g != null && g.length() > 0) remoteGemini = (0 until g.length()).map { g.getString(it) }
-                    if (qq != null && qq.length() > 0) remoteGroq = (0 until qq.length()).map { qq.getString(it) }
+                    if (q != null && q.length() > 0) remoteGroq = (0 until q.length()).map { q.getString(it) }
                     if (c != null && c.length() > 0) remoteCloudflare = (0 until c.length()).map { c.getString(it) }
                     remoteVersion = newVersion
                     prefs.edit()
@@ -256,105 +159,240 @@ class AiRepository {
         } catch (_: Exception) { }
     }
 
-    private enum class ContextType { BIBLE, BREAKDOWN, NEWS, GENERAL }
+    // ================= INTENT ROUTER =================
+    private enum class ContextType { BIBLE, BREAKDOWN, NEWS, GENERAL, MIXED }
 
-    private fun detectContext(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): ContextType {
-        val raw = cleanQuery(question)
-        val q = raw.lowercase().trim()
-        if (q in GREETINGS) return ContextType.GENERAL
-        if (q.length <= 2) return ContextType.GENERAL
+    // IMPROVEMENT 3: Action Detection - WHAT user wants AI to DO
+    private enum class ActionType { NONE, PRAY, COMPARE, SUMMARIZE, TRANSLATE, LIST, EXPLAIN, TEACH }
 
+    private data class Decision(
+        val type: ContextType,
+        val intents: List<ContextType>,
+        val action: ActionType = ActionType.NONE,
+        val confidence: Double = 1.0
+    )
+
+    private data class Scores(
+        val bible: Double,
+        val breakdown: Double,
+        val news: Double,
+        val general: Double
+    ) {
+        fun topTwo(): List<Pair<ContextType, Double>> {
+            return listOf(
+                ContextType.BIBLE to bible,
+                ContextType.BREAKDOWN to breakdown,
+                ContextType.NEWS to news,
+                ContextType.GENERAL to general
+            ).sortedByDescending { it.second }
+        }
+        fun best(): ContextType = topTwo()[0].first
+    }
+
+    private fun detectAction(q: String): ActionType {
+        val s = q.lowercase().trim()
+        // Order matters: pray first, because "pray for me about John 3:16" is still PRAY
+        if (s.contains("pray for") || s.startsWith("pray") || s.contains("prayer for") || s.contains("please pray")) return ActionType.PRAY
+        if (s.contains("compare") || s.contains("difference between") || s.contains("vs ") || s.contains("versus")) return ActionType.COMPARE
+        if (s.contains("summar") || s.contains("shorten") || s.contains("make it short") || s.contains("in short") || s.contains("tl;dr")) return ActionType.SUMMARIZE
+        if (s.startsWith("translate") || s.contains("translate this") || s.contains("translate to") || s.contains("in chichewa") || s.contains("in english")) return ActionType.TRANSLATE
+        if (s.contains("list") || s.contains("give me 5") || s.contains("give me 10") || s.contains("top 5") || s.contains("top 10")) return ActionType.LIST
+        if (s.contains("break down") || s.contains("breakdown") || s.contains("verse by verse")) return ActionType.EXPLAIN
+        if (s.contains("teach me") || s.contains("explain")) return ActionType.TEACH
+        return ActionType.NONE
+    }
+
+    private fun detectContext(
+        question: String,
+        currentRef: String = "",
+        history: List<MessageEntity> = emptyList()
+    ): ContextType {
+        return decide(question, currentRef, history).type
+    }
+
+    private fun decide(
+        question: String,
+        currentRef: String = "",
+        history: List<MessageEntity> = emptyList()
+    ): Decision {
+        val q = question.lowercase().trim()
+        if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you"))
+            return Decision(ContextType.GENERAL, listOf(ContextType.GENERAL), ActionType.NONE, 1.0)
+
+        val action = detectAction(q)
+
+        // PRAY is strong - it wins even if mixed, because user wants prayer not study
+        if (action == ActionType.PRAY) {
+            val base = decideWithoutAction(question, currentRef, history)
+            return base.copy(action = action)
+        }
+
+        val d = decideWithoutAction(question, currentRef, history)
+        return d.copy(action = action)
+    }
+
+    private fun decideWithoutAction(
+        question: String,
+        currentRef: String = "",
+        history: List<MessageEntity> = emptyList()
+    ): Decision {
+        val q = question.lowercase().trim()
+
+        // Split mixed question
+        val parts = q.split(Regex("\\s+and\\s+|\\s+also\\s+|\\s+plus\\s+|\\s+then\\s+|;|\\?"))
+            .map { it.trim() }.filter { it.length > 3 }
+        val segments = if (parts.size > 1) parts else listOf(q)
+
+        // IMPROVEMENT 1: Follow-up Memory - get last intent from history
+        val lastIntent = getLastIntent(history)
+
+        val found = mutableListOf<ContextType>()
+        var totalConfidence = 0.0
+
+        for (seg in segments) {
+            val isFollowUp = isFollowUpSegment(seg)
+            val scores = scoreOne(seg, currentRef, history, isSegment = segments.size > 1)
+
+            // IMPROVEMENT 2: Confidence - if top 2 are close, this segment is ambiguous
+            val top = scores.topTwo()
+            val gap = top[0].second - top[1].second
+            val confidence = if (top[0].second <= 0) 0.0 else (gap / (top[0].second + 1.0)).coerceIn(0.0, 1.0)
+            totalConfidence += confidence
+
+            var best = scores.best()
+
+            // IMPROVEMENT 1: If follow-up and weak signal, inherit last intent
+            // e.g. "and verse 17?" after John 3:16 -> still BIBLE
+            // e.g. "and his vice?" after election -> still NEWS
+            if (isFollowUp && lastIntent != null && top[0].second < 6.0) {
+                best = lastIntent
+            }
+
+            // IMPROVEMENT 2: If ambiguous in single question, keep both as MIXED candidates
+            // We handle this after loop by checking gap
+            if (segments.size == 1 && gap < 1.5 && top[0].second >= 4.0 && top[1].second >= 4.0) {
+                // e.g. BIBLE 10 vs NEWS 9 -> don't guess, return MIXED
+                val both = listOf(top[0].first, top[1].first).distinct()
+                return Decision(ContextType.MIXED, both, ActionType.NONE, confidence = 0.5)
+            }
+
+            found.add(best)
+        }
+
+        val distinct = found.distinct()
+        val avgConfidence = if (segments.isNotEmpty()) totalConfidence / segments.size else 1.0
+
+        // If low confidence overall, fall back to GENERAL (don't force web / bible)
+        if (avgConfidence < 0.15 && distinct == listOf(ContextType.GENERAL)) {
+            return Decision(ContextType.GENERAL, listOf(ContextType.GENERAL), ActionType.NONE, avgConfidence)
+        }
+
+        if (distinct.size > 1) {
+            val withoutBible = distinct.filter { it != ContextType.BIBLE }
+            if (distinct.contains(ContextType.BREAKDOWN) && withoutBible.size == 1 && withoutBible[0] == ContextType.BREAKDOWN) {
+                return Decision(ContextType.BREAKDOWN, listOf(ContextType.BREAKDOWN), ActionType.NONE, avgConfidence)
+            }
+            return Decision(ContextType.MIXED, distinct, ActionType.NONE, avgConfidence)
+        }
+        return Decision(distinct.first(), distinct, ActionType.NONE, avgConfidence)
+    }
+
+    // IMPROVEMENT 1: Follow-up detection + last intent
+    private fun isFollowUpSegment(seg: String): Boolean {
+        val s = seg.lowercase().trim()
+        // Short + referring words = follow-up
+        val referring = listOf("it", "that", "this", "he", "she", "his", "her", "them", "verse", "chapter").any { s.contains(it) }
+        val short = s.length < 60
+        val startsWithAnd = s.startsWith("and ") || s.startsWith("what about") || s.startsWith("and what")
+        // "verse 17", "chapter 4", "and his vice" are follow-ups even without it/that
+        val bareRef = BIBLE_REF_REGEX.containsMatchIn(s) || s.contains("verse") || s.contains("his ") || s.contains("her ")
+        return (short && referring) || startsWithAnd || (short && bareRef)
+    }
+
+    private fun getLastIntent(history: List<MessageEntity>): ContextType? {
+        if (history.isEmpty()) return null
+        // Look at last 4 messages, last user question is most important
+        val lastUser = history.lastOrNull { it.isUser } ?: return null
+        val lastText = lastUser.text.lowercase()
+        // Score last question WITHOUT history to avoid recursion
+        val scores = scoreOne(lastText, "", emptyList(), isSegment = false)
+        val best = scores.best()
+        // Only trust it if it was strong
+        val topScore = scores.topTwo()[0].second
+        if (topScore < 4.0) return null
+        return best
+    }
+
+    private fun scoreOne(
+        q: String,
+        currentRef: String,
+        history: List<MessageEntity>,
+        isSegment: Boolean
+    ): Scores {
         var bibleScore = 0.0
         var breakdownScore = 0.0
         var newsScore = 0.0
         var generalScore = 1.0
 
-        val hasBibleRef = BIBLE_REF_REGEX.containsMatchIn(q) || NUMBERED_BOOK_REGEX.containsMatchIn(q) || SHORT_BOOK_REGEX.containsMatchIn(q) || FULL_REF_REGEX.containsMatchIn(q)
+        val hasBibleRef = BIBLE_REF_REGEX.containsMatchIn(q) || NUMBERED_BOOK_REGEX.containsMatchIn(q)
         if (hasBibleRef) bibleScore += 10
-        if (FULL_REF_REGEX.containsMatchIn(q)) bibleScore += 2
-
-        if (q.contains("in the bible") || q.contains("bible says") || q.contains("according to the bible") || q.contains("from scripture") || q.contains("bible verse")) bibleScore += 10
-        if (q.contains("what does the bible say") || q.contains("bible teach")) bibleScore += 5
-        if (DEVOTIONAL_PHRASES.any { q.contains(it) }) bibleScore += 7
+        if (q.contains("in the bible") || q.contains("bible says") || q.contains("according to the bible") || q.contains("from scripture")) bibleScore += 10
 
         val bibleWordCount = BIBLE_WORDS.count { q.contains(it) }
-        bibleScore += minOf(bibleWordCount * 2.0, 8.0)
+        bibleScore += minOf(bibleWordCount * 2.0, 6.0)
 
         val hasBreakdownPhrase = BREAKDOWN_PHRASES.any { q.contains(it) }
-        val hasStepByStep = q.contains("step by step")
         if (hasBreakdownPhrase) {
             if (hasBibleRef || bibleWordCount > 0) breakdownScore += 9
-            else if (q.contains("this") || q.contains("that") || q.contains("passage") || q.contains("chapter") || q.contains("verse")) breakdownScore += 4
+            else if (q.contains("this") || q.contains("that") || q.contains("passage") || q.contains("chapter")) breakdownScore += 4
             else breakdownScore += 0.5
         }
-        if (hasStepByStep) {
-            if (hasBibleRef || bibleWordCount > 0) breakdownScore += 8
-            else generalScore += 3
+        if (q.contains("step by step")) {
+            if (hasBibleRef || bibleWordCount > 0) breakdownScore += 8 else generalScore += 3
         }
-        if (hasBibleRef && q.contains("explain") && q.length > 15) breakdownScore += 3
-        if (FULL_REF_REGEX.containsMatchIn(q) && q.contains("-") && q.contains("explain")) breakdownScore += 2
 
-        val hasMeaning = listOf("mean", "means", "meaning", "explain", "teach", "lesson", "understand", "interpret", "interpretation").any { q.contains(it) }
-        val isReferring = listOf("this", "that", "it", "verse", "chapter", "passage", "scripture").any { q.contains(it) }
+        val hasMeaning = listOf("mean", "explain", "teach", "lesson", "understand", "interpret").any { q.contains(it) }
+        val isReferring = listOf("this", "that", "it", "verse", "chapter", "passage").any { q.contains(it) }
         if (hasMeaning && isReferring) {
-            if (hasBibleRef || bibleWordCount > 0) bibleScore += 4
-            else generalScore += 2
+            if (hasBibleRef || bibleWordCount > 0) bibleScore += 4 else generalScore += 2
         }
         if (q.contains("teach me") && !q.contains("bible") && !q.contains("verse")) generalScore += 3
 
         val generalTopicCount = GENERAL_TOPICS.count { q.contains(it) }
         if (generalTopicCount > 0) {
-            if (!hasBibleRef && bibleWordCount == 0) {
-                generalScore += generalTopicCount * 4.0
-                bibleScore -= generalTopicCount * 5.0
-                breakdownScore -= generalTopicCount * 5.0
-            } else {
-                generalScore += generalTopicCount * 1.0
-            }
+            generalScore += generalTopicCount * 4.0
+            bibleScore -= generalTopicCount * 5.0
+            breakdownScore -= generalTopicCount * 5.0
         }
-        if (q.contains("how do i start") || q.contains("how to start") || q.contains("learn")) {
-            if (bibleWordCount == 0 && !hasBibleRef) generalScore += 4
-        }
+        if ((q.contains("how do i start") || q.contains("how to start") || q.contains("learn")) && bibleWordCount == 0 && !hasBibleRef) generalScore += 4
 
         val factualCount = FACTUAL_INTENT.count { q.contains(it) }
         newsScore += factualCount * 3.0
-        if (q.contains("malawi")) {
-            if (q.contains("election") || q.contains("news") || q.contains("president") || q.contains("job") || q.contains("government") || q.contains("minister")) newsScore += 6
-            if (q.contains("weather") || q.contains("fuel") || q.contains("price")) newsScore += 4
-        }
-        if ((q.contains("who is") || q.contains("who won") || q.contains("election")) && q.contains("malawi")) newsScore += 3
+        if (q.contains("malawi") && (q.contains("election") || q.contains("news") || q.contains("president") || q.contains("job"))) newsScore += 6
 
-        val ref = currentRef.lowercase().trim()
-        val isInBibleView = ref.isNotBlank() && ref != "home" && !ref.contains("chat")
-        if (isInBibleView && q.length < 80 && (hasMeaning || q.contains("today") || q.contains("apply") || q.contains("mean"))) {
-            bibleScore += 1.5
-        }
-        if (history.isNotEmpty()) {
-            val lastTwo = history.takeLast(2).joinToString(" ") { it.text.lowercase() }
-            val wasBible = lastTwo.contains("verse") || lastTwo.contains("bible") || lastTwo.contains("psalm") || lastTwo.contains("scripture") || lastTwo.contains("daniel") || lastTwo.contains("jesus")
-            val wasNews = lastTwo.contains("election") || lastTwo.contains("news") || lastTwo.contains("president") || lastTwo.contains("malawi")
-            val wasGeneral = lastTwo.contains("python") || lastTwo.contains("coding") || lastTwo.contains("recipe")
-            if (wasBible && isReferring && hasMeaning) bibleScore += 1.5
-            if (wasNews && (q.contains("it") || q.contains("that") || q.contains("them"))) newsScore += 1.5
-            if (wasGeneral && !hasBibleRef) generalScore += 1.0
-            if (q.matches(Regex(".*(verse|chapter)\\s*\\d+.*")) && wasBible) bibleScore += 3
-            if (q.matches(Regex("^(and|what about|what of|next).*verse.*")) && wasBible) bibleScore += 4
+        if (!isSegment) {
+            val ref = currentRef.lowercase().trim()
+            val isInBibleView = ref.isNotBlank() && ref != "home" && !ref.contains("chat")
+            if (isInBibleView && q.length < 80 && (hasMeaning || q.contains("today") || q.contains("apply") || q.contains("for me"))) bibleScore += 1.5
+            if (history.isNotEmpty()) {
+                val lastTwo = history.takeLast(2).joinToString(" ") { it.text.lowercase() }
+                val wasBible = lastTwo.contains("verse") || lastTwo.contains("bible") || lastTwo.contains("psalm") || lastTwo.contains("scripture")
+                val wasNews = lastTwo.contains("election") || lastTwo.contains("news") || lastTwo.contains("president")
+                if (wasBible && isReferring && hasMeaning) bibleScore += 1.5
+                if (wasNews && (q.contains("it") || q.contains("that"))) newsScore += 1.5
+            }
         }
 
-        if (breakdownScore >= 8 && breakdownScore > bibleScore && breakdownScore > newsScore && breakdownScore > generalScore) return ContextType.BREAKDOWN
-        if (bibleScore >= 4 && bibleScore >= newsScore && bibleScore >= generalScore) return ContextType.BIBLE
-        if (newsScore >= 6 && newsScore >= generalScore) return ContextType.NEWS
-        return ContextType.GENERAL
+        return Scores(bibleScore, breakdownScore, newsScore, generalScore)
     }
 
     private fun needsWebSearch(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): Boolean {
-        val context = detectContext(question, currentRef, history)
-        if (context == ContextType.NEWS) return true
-        if (context == ContextType.GENERAL) {
+        val decision = decide(question, currentRef, history)
+        if (decision.type == ContextType.NEWS || decision.type == ContextType.MIXED) return true
+        if (decision.type == ContextType.GENERAL) {
             val q = question.lowercase().trim()
-            if (q in GREETINGS) return false
+            if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you")) return false
             if (q.length < 10) return false
-            if (q.contains("how to") && !q.contains("malawi") && !q.contains("news")) return false
             return true
         }
         return false
@@ -362,16 +400,11 @@ class AiRepository {
 
     private suspend fun getWebContext(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): String {
         if (!needsWebSearch(question, currentRef, history)) return ""
-        val key = cleanQuery(question).trim().lowercase()
+        val key = question.trim().lowercase()
         if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) return cachedWeb
         val lower = question.lowercase()
-        val timeRange = when {
-            lower.contains("today") || lower.contains("yesterday") || lower.contains("latest") || lower.contains("breaking") -> "day"
-            lower.contains("news") || lower.contains("election") -> "week"
-            lower.contains("history") || lower.contains("biography") -> "year"
-            else -> "month"
-        }
-        return withTimeoutOrNull(12000L) { searchTavily(question, timeRange) } ?: ""
+        val timeRange = if (lower.contains("today") || lower.contains("yesterday") || lower.contains("latest") || lower.contains("news")) "week" else "month"
+        return withTimeoutOrNull(4000L) { searchTavily(question, timeRange) } ?: ""
     }
 
     private suspend fun searchTavily(query: String, timeRange: String = "month"): String {
@@ -383,11 +416,17 @@ class AiRepository {
                     requestMethod = "POST"
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty(PROXY_HEADER, PROXY_VALUE)
-                    connectTimeout = 8000
-                    readTimeout = 12000
+                    connectTimeout = 3000
+                    readTimeout = 4000
                     doOutput = true
                 }
-                val body = JSONObject().put("query", query).put("search_depth", "basic").put("max_results", 5).put("include_answer", true).put("time_range", timeRange).toString()
+                val body = JSONObject()
+                    .put("query", query)
+                    .put("search_depth", "basic")
+                    .put("max_results", 3)
+                    .put("include_answer", true)
+                    .put("time_range", timeRange)
+                    .toString()
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
                 if (conn.responseCode !in 200..299) return ""
                 val text = conn.inputStream.bufferedReader().readText()
@@ -396,36 +435,42 @@ class AiRepository {
                 val answer = json.optString("answer")
                 if (answer.isNotBlank()) sb.append("TAVILY ANSWER: $answer\n\n")
                 val results = json.optJSONArray("results")
-                val seenUrls = mutableSetOf<String>()
-                val seenTitles = mutableSetOf<String>()
                 if (results != null) {
-                    for (i in 0 until minOf(results.length(), 5)) {
+                    for (i in 0 until minOf(results.length(), 3)) {
                         val r = results.getJSONObject(i)
-                        val url = r.optString("url")
-                        val title = r.optString("title")
-                        if (url.isBlank() || !seenUrls.add(url)) continue
-                        if (title.isNotBlank() && !seenTitles.add(title.lowercase())) continue
-                        sb.append("SOURCE:\nTitle: $title\nURL: $url\nContent: ${r.optString("content").take(600)}\nPublished: ${r.optString("published_date")}\n\n")
-                        if (sb.length > 3000) break
+                        sb.append("SOURCE:\n")
+                        sb.append("Title: ${r.optString("title")}\n")
+                        sb.append("URL: ${r.optString("url")}\n")
+                        sb.append("Content: ${r.optString("content").take(500)}\n")
+                        sb.append("Published: ${r.optString("published_date")}\n\n")
                     }
                 }
-                val out = sb.toString().take(3500)
+                val out = sb.toString().take(3000)
                 if (out.isNotBlank()) {
-                    cachedQuery = cleanQuery(query).trim().lowercase()
+                    cachedQuery = query.trim().lowercase()
                     cachedWeb = out
                     cachedAt = System.currentTimeMillis()
                 }
                 out
-            } finally { runCatching { conn?.disconnect() } }
+            } finally {
+                runCatching { conn?.disconnect() }
+            }
         } catch (_: Exception) { "" }
     }
 
-    fun askStreaming(question: String, currentRef: String, history: List<MessageEntity>, image: Bitmap?, bibleContext: String, translation: String = "NKJV"): Flow<String> = flow {
-        val cleanedQ = cleanQuery(question)
-        val context = detectContext(cleanedQ, currentRef, history)
-        val webContext = if (image == null) getWebContext(cleanedQ, currentRef, history) else ""
+    fun askStreaming(
+        question: String,
+        currentRef: String,
+        history: List<MessageEntity>,
+        image: Bitmap?,
+        bibleContext: String,
+        translation: String = "NKJV"
+    ): Flow<String> = flow {
+        val decision = decide(question, currentRef, history)
+        val context = decision.type
+        val webContext = if (image == null) getWebContext(question, currentRef, history) else ""
         val isBreakdown = context == ContextType.BREAKDOWN
-        val basePrompt = buildPrompt(cleanedQ, currentRef, history, bibleContext, translation, webContext, isBreakdown, context)
+        val basePrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext, isBreakdown, context, decision.action)
         val errors = mutableListOf<String>()
 
         suspend fun tryOne(provider: String, model: String, stream: Flow<String>): Boolean {
@@ -433,16 +478,16 @@ class AiRepository {
             var gotAnything = false
             try {
                 withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                    stream.collect { chunk -> if (chunk.isNotEmpty()) { gotAnything = true; emit(chunk) } }
+                    stream.collect { chunk ->
+                        if (chunk.isNotEmpty()) { gotAnything = true; emit(chunk) }
+                    }
                     true
                 } ?: false
-                if (gotAnything) { markOk(model); return true }
+                if (gotAnything) return true
                 return false
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 if (gotAnything) return true
-                val is429 = e.message?.contains("429") == true
-                markFail(model, is429)
                 errors.add("$provider $model: ${e.message}")
                 if (provider == "Gemini") CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
                 else CrashReporter.groqLog("$provider $model failed: ${e.message}")
@@ -450,82 +495,152 @@ class AiRepository {
             }
         }
 
-        val providers = autoPickProviders(context, isBreakdown, image != null)
-        for (provider in providers) {
-            val list = when (provider) { "Groq" -> remoteGroq; "Cloudflare" -> remoteCloudflare; "Gemini" -> remoteGemini; else -> emptyList() }
-            for (model in orderedModels(provider, list, context, isBreakdown, cleanedQ.length)) {
-                val stream = when (provider) {
-                    "Groq" -> tryGroqStreaming(model, basePrompt, isBreakdown)
-                    "Cloudflare" -> tryCloudflareStreaming(model, basePrompt, isBreakdown)
-                    else -> tryGeminiStreaming(model, basePrompt, image)
-                }
-                if (tryOne(provider, model, stream)) return@flow
+        if (image != null) {
+            for (model in remoteGemini) {
+                if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, image))) return@flow
             }
+            emit("Could not read the image. Please try again.")
+            return@flow
         }
-        if (image != null && errors.isEmpty()) emit("Could not read the image. Please try again.")
-        else if (errors.isNotEmpty() && errors.all { it.contains("429") }) emit("Free daily limit reached for today. Please try again tomorrow.")
-        else emit("I am busy right now. Please try again in a minute.")
+        for (model in remoteGroq) {
+            if (tryOne("Groq", model, tryGroqStreaming(model, basePrompt, isBreakdown))) return@flow
+        }
+        for (model in remoteCloudflare) {
+            if (tryOne("Cloudflare", model, tryCloudflareStreaming(model, basePrompt, isBreakdown))) return@flow
+        }
+        for (model in remoteGemini) {
+            if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, null))) return@flow
+        }
+        if (errors.isNotEmpty() && errors.all { it.contains("429") }) {
+            emit("Free daily limit reached for today. Please try again tomorrow.")
+        } else {
+            emit("I am busy right now. Please try again in a minute.")
+        }
     }.flowOn(Dispatchers.IO)
 
     suspend fun askQuestion(prompt: String, image: Bitmap? = null): Result<String> {
-        val cleaned = cleanQuery(prompt)
-        val context = detectContext(cleaned)
-        val webContext = if (image == null) getWebContext(cleaned) else ""
+        val decision = decide(prompt)
+        val context = decision.type
+        val webContext = if (image == null) getWebContext(prompt) else ""
         val isBreakdown = context == ContextType.BREAKDOWN
-        val fullPrompt = buildPrompt(cleaned, "", emptyList(), "", "NKJV", webContext, isBreakdown, context)
+        val fullPrompt = buildPrompt(prompt, "", emptyList(), "", "NKJV", webContext, isBreakdown, context, decision.action)
         val sb = StringBuilder()
         return try {
             var lastErr: Exception? = null
-            val providers = autoPickProviders(context, isBreakdown, image != null)
-            for (provider in providers) {
-                val list = when (provider) { "Groq" -> remoteGroq; "Cloudflare" -> remoteCloudflare; "Gemini" -> remoteGemini; else -> emptyList() }
-                for (model in orderedModels(provider, list, context, isBreakdown, cleaned.length)) {
-                    _lastProvider.value = provider
+            if (image != null) {
+                for (model in remoteGemini) {
+                    _lastProvider.value = "Gemini"
                     try {
                         sb.clear()
                         val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                            val stream = when (provider) {
-                                "Groq" -> tryGroqStreaming(model, fullPrompt, isBreakdown)
-                                "Cloudflare" -> tryCloudflareStreaming(model, fullPrompt, isBreakdown)
-                                else -> tryGeminiStreaming(model, fullPrompt, image)
-                            }
-                            stream.collect { sb.append(it) }
+                            tryGeminiStreaming(model, fullPrompt, image).collect { sb.append(it) }
                             true
                         } ?: false
                         if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
                         if (sb.isNotBlank() && !completed) continue
                     } catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { lastErr = e; sb.clear(); markFail(model, e.message?.contains("429") == true) }
+                    catch (e: Exception) { lastErr = e; sb.clear() }
                 }
+                return Result.failure(Exception("Could not read the image. Please try again."))
             }
-            if (image != null) Result.failure(Exception("Could not read the image. Please try again."))
-            else Result.failure(lastErr ?: Exception("I am busy right now. Please try again in a minute."))
+            for (model in remoteGroq) {
+                _lastProvider.value = "Groq"
+                try {
+                    sb.clear()
+                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                        tryGroqStreaming(model, fullPrompt, isBreakdown).collect { sb.append(it) }
+                        true
+                    } ?: false
+                    if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                    if (sb.isNotBlank() && !completed) continue
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { lastErr = e; sb.clear() }
+            }
+            for (model in remoteCloudflare) {
+                _lastProvider.value = "Cloudflare"
+                try {
+                    sb.clear()
+                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                        tryCloudflareStreaming(model, fullPrompt, isBreakdown).collect { sb.append(it) }
+                        true
+                    } ?: false
+                    if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                    if (sb.isNotBlank() && !completed) continue
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { lastErr = e; sb.clear() }
+            }
+            for (model in remoteGemini) {
+                _lastProvider.value = "Gemini"
+                try {
+                    sb.clear()
+                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                        tryGeminiStreaming(model, fullPrompt, null).collect { sb.append(it) }
+                        true
+                    } ?: false
+                    if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                    if (sb.isNotBlank() && !completed) continue
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { lastErr = e; sb.clear() }
+            }
+            Result.failure(lastErr ?: Exception("I am busy right now. Please try again in a minute."))
         } catch (e: CancellationException) { throw e }
     }
 
-    private fun buildPrompt(question: String, currentRef: String, history: List<MessageEntity>, bibleContext: String, translation: String, webContext: String = "", isBreakdown: Boolean = false, context: ContextType = ContextType.GENERAL): String {
+    private fun buildPrompt(
+        question: String,
+        currentRef: String,
+        history: List<MessageEntity>,
+        bibleContext: String,
+        translation: String,
+        webContext: String = "",
+        isBreakdown: Boolean = false,
+        context: ContextType = ContextType.GENERAL,
+        action: ActionType = ActionType.NONE
+    ): String {
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
-        val refs = extractRefs(question)
-        val refsLine = if (refs.isNotEmpty()) "User is asking about these exact references: ${refs.joinToString(", ")}. Focus on them. Do not quote a different verse as if it is this one." else ""
-        val lengthRule = if (isBreakdown) "The user explicitly asked for a detailed breakdown. Organise it into 3 to 5 natural sections if that helps. For each section, give the verse(s), then meaning, then application. Use **bold** only for section titles and key points. Finish fully, never stop mid-sentence."
-        else "Let the length fit the question. Simple question = short answer. Complex question = fuller answer. Always finish fully, never stop mid-sentence. Use **bold** sparingly for key points only."
-        val contextRule = when (context) {
-            ContextType.BIBLE -> "This looks like a Bible question. Answer from Scripture, quote $translation where helpful, and end with a practical application if natural. Do not force news or a Sources section. Never wrap a verse quote in single * - use plain quotes \"...\". Never invent a verse number or wording."
-            ContextType.BREAKDOWN -> "This looks like a Bible breakdown request. Go verse by verse / section by section in a natural way. Quote each verse in plain \"...\" quotes, no single * around it. Do not skip verses in the range."
-            ContextType.NEWS -> "This looks like a factual / news question. Answer ONLY from the WEB SEARCH RESULTS below. If the results do not contain the answer, say you don't have verified info and don't guess names, dates or results. If results are provided, list Sources at the end as a plain list using ONLY the titles and URLs given, like:\n**Sources**\n[Title](URL)\n[Title](URL)\nDo NOT number them. Do NOT write Source 1, Source 2, 1. or 1). Never invent a URL, title or date."
-            ContextType.GENERAL -> "This looks like a general question. Answer helpfully and directly. If WEB SEARCH RESULTS are provided below, use them for facts. Do not force Bible verses. Only list Sources if results were provided, as a plain list like [Title](URL) — do NOT number them, do NOT write Source 1, Source 2. Never wrap quotes in single *."
+
+        val lengthRule = if (isBreakdown) {
+            "The user explicitly asked for a detailed breakdown. You may organise it into 3 to 5 natural sections if that helps. For each section, give the verse, then meaning, then application. Finish fully."
+        } else {
+            "Let the length fit the question. Simple question = short answer. Complex question = fuller answer. Always finish fully, never stop mid-sentence."
         }
+
+        val contextRule = when (context) {
+            ContextType.BIBLE -> "This looks like a Bible question. Answer from Scripture, quote $translation where helpful, and end with a practical application if natural. Do not force news or a Sources section."
+            ContextType.BREAKDOWN -> "This looks like a Bible breakdown request. Go verse by verse / section by section in a natural way."
+            ContextType.NEWS -> "This looks like a factual / news question. Answer ONLY from the WEB SEARCH RESULTS below. If the results do not contain the answer, say you don't have verified info and don't guess names, dates or results. If results are provided, list Sources at the end as a plain list using ONLY the titles and URLs given, like:\n**Sources**\n[Title](URL)\n[Title](URL)\nDo NOT number them. Do NOT write Source 1, Source 2, 1. or 1). Never invent a URL, title or date."
+            ContextType.GENERAL -> "This looks like a general question. Answer helpfully and directly. If WEB SEARCH RESULTS are provided below, use them for facts. Do not force Bible verses. Only list Sources if results were provided, as a plain list like [Title](URL) — do NOT number them, do NOT write Source 1, Source 2."
+            ContextType.MIXED -> "This question has MULTIPLE different parts. Answer EACH part separately under its own heading, e.g. **Part 1**, **Part 2**. For the Bible part, use Scripture. For the news/factual part, use ONLY WEB SEARCH RESULTS, never guess, and list Sources only for that part. For the general part, answer directly. Do not force Bible verses into the non-Bible parts, and do not force Sources into the Bible part."
+        }
+
+        // IMPROVEMENT 3: Action changes HOW to answer, not just WHAT topic
+        val actionRule = when (action) {
+ 
+            ActionType.COMPARE -> "ACTION: COMPARE. Show similarities and differences clearly, side by side if helpful. End with a short conclusion."
+            ActionType.SUMMARIZE -> "ACTION: SUMMARIZE. Keep it very short. Give only the main points, no long explanation."
+            ActionType.TRANSLATE -> "ACTION: TRANSLATE. Only translate the text given. Do not add explanation unless asked."
+            ActionType.LIST -> "ACTION: LIST. Answer as a clean list. No long paragraphs."
+            ActionType.EXPLAIN, ActionType.TEACH -> "ACTION: TEACH / EXPLAIN. Explain clearly step by step, simple language, with an example if helpful."
+            ActionType.NONE -> ""
+        }
+
         val sb = StringBuilder()
         sb.append("Today is $today. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
-        if (refsLine.isNotBlank()) sb.append("$refsLine\n")
         sb.append("$STYLE_RULE\n")
-        sb.append("$contextRule\n$lengthRule\n\n")
-        if (bibleContext.isNotBlank() && (context == ContextType.BIBLE || context == ContextType.BREAKDOWN)) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1500)}\n\n")
-        if (webContext.isNotBlank()) sb.append("WEB SEARCH RESULTS (true facts as of $today):\n${webContext.take(3500)}\n\n")
-        else if (context == ContextType.NEWS) sb.append("Web search returned no results this time. Answer from general knowledge if you can, but say clearly 'not verified from live search' and do not invent specific dates, names or URLs.\n\n")
+        sb.append("$contextRule\n$lengthRule\n")
+        if (actionRule.isNotBlank()) sb.append("$actionRule\n")
+        sb.append("\n")
+        if (bibleContext.isNotBlank() && (context == ContextType.BIBLE || context == ContextType.BREAKDOWN)) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1000)}\n\n")
+        if (webContext.isNotBlank()) {
+            sb.append("WEB SEARCH RESULTS (true facts as of $today):\n${webContext.take(3000)}\n\n")
+        } else if (context == ContextType.NEWS) {
+            sb.append("No web results were available. Do not guess. Say you don't have verified info.\n\n")
+        }
         if (history.isNotEmpty()) {
             sb.append("CONVERSATION HISTORY (last 4):\n")
-            history.takeLast(4).forEach { sb.append(if (it.isUser) "User: " else "Assistant: ").append(it.text.take(500)).append("\n") }
+            history.takeLast(4).forEach {
+                sb.append(if (it.isUser) "User: " else "Assistant: ").append(it.text.take(400)).append("\n")
+            }
             sb.append("\n")
         }
         sb.append("User question: $question")
@@ -533,27 +648,29 @@ class AiRepository {
     }
 
     private fun cleanMarkdown(text: String): String {
-        var t = text.replace("**Bold Title:**", "").replace("**Bold Title**", "").replace("Bold Title:", "").replace("Bold Title", "")
-        val bolds = mutableListOf<String>()
-        t = Regex("\\*\\*(.+?)\\*\\*").replace(t) { m -> bolds.add(m.groupValues[1]); "\u0000BOLD${bolds.size - 1}\u0000" }
-        t = t.replace("*", "")
-        t = t.replace(Regex("_(.+?)_"), "$1")
-        t = t.replace("`", "")
-        t = t.replace("__", "")
-        bolds.forEachIndexed { i, b -> t = t.replace("\u0000BOLD$i\u0000", "**$b**") }
-        t = t.replace(Regex("(?m)^#{1,6}\\s*"), "")
-        t = t.replace(Regex("(?m)^---\\s*$"), "")
-        t = t.replace(Regex("(?m)^\\s*Source\\s*\\d+\\s*[-:.]\\s*"), "")
-        t = t.replace(Regex("(?m)^\\s*\\d+\\.\\s*(?=\\[)"), "")
-        t = t.replace(Regex("(?m)^\\s*\\d+\\)\\s*(?=\\[)"), "")
-        return t.trim()
+        var cleaned = text
+            .replace("**Bold Title:**", "")
+            .replace("**Bold Title**", "")
+            .replace("Bold Title:", "")
+            .replace("Bold Title", "")
+            .replace("__", "")
+            .replace("### ", "").replace("## ", "").replace("# ", "")
+            .replace("`", "")
+        cleaned = cleaned.replace(Regex("(?m)^\\s*Source\\s*\\d+\\s*[-:.]\\s*"), "")
+        cleaned = cleaned.replace(Regex("(?m)^\\s*\\d+\\.\\s*(?=\\[)"), "")
+        cleaned = cleaned.replace(Regex("(?m)^\\s*\\d+\\)\\s*(?=\\[)"), "")
+        return cleaned.trim()
     }
 
     private fun cleanStreamingChunk(text: String): String {
-        var t = text.replace("**Bold Title:**", "").replace("**Bold Title**", "").replace("Bold Title:", "").replace("Bold Title", "")
-        t = t.replace("### ", "").replace("## ", "").replace("# ", "")
-        t = t.replace("`", "")
-        return t
+        return text
+            .replace("**Bold Title:**", "")
+            .replace("**Bold Title**", "")
+            .replace("Bold Title:", "")
+            .replace("Bold Title", "")
+            .replace("__", "")
+            .replace("### ", "").replace("## ", "").replace("# ", "")
+            .replace("`", "")
     }
 
     private fun bitmapToBase64(image: Bitmap?): String? {
@@ -563,7 +680,10 @@ class AiRepository {
                 val ratio = 1024f / image.width
                 Bitmap.createScaledBitmap(image, 1024, (image.height * ratio).toInt(), true)
             } else image
-            val bytes = ByteArrayOutputStream().use { out -> scaled.compress(Bitmap.CompressFormat.JPEG, 70, out); out.toByteArray() }
+            val bytes = ByteArrayOutputStream().use { out ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, 70, out)
+                out.toByteArray()
+            }
             android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
         } catch (_: Exception) { null }
     }
@@ -573,13 +693,22 @@ class AiRepository {
         try {
             val url = URL(PROXY_BASE + "gemini?model=$model")
             conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"; setRequestProperty("Content-Type", "application/json"); setRequestProperty(PROXY_HEADER, PROXY_VALUE); connectTimeout = 3000; readTimeout = 120000; doOutput = true
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty(PROXY_HEADER, PROXY_VALUE)
+                connectTimeout = 3000
+                readTimeout = 120000
+                doOutput = true
             }
             val parts = JSONArray().put(JSONObject().put("text", prompt))
             val base64 = bitmapToBase64(image)
-            if (base64 != null) parts.put(JSONObject().put("inline_data", JSONObject().put("mime_type", "image/jpeg").put("data", base64)))
-            val info = modelInfo("Gemini", model)
-            val body = JSONObject().put("contents", JSONArray().put(JSONObject().put("parts", parts))).put("generationConfig", JSONObject().put("maxOutputTokens", info.maxTokens).put("temperature", 0.7)).toString()
+            if (base64 != null) {
+                parts.put(JSONObject().put("inline_data", JSONObject().put("mime_type", "image/jpeg").put("data", base64)))
+            }
+            val body = JSONObject()
+                .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
+                .put("generationConfig", JSONObject().put("maxOutputTokens", MAX_TOKENS).put("temperature", 0.7))
+                .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             if (conn.responseCode !in 200..299) throw Exception("Gemini ${conn.responseCode}")
             val reader = BufferedReader(conn.inputStream.bufferedReader())
@@ -601,7 +730,9 @@ class AiRepository {
                     }
                 } catch (_: Exception) { }
             }
-        } finally { runCatching { conn?.disconnect() } }
+        } finally {
+            runCatching { conn?.disconnect() }
+        }
     }
 
     private fun tryGroqStreaming(model: String, prompt: String, isBreakdown: Boolean): Flow<String> = flow {
@@ -609,11 +740,23 @@ class AiRepository {
         try {
             val url = URL(PROXY_BASE + "groq")
             conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"; setRequestProperty("Content-Type", "application/json"); setRequestProperty(PROXY_HEADER, PROXY_VALUE); connectTimeout = 3000; readTimeout = 120000; doOutput = true
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty(PROXY_HEADER, PROXY_VALUE)
+                connectTimeout = 3000
+                readTimeout = 120000
+                doOutput = true
             }
-            val messages = JSONArray().put(JSONObject().put("role", "system").put("content", "You are the EW Bible assistant.")).put(JSONObject().put("role", "user").put("content", prompt))
-            val info = modelInfo("Groq", model)
-            val body = JSONObject().put("model", model).put("messages", messages).put("stream", true).put("max_tokens", info.maxTokens).put("temperature", 0.7).toString()
+            val messages = JSONArray()
+                .put(JSONObject().put("role", "system").put("content", "You are the EW Bible assistant."))
+                .put(JSONObject().put("role", "user").put("content", prompt))
+            val body = JSONObject()
+                .put("model", model)
+                .put("messages", messages)
+                .put("stream", true)
+                .put("max_tokens", MAX_TOKENS)
+                .put("temperature", 0.7)
+                .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             if (conn.responseCode !in 200..299) throw Exception("Groq ${conn.responseCode}")
             val reader = BufferedReader(conn.inputStream.bufferedReader())
@@ -632,7 +775,9 @@ class AiRepository {
                     if (content.isNotEmpty()) emit(cleanStreamingChunk(content))
                 } catch (_: Exception) { }
             }
-        } finally { runCatching { conn?.disconnect() } }
+        } finally {
+            runCatching { conn?.disconnect() }
+        }
     }
 
     private fun tryCloudflareStreaming(model: String, prompt: String, isBreakdown: Boolean): Flow<String> = flow {
@@ -640,11 +785,22 @@ class AiRepository {
         try {
             val url = URL(PROXY_BASE + "cloudflare")
             conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"; setRequestProperty("Content-Type", "application/json"); setRequestProperty(PROXY_HEADER, PROXY_VALUE); connectTimeout = 3000; readTimeout = 120000; doOutput = true
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty(PROXY_HEADER, PROXY_VALUE)
+                connectTimeout = 3000
+                readTimeout = 120000
+                doOutput = true
             }
-            val messages = JSONArray().put(JSONObject().put("role", "system").put("content", "You are the EW Bible assistant.")).put(JSONObject().put("role", "user").put("content", prompt))
-            val info = modelInfo("Cloudflare", model)
-            val body = JSONObject().put("model", model).put("messages", messages).put("stream", true).put("max_tokens", info.maxTokens).toString()
+            val messages = JSONArray()
+                .put(JSONObject().put("role", "system").put("content", "You are the EW Bible assistant."))
+                .put(JSONObject().put("role", "user").put("content", prompt))
+            val body = JSONObject()
+                .put("model", model)
+                .put("messages", messages)
+                .put("stream", true)
+                .put("max_tokens", MAX_TOKENS)
+                .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             if (conn.responseCode !in 200..299) throw Exception("Cloudflare ${conn.responseCode}")
             val reader = BufferedReader(conn.inputStream.bufferedReader())
@@ -659,11 +815,15 @@ class AiRepository {
                     var content = json.optJSONObject("result")?.optString("response") ?: ""
                     if (content.isEmpty()) {
                         val choices = json.optJSONArray("choices")
-                        if (choices != null && choices.length() > 0) content = choices.getJSONObject(0).optJSONObject("delta")?.optString("content") ?: ""
+                        if (choices != null && choices.length() > 0) {
+                            content = choices.getJSONObject(0).optJSONObject("delta")?.optString("content") ?: ""
+                        }
                     }
                     if (content.isNotEmpty()) emit(cleanStreamingChunk(content))
                 } catch (_: Exception) { }
             }
-        } finally { runCatching { conn?.disconnect() } }
+        } finally {
+            runCatching { conn?.disconnect() }
+        }
     }
 }
