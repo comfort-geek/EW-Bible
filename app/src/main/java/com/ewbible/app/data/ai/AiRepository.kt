@@ -29,7 +29,7 @@ class AiRepository {
     private val REMOTE_MODELS_URL =
         "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
 
-    // FAST FIRST: 20b / 27b answer in ~1-2s, 120b is slow, keep it as backup
+    // ORDER: Groq first -> Cloudflare second -> Gemini last
     private val FALLBACK_GEMINI = listOf("gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-4-hydrogen")
     private val FALLBACK_GROQ = listOf("openai/gpt-oss-20b", "qwen/qwen3.8-27b", "openai/gpt-oss-120b")
     private val FALLBACK_CLOUDFLARE = listOf("@cf/meta/llama-3-8b-instruct", "@cf/meta/llama-3.3-70b-instruct")
@@ -385,17 +385,17 @@ class AiRepository {
         return if (needsAdvanced) "advanced" else "basic"
     }
 
+    // PATCHED: RAG via Worker - TinyFish -> LangSearch -> Tavily, returns rag_context
     private suspend fun getWebContext(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): String {
         if (!needsWebSearch(question, currentRef, history)) return ""
         val key = question.trim().lowercase()
         if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) return cachedWeb
-        val lower = question.lowercase()
-        val timeRange = if (lower.contains("today") || lower.contains("yesterday") || lower.contains("latest") || lower.contains("news")) "week" else "month"
-        val depth = chooseSearchDepth(question)
-        return withTimeoutOrNull(8000L) { searchTavily(question, timeRange, depth) } ?: ""
+        val lastUser = history.lastOrNull { it.isUser }?.text ?: ""
+        val lastTopic = currentRef.ifBlank { lastUser }
+        return withTimeoutOrNull(8000L) { searchWorker(question, lastTopic, lastUser) } ?: ""
     }
 
-    private suspend fun searchTavily(query: String, timeRange: String = "month", depth: String = "basic"): String {
+    private suspend fun searchWorker(query: String, context: String = "", lastQuestion: String = ""): String {
         return try {
             var conn: HttpURLConnection? = null
             try {
@@ -410,15 +410,23 @@ class AiRepository {
                 }
                 val body = JSONObject()
                     .put("query", query)
-                    .put("search_depth", depth)
-                    .put("max_results", 2)
-                    .put("include_answer", false)
-                    .put("time_range", timeRange)
+                    .put("context", context)
+                    .put("last_question", lastQuestion)
                     .toString()
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
                 if (conn.responseCode !in 200..299) return ""
                 val text = conn.inputStream.bufferedReader().readText()
                 val json = JSONObject(text)
+                // Use rag_context directly - already formatted for Groq / Cloudflare / Gemini
+                val rag = json.optString("rag_context")
+                if (rag.isNotBlank()) {
+                    val out = rag.take(2000)
+                    cachedQuery = query.trim().lowercase()
+                    cachedWeb = out
+                    cachedAt = System.currentTimeMillis()
+                    return out
+                }
+                // Fallback: old manual parsing
                 val sb = StringBuilder()
                 val answer = json.optString("answer")
                 if (answer.isNotBlank()) sb.append("TAVILY ANSWER: $answer\n\n")
@@ -489,6 +497,7 @@ class AiRepository {
             emit("Could not read the image. Please try again.")
             return@flow
         }
+        // ORDER: 1. Groq -> 2. Cloudflare -> 3. Gemini
         for (model in remoteGroq) {
             if (tryOne("Groq", model, tryGroqStreaming(model, basePrompt, isBreakdown, question))) return@flow
         }
@@ -529,6 +538,7 @@ class AiRepository {
                 }
                 return Result.failure(Exception("Could not read the image. Please try again."))
             }
+            // ORDER: 1. Groq -> 2. Cloudflare -> 3. Gemini
             for (model in remoteGroq) {
                 try {
                     sb.clear()
