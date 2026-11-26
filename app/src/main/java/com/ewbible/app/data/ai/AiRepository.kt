@@ -375,16 +375,27 @@ class AiRepository {
         return false
     }
 
+    private fun chooseSearchDepth(question: String): String {
+        val q = question.lowercase().trim()
+        val needsAdvanced = q.contains("compare") || q.contains("difference between")
+            || q.contains("versus") || q.contains("vs ")
+            || q.contains("deep") || q.contains("in detail")
+            || q.contains("history of") || q.contains("research")
+            || q.contains("explain in detail") || q.contains("teach me")
+        return if (needsAdvanced) "advanced" else "basic"
+    }
+
     private suspend fun getWebContext(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): String {
         if (!needsWebSearch(question, currentRef, history)) return ""
         val key = question.trim().lowercase()
         if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) return cachedWeb
         val lower = question.lowercase()
         val timeRange = if (lower.contains("today") || lower.contains("yesterday") || lower.contains("latest") || lower.contains("news")) "week" else "month"
-        return withTimeoutOrNull(2500L) { searchTavily(question, timeRange) } ?: ""
+        val depth = chooseSearchDepth(question)
+        return withTimeoutOrNull(8000L) { searchTavily(question, timeRange, depth) } ?: ""
     }
 
-    private suspend fun searchTavily(query: String, timeRange: String = "month"): String {
+    private suspend fun searchTavily(query: String, timeRange: String = "month", depth: String = "basic"): String {
         return try {
             var conn: HttpURLConnection? = null
             try {
@@ -393,15 +404,15 @@ class AiRepository {
                     requestMethod = "POST"
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty(PROXY_HEADER, PROXY_VALUE)
-                    connectTimeout = 1500
-                    readTimeout = 2500
+                    connectTimeout = 3000
+                    readTimeout = 8000
                     doOutput = true
                 }
                 val body = JSONObject()
                     .put("query", query)
-                    .put("search_depth", "basic")
+                    .put("search_depth", depth)
                     .put("max_results", 2)
-                    .put("include_answer", true)
+                    .put("include_answer", false)
                     .put("time_range", timeRange)
                     .toString()
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
