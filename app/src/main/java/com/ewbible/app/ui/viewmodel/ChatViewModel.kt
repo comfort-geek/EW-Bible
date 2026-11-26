@@ -31,7 +31,6 @@ data class ChatState(
     val streamingText: String = "",
     val dailyCount: Int = 0,
     val error: String? = null,
-    val aiProvider: String = "",
     val chatsLoaded: Boolean = false
 )
 
@@ -42,8 +41,6 @@ class ChatViewModel(
 ) : ViewModel() {
 
     private val VERSE_REGEX = Regex("""((?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s+(\d+):(\d+)""")
-    private val NUM_DOT_REGEX = Regex("^\\d+\\.\\s*")
-    private val NUM_PAREN_REGEX = Regex("^\\d+\\)\\s*")
     private val SOURCE_BOLD_REGEX = Regex("^\\*\\*Source\\s*\\d*\\s*[-:.]?\\s*\\*\\*\\s*")
     private val SOURCE_DASH_REGEX = Regex("^Source\\s*\\d*\\s*[-:.]\\s*")
     private val SOURCE_PLAIN_REGEX = Regex("^Source\\s*\\d*\\s*")
@@ -61,14 +58,6 @@ class ChatViewModel(
 
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
-
-    init {
-        viewModelScope.launch {
-            geminiRepository.lastProvider.collect { provider ->
-                _state.update { it.copy(aiProvider = provider) }
-            }
-        }
-    }
 
     fun refreshModels(context: Context) {
         viewModelScope.launch {
@@ -279,7 +268,7 @@ class ChatViewModel(
         val userId = withContext(Dispatchers.IO) { bibleDao.insertMessage(userMsg) }
         if (isStillCurrent(chatId)) {
             _state.update {
-                it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", aiProvider = "", error = null, dailyCount = todayCount)
+                it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
             }
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -450,7 +439,7 @@ class ChatViewModel(
         }
     }
 
-    // FIXED: Strip single * completely, keep **bold**
+    // FIXED: Strip single * completely, keep **bold**, keep 1. / - / • lists
     private fun cleanMarkdown(text: String): String {
         var cleaned = text
             .replace("**Bold Title:**", "")
@@ -480,12 +469,10 @@ class ChatViewModel(
 
         return cleaned.lines().joinToString("\n") { line ->
             var l = line.trimStart()
-            l = l.replace(NUM_DOT_REGEX, "")
-            l = l.replace(NUM_PAREN_REGEX, "")
+            // KEEP 1. / 1) / - / • — RECOMMEND / LIST need them
             l = l.replace(SOURCE_BOLD_REGEX, "")
             l = l.replace(SOURCE_DASH_REGEX, "")
             l = l.replace(SOURCE_PLAIN_REGEX, "")
-            l = l.removePrefix("- ").removePrefix("• ").removePrefix("> ")
             l = l.replace(SOURCE_BOLD_REGEX, "")
             l = l.replace(SOURCE_DASH_REGEX, "")
             l
