@@ -22,7 +22,7 @@ import java.util.Locale
 
 class AiRepository {
 
-    private val PROXY_BASE = "https://exportdefaultasyncfetchrequestenvconsturl.comfortcha34.workers.dev/"
+    private val PROXY_BASE = "https://ewbible.comfortcha34.workers.dev/"
     private val PROXY_HEADER = "X-EW-App"
     private val PROXY_VALUE = "ew-bible-v1"
 
