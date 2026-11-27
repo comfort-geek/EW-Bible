@@ -31,7 +31,6 @@ class AiRepository {
     private val REMOTE_MODELS_URL =
         "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
 
-    // ORDER: Groq first -> Cloudflare second -> Gemini last
     private val FALLBACK_GEMINI = listOf("gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-4-hydrogen")
     private val FALLBACK_GROQ = listOf("openai/gpt-oss-20b", "qwen/qwen3.8-27b", "openai/gpt-oss-120b")
     private val FALLBACK_CLOUDFLARE = listOf("@cf/meta/llama-3-8b-instruct", "@cf/meta/llama-3.3-70b-instruct")
@@ -41,9 +40,6 @@ class AiRepository {
     private var remoteCloudflare = FALLBACK_CLOUDFLARE
     private var remoteVersion = 3
 
-    // --- AI MODELS MEMORY ONLY ---
-    // ONLY in "ew_models" prefs. ONLY 3 keys. Never touches Bible, chat, or any other prefs.
-    // All wrapped in try/catch so it can never crash the app.
     private var lastWorkingGemini: String? = null
     private var lastWorkingGroq: String? = null
     private var lastWorkingCloudflare: String? = null
@@ -62,9 +58,7 @@ class AiRepository {
             "Groq" -> if (lastWorkingGroq != model) { lastWorkingGroq = model; changed = true }
             "Cloudflare" -> if (lastWorkingCloudflare != model) { lastWorkingCloudflare = model; changed = true }
         }
-        if (changed) {
-            appContext?.let { saveModelsMemory(it) }
-        }
+        if (changed) appContext?.let { saveModelsMemory(it) }
     }
 
     private fun loadModelsMemory(prefs: android.content.SharedPreferences) {
@@ -99,8 +93,6 @@ class AiRepository {
 
     private companion object {
         const val STYLE_RULE = "You are Ask Anything - a warm, smart friend. Talk naturally like a person. Do not mention what model you are. Do not say 'as an AI'. Match your length to the question: short question = short answer, deep question = deeper answer. Use paragraphs, headings or bullet lists only if they help clarity - do not force them. Do not force Bible verses, prayer, or a Sources section unless the question actually needs it. NEVER use tables. NEVER use the | character. NEVER use --- for a table. Use a bullet list instead of a table. If the user is just chatting, just talk back. If the user is talking about the Bible, a verse, or prayer, stay warm and simple, explain it in the flow of the story, then ask a question back. If the user asks about something that could have changed recently, use the WEB SEARCH RESULTS and do not guess."
-
-        // FIX: Same prompt for ALL providers. Before Groq/Cloudflare got a short different prompt.
         const val SYSTEM_MSG = STYLE_RULE
 
         val BIBLE_BOOKS = listOf(
@@ -139,7 +131,6 @@ class AiRepository {
             "explain this passage", "explain this chapter"
         )
 
-        // World news - any continent / country
         val WORLD_REGIONS = listOf(
             "america", "africa", "asia", "europe", "oceania", "australia",
             "north america", "south america",
@@ -178,7 +169,6 @@ class AiRepository {
             }
             remoteVersion = savedVersion
         } catch (_: Exception) { }
-
         try {
             val conn = URL(REMOTE_MODELS_URL).openConnection() as HttpURLConnection
             conn.connectTimeout = 2000
@@ -210,9 +200,7 @@ class AiRepository {
     }
 
     private enum class ContextType { BIBLE, BREAKDOWN, NEWS, GENERAL, MIXED }
-
     private enum class ActionType { NONE, RECOMMEND, COMPARE, SUMMARIZE, TRANSLATE, LIST, EXPLAIN, TEACH }
-
     private data class Decision(
         val type: ContextType,
         val intents: List<ContextType>,
@@ -240,16 +228,29 @@ class AiRepository {
         return ActionType.NONE
     }
 
-    // --- WORLD NEWS DETECTION ---
-    // Any news from any country / continent in the world
     private fun isWorldNewsQuery(q: String): Boolean {
         val s = q.lowercase()
         val hasNewsWord = s.contains("news") || s.contains("latest") || s.contains("breaking") ||
             s.contains("happening") || s.contains("update") || s.contains("today")
         if (!hasNewsWord) return false
-        // "news from X" / "news in X" / "news about X" = always news, any place
         if (s.contains("news from") || s.contains("news in") || s.contains("news about")) return true
         return WORLD_REGIONS.any { s.contains(it) }
+    }
+
+    // FIXED: currentRef is LOWEST priority, but still callable.
+    // Only true when user actually refers to the passage they are reading.
+    // Same rule as ChatViewModel. No generic "this" / "it" / length check.
+    private fun shouldUseCurrentRef(question: String, currentRef: String): Boolean {
+        if (currentRef.isBlank()) return false
+        val q = question.lowercase().trim()
+        return q.contains("this verse") || q.contains("this chapter") ||
+               q.contains("this passage") || q.contains("this psalm") ||
+               q.contains("this scripture") || q.contains("this book") ||
+               q.contains("explain this") || q.contains("summarize this") ||
+               q.contains("what does this mean") || q.contains("what does it mean") ||
+               q.contains("explain it") || q.contains("meaning of this") ||
+               q == "explain" || q == "explain?" || q == "summarize" ||
+               q == "what does this mean?" || q == "what is this about?"
     }
 
     private fun decide(
@@ -261,14 +262,11 @@ class AiRepository {
         if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you"))
             return Decision(ContextType.GENERAL, listOf(ContextType.GENERAL), ActionType.NONE, 1.0)
         val action = detectAction(q)
-        // FIX: AI is separate from Bible home. currentRef is IGNORED here on purpose.
-        // Bible home must not force AI to answer as Bible.
-        val d = decideWithoutAction(question, "", history)
+        // FIXED: Pass currentRef through, don't ignore it. decideWithoutAction handles priority.
+        val d = decideWithoutAction(question, currentRef, history)
         return d.copy(action = action)
     }
 
-    // FIX: Simple priority, no scoring, no follow-up trap, no history trap.
-    // Each question is judged on its own words.
     private fun decideWithoutAction(
         question: String,
         currentRef: String = "",
@@ -276,7 +274,6 @@ class AiRepository {
     ): Decision {
         val q = question.lowercase().trim()
         val action = detectAction(q)
-
         val hasBibleRef = BIBLE_REF_REGEX.containsMatchIn(q) || NUMBERED_BOOK_REGEX.containsMatchIn(q)
         val hasBreakdown = BREAKDOWN_PHRASES.any { q.contains(it) }
 
@@ -284,19 +281,25 @@ class AiRepository {
         if (hasBibleRef && hasBreakdown) return Decision(ContextType.BREAKDOWN, listOf(ContextType.BREAKDOWN), action)
         if (hasBibleRef) return Decision(ContextType.BIBLE, listOf(ContextType.BIBLE), action)
 
-        // Priority 2: World news - America, Africa, Asia, Europe, any country
+        // Priority 2: World news - wins over currentRef
         if (isWorldNewsQuery(q)) return Decision(ContextType.NEWS, listOf(ContextType.NEWS), action)
 
         // Priority 3: Bible only if user explicitly says bible / scripture / verse / psalm
-        // NOT for names like john, peter, paul, mary - those are also normal names
         if (q.contains("bible") || q.contains("scripture") || q.contains("verse") || q.contains("psalm") || q.contains("in the bible") || q.contains("bible says"))
             return Decision(ContextType.BIBLE, listOf(ContextType.BIBLE), action)
 
-        // Priority 4: Factual = News
-        if (FACTUAL_INTENT.any { q.contains(it) })
+        // Priority 4: Factual = News - BUT NOT if user is referring to currentRef
+        // "what does this mean?" contains "what" but is Bible, not factual news
+        if (!shouldUseCurrentRef(question, currentRef) && FACTUAL_INTENT.any { q.contains(it) })
             return Decision(ContextType.NEWS, listOf(ContextType.NEWS), action)
 
-        // Priority 5: Mixed - Bible + News in one message, split by "and" / "also" / "plus"
+        // Priority 5: LOWEST - currentRef, only when referred to. Main purpose of app.
+        if (shouldUseCurrentRef(question, currentRef)) {
+            return if (hasBreakdown) Decision(ContextType.BREAKDOWN, listOf(ContextType.BREAKDOWN), action)
+            else Decision(ContextType.BIBLE, listOf(ContextType.BIBLE), action)
+        }
+
+        // Priority 6: Mixed - Bible + News in one message
         val parts = q.split(Regex("\\s+and\\s+|\\s+also\\s+|\\s+plus\\s+"))
             .map { it.trim() }.filter { it.length > 3 }
         if (parts.size > 1) {
@@ -311,10 +314,11 @@ class AiRepository {
         val q = question.lowercase().trim()
         if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you")) return false
         if (q.length < 10) return false
-        // World news always searches
         if (isWorldNewsQuery(q)) return true
         val decision = decide(question, currentRef, history)
         if (decision.type == ContextType.NEWS || decision.type == ContextType.MIXED) return true
+        // Bible via currentRef does NOT need web search
+        if (decision.type == ContextType.BIBLE || decision.type == ContextType.BREAKDOWN) return false
         if (decision.type == ContextType.GENERAL) {
             if (decision.action == ActionType.RECOMMEND || decision.action == ActionType.COMPARE || decision.action == ActionType.LIST) return true
             return FACTUAL_INTENT.any { q.contains(it) } ||
@@ -325,17 +329,17 @@ class AiRepository {
         return false
     }
 
-    private fun chooseSearchDepth(question: String): String {
-        return "auto"
-    }
+    private fun chooseSearchDepth(question: String): String { return "auto" }
 
     private suspend fun getWebContext(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): String {
         if (!needsWebSearch(question, currentRef, history)) return ""
         val key = question.trim().lowercase()
         if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) return cachedWeb
         val lastUser = history.lastOrNull { it.isUser }?.text ?: ""
-        val lastTopic = currentRef.ifBlank { lastUser }
-        return withTimeoutOrNull(SEARCH_TIMEOUT_MS) { searchWorker(question, lastTopic, lastUser) } ?: ""
+        // FIXED: Don't pass currentRef (e.g. "John 1") as search context for news.
+        // That was poisoning news search with Bible. Search only needs the question.
+        val searchContext = ""
+        return withTimeoutOrNull(SEARCH_TIMEOUT_MS) { searchWorker(question, searchContext, lastUser) } ?: ""
     }
 
     private suspend fun searchWorker(query: String, context: String = "", lastQuestion: String = ""): String {
@@ -420,37 +424,26 @@ class AiRepository {
         val isBreakdown = context == ContextType.BREAKDOWN
         val basePrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext, isBreakdown, context, decision.action)
         val errors = mutableListOf<String>()
-
         val groqModels = orderedModels(remoteGroq, lastWorkingGroq)
         val cfModels = orderedModels(remoteCloudflare, lastWorkingCloudflare)
         val geminiModels = orderedModels(remoteGemini, lastWorkingGemini)
-
         suspend fun tryOne(provider: String, model: String, stream: Flow<String>): Boolean {
             var gotAnything = false
             try {
                 withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                    stream.collect { chunk ->
-                        if (chunk.isNotEmpty()) { gotAnything = true; emit(chunk) }
-                    }
+                    stream.collect { chunk -> if (chunk.isNotEmpty()) { gotAnything = true; emit(chunk) } }
                 }
-                if (gotAnything) {
-                    rememberWorkingModel(provider, model)
-                    return true
-                }
+                if (gotAnything) { rememberWorkingModel(provider, model); return true }
                 return false
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                if (gotAnything) {
-                    rememberWorkingModel(provider, model)
-                    return true
-                }
+                if (gotAnything) { rememberWorkingModel(provider, model); return true }
                 errors.add("$provider $model: ${e.message}")
                 if (provider == "Gemini") CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
                 else CrashReporter.groqLog("$provider $model failed: ${e.message}")
                 return false
             }
         }
-
         if (image != null) {
             for (model in geminiModels) {
                 if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, image, question, isBreakdown))) return@flow
@@ -481,21 +474,14 @@ class AiRepository {
         val isBreakdown = context == ContextType.BREAKDOWN
         val fullPrompt = buildPrompt(prompt, "", emptyList(), "", "NKJV", webContext, isBreakdown, context, decision.action)
         val sb = StringBuilder()
-
         val groqModels = orderedModels(remoteGroq, lastWorkingGroq)
         val cfModels = orderedModels(remoteCloudflare, lastWorkingCloudflare)
         val geminiModels = orderedModels(remoteGemini, lastWorkingGemini)
-
         suspend fun tryOneSync(provider: String, model: String, stream: Flow<String>): Boolean {
             sb.clear()
             try {
-                withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                    stream.collect { sb.append(it) }
-                }
-                if (sb.isNotBlank()) {
-                    rememberWorkingModel(provider, model)
-                    return true
-                }
+                withTimeoutOrNull(STREAM_TIMEOUT_MS) { stream.collect { sb.append(it) } }
+                if (sb.isNotBlank()) { rememberWorkingModel(provider, model); return true }
                 return false
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
@@ -504,7 +490,6 @@ class AiRepository {
                 return false
             }
         }
-
         return try {
             var lastErr: Exception? = null
             if (image != null) {
@@ -546,9 +531,7 @@ class AiRepository {
         } catch (e: CancellationException) { throw e }
     }
 
-    fun persistModelsMemory(context: Context) {
-        saveModelsMemory(context)
-    }
+    fun persistModelsMemory(context: Context) { saveModelsMemory(context) }
 
     private fun maxTokensFor(question: String, isBreakdown: Boolean): Int {
         if (isBreakdown) return MAX_TOKENS
@@ -572,13 +555,11 @@ class AiRepository {
         action: ActionType = ActionType.NONE
     ): String {
         val today = SimpleDateFormat("dd MMMM yyyy", Locale.ENGLISH).format(Date())
-
         val lengthRule = if (isBreakdown) {
             "The user explicitly asked for a detailed breakdown. You may organise it into 3 to 5 natural sections if that helps. For each section, give the verse, then meaning, then application. Finish fully."
         } else {
             "Let the length fit the question. Simple question = short answer. Complex question = fuller answer. Always finish fully, never stop mid-sentence."
         }
-
         val contextRule = when (context) {
             ContextType.BIBLE -> "This looks like a Bible question. Answer from Scripture, quote $translation where helpful, and end with a practical application if natural. Do not force news or a Sources section."
             ContextType.BREAKDOWN -> "This looks like a Bible breakdown request. Go verse by verse / section by section in a natural way."
@@ -586,7 +567,6 @@ class AiRepository {
             ContextType.GENERAL -> "This looks like a general question. Answer helpfully and directly. If WEB SEARCH RESULTS are provided below, use them for facts. Do not force Bible verses. If results were provided, end with EXACTLY this format, max 3, short titles only:\n**Sources**\n- [Short Title](URL)\n- [Short Title](URL)\nIf no results were provided, do NOT add Sources. Do NOT number them. Never invent a URL. Use ONLY titles and URLs from the results."
             ContextType.MIXED -> "This question has MULTIPLE different parts. Answer EACH part separately under its own heading, e.g. **Part 1**, **Part 2**. For the Bible part, use Scripture. For the news/factual part, use ONLY WEB SEARCH RESULTS, never guess. At the very end, if web results were used, add EXACTLY:\n**Sources**\n- [Short Title](URL)\nMax 3. Do not force Bible verses into the non-Bible parts, and do not force Sources into the Bible part."
         }
-
         val actionRule = when (action) {
             ActionType.RECOMMEND -> "ACTION: RECOMMEND. Recommend the user on some ideas to get things right and solved. Give 3 to 5 practical ideas, explain briefly why each one works, then end with 1 clear best pick and the first step to take. Keep it practical, not theoretical."
             ActionType.COMPARE -> "ACTION: COMPARE. Show similarities and differences clearly, side by side if helpful. End with a short conclusion."
@@ -596,9 +576,14 @@ class AiRepository {
             ActionType.EXPLAIN, ActionType.TEACH -> "ACTION: TEACH / EXPLAIN. Explain clearly step by step, simple language, with an example if helpful."
             ActionType.NONE -> ""
         }
-
         val sb = StringBuilder()
-        sb.append("Today is $today. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
+        // FIXED: Only show currentRef when it's actually Bible/Breakdown.
+        // Before it leaked "Current reading: John 1" into news/general prompts.
+        if (context == ContextType.BIBLE || context == ContextType.BREAKDOWN) {
+            sb.append("Today is $today. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
+        } else {
+            sb.append("Today is $today.\n")
+        }
         sb.append("$STYLE_RULE\n")
         sb.append("$contextRule\n$lengthRule\n")
         if (actionRule.isNotBlank()) sb.append("$actionRule\n")
