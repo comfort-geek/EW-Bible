@@ -108,11 +108,12 @@ private fun LinkText(
     text: String,
     color: Color,
     modifier: Modifier = Modifier,
-    isUser: Boolean = false
+    isUser: Boolean = false,
+    isBold: Boolean = false
 ) {
     val uriHandler = LocalUriHandler.current
     val cleanText = remember(text, isUser) { if (isUser) text else cleanMarkdownForDisplay(text) }
-    val annotated = remember(cleanText, color) {
+    val annotated = remember(cleanText, color, isBold) {
         buildAnnotatedString {
             val regex = Regex("""\*\*(.+?)\*\*|\[([^\]]+)\]\((https?://[^)]+)\)|(https?://[^\s)]+)""")
             var lastIndex = 0
@@ -152,12 +153,69 @@ private fun LinkText(
     }
     ClickableText(
         text = annotated,
-        style = LocalTextStyle.current.copy(color = color, fontSize = 15.sp, lineHeight = 22.sp),
+        style = LocalTextStyle.current.copy(
+            color = color,
+            fontSize = 15.sp,
+            lineHeight = 22.sp,
+            fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal
+        ),
         modifier = modifier,
         onClick = { offset ->
             annotated.getStringAnnotations("URL", offset, offset).firstOrNull()?.let { uriHandler.openUri(it.item) }
         }
     )
+}
+
+// NEW: Medium paragraph + Bullet -> Explain paragraph renderer
+// Keeps natural way: paragraphs have space, bullet title then explain paragraph below it
+@Composable
+private fun FormattedText(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+    isUser: Boolean = false
+) {
+    if (isUser) {
+        LinkText(text = text, color = color, modifier = modifier, isUser = true)
+        return
+    }
+    val cleanText = remember(text) { cleanMarkdownForDisplay(text) }
+    // Split by blank line -> each block is either a medium paragraph or bullet + explain
+    val blocks = remember(cleanText) {
+        cleanText.split(Regex("\\n\\s*\\n")).map { it.trim() }.filter { it.isNotBlank() }
+    }
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        blocks.forEach { block ->
+            val trimmed = block.trim()
+            when {
+                // Bullet line: "- **Title**" or "- Title" or "• Title"
+                trimmed.startsWith("- ") || trimmed.startsWith("• ") || trimmed.startsWith("* ") -> {
+                    val content = trimmed.removePrefix("- ").removePrefix("• ").removePrefix("* ").trim()
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Text(text = "•  ", color = color, fontSize = 15.sp, lineHeight = 22.sp)
+                        LinkText(text = content, color = color, modifier = Modifier.weight(1f), isBold = true)
+                    }
+                }
+                // Bullet with explain on same block: "- **Title**\nExplain..."
+                trimmed.contains("\n") && (trimmed.startsWith("- ") || trimmed.startsWith("• ")) -> {
+                    val lines = trimmed.lines()
+                    val first = lines.first().removePrefix("- ").removePrefix("• ").trim()
+                    val rest = lines.drop(1).joinToString("\n").trim()
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Text(text = "•  ", color = color, fontSize = 15.sp, lineHeight = 22.sp)
+                        LinkText(text = first, color = color, modifier = Modifier.weight(1f), isBold = true)
+                    }
+                    if (rest.isNotBlank()) {
+                        LinkText(text = rest, color = color, modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 2.dp))
+                    }
+                }
+                else -> {
+                    // Normal medium paragraph
+                    LinkText(text = trimmed, color = color, modifier = Modifier.fillMaxWidth())
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -186,7 +244,7 @@ private fun MessageBubble(
                 .padding(12.dp)
         ) {
             Column {
-                LinkText(text = mainText, color = if (isUser) Color.White else textColor, modifier = Modifier.fillMaxWidth(), isUser = isUser)
+                FormattedText(text = mainText, color = if (isUser) Color.White else textColor, modifier = Modifier.fillMaxWidth(), isUser = isUser)
                 if (sources.isNotEmpty()) {
                     HorizontalDivider(modifier = Modifier.padding(top = 12.dp, bottom = 8.dp), color = Color(0xFFE0E0E0))
                     Text(text = "Sources", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
@@ -237,8 +295,6 @@ fun AiChatScreen(
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    // FIX: Keep latest currentRef for send - if Bible home changes ref while AI is open,
-    // we still send the newest one, not a stale "".
     val latestRef by rememberUpdatedState(currentRef)
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -267,8 +323,6 @@ fun AiChatScreen(
         if (state.chats.isNotEmpty()) {
             viewModel.openChat(state.chats.first().id)
         } else {
-            // FIX: Pass currentRef as LOW priority context, NOT as forced Bible type.
-            // Repository decides: explicit verse > news > general > currentRef (only if referred to)
             viewModel.startNewChat(currentRef)
         }
     }
@@ -317,11 +371,9 @@ fun AiChatScreen(
                     IconButton(onClick = { showHistory = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.History, null, tint = textColor) }
                     Text(titleText, color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     Spacer(modifier = Modifier.width(8.dp))
-                    // Display only - shows what passage you came from, does NOT force Bible mode
                     if (currentRef.isNotBlank()) {
                         Text(currentRef, color = gold, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    // FIX: New chat keeps currentRef as fallback, not ""
                     IconButton(onClick = { viewModel.startNewChat(latestRef) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
                 }
                 Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -353,7 +405,7 @@ fun AiChatScreen(
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                             Box(modifier = Modifier.fillMaxWidth(0.95f).background(panel, RoundedCornerShape(12.dp)).padding(10.dp)) {
                                 if (state.streamingText.isNotEmpty()) {
-                                    LinkText(text = state.streamingText, color = textColor, modifier = Modifier.fillMaxWidth())
+                                    FormattedText(text = state.streamingText, color = textColor, modifier = Modifier.fillMaxWidth())
                                 } else {
                                     Text(text = thinkingText, color = textColor, fontSize = 15.sp)
                                 }
@@ -375,8 +427,6 @@ fun AiChatScreen(
                     onClick = {
                         val q = input.trim()
                         if (q.isBlank()) return@IconButton
-                        // FIX: Pass currentRef - Repository will ignore it for news/general,
-                        // use it only for "explain this / what does this mean" etc.
                         viewModel.send(q, latestRef, selectedImage, selectedTranslation)
                         input = ""
                         selectedImage = null
