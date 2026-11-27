@@ -58,28 +58,20 @@ private fun cleanMarkdownForDisplay(text: String): String {
         val last = t.lastIndexOf("**")
         if (last >= 0) t = t.removeRange(last, last + 2)
     }
-    // FIX: Protect **bold** first
     val bolds = mutableListOf<String>()
     t = Regex("\\*\\*(.+?)\\*\\*").replace(t) { match ->
         bolds.add(match.groupValues[1])
         "\u0000BOLD${bolds.size - 1}\u0000"
     }
-    // FIX: Protect __bold__ too
     val bolds2 = mutableListOf<String>()
     t = Regex("__(.+?)__").replace(t) { match ->
         bolds2.add(match.groupValues[1])
         "\u0000BOLD2${bolds2.size - 1}\u0000"
     }
-    // FIX: * bullet lines -> • bullet, so they are not mistaken for italic
     t = t.replace(Regex("(?m)^\\s*\\*\\s+"), "• ")
-    // FIX: Single *italic* -> **bold** (this was the bug in screenshot:
-    // *Introduction to Programming Nanodegree* showed literal * *)
-    // Only match *...* on same line, not **, not bullet
     t = Regex("(?<!\\*)\\*([^\\*\\n]+?)\\*(?!\\*)").replace(t) { "**${it.groupValues[1]}**" }
-    // FIX: _italic_ -> **bold** instead of stripping to plain text
     t = Regex("_(.+?)_").replace(t) { "**${it.groupValues[1]}**" }
     t = t.replace("`", "")
-    // Restore protected bolds
     bolds.forEachIndexed { index, bold ->
         t = t.replace("\u0000BOLD$index\u0000", "**$bold**")
     }
@@ -130,7 +122,6 @@ private fun LinkText(
     val cleanText = remember(text, isUser) { if (isUser) text else cleanMarkdownForDisplay(text) }
     val annotated = remember(cleanText, color) {
         buildAnnotatedString {
-            // FIX: Added *italic* and _italic_ as fallback - if clean step missed one, still render it italic not literal *
             val regex = Regex("""\*\*(.+?)\*\*|\*(.+?)\*|_(.+?)_|\[([^\]]+)\]\((https?://[^)]+)\)|(https?://[^\s)]+)""")
             var lastIndex = 0
             regex.findAll(cleanText).forEach { match ->
@@ -279,9 +270,11 @@ fun AiChatScreen(
         }
     }
 
+    // FIX 1: Always sync screen ref -> ViewModel, with translation.
+    // Old: setBibleRef(currentRef) only. New: setScreenContext so translation also stays in sync.
     LaunchedEffect(currentRef) {
         if (currentRef.isNotBlank()) {
-            viewModel.setBibleRef(currentRef)
+            viewModel.setScreenContext(currentRef, selectedTranslation)
         }
     }
 
@@ -295,16 +288,26 @@ fun AiChatScreen(
         viewModel.refreshModels(context)
         viewModel.loadChats()
     }
-    LaunchedEffect(state.chatsLoaded) {
+
+    // FIX 2: If user opens AI from a NEW passage while an old chat is open,
+    // old code did `if (currentChatId != null) return` and never switched.
+    // Top bar showed new passage, ViewModel still held old passage.
+    // New: if currentRef changed vs current chat's ref, start a new chat for the new ref.
+    var lastHandledRef by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(state.chatsLoaded, currentRef) {
         if (!state.chatsLoaded) return@LaunchedEffect
-        if (state.currentChatId != null) return@LaunchedEffect
-        if (currentRef.isNotBlank()) {
-            viewModel.startNewChat(currentRef, selectedTranslation)
-        } else if (state.chats.isNotEmpty()) {
-            viewModel.openChat(state.chats.first().id)
-        } else {
-            viewModel.startNewChat(currentRef, selectedTranslation)
+        if (currentRef.isBlank()) {
+            if (state.currentChatId == null) {
+                if (state.chats.isNotEmpty()) viewModel.openChat(state.chats.first().id)
+                else viewModel.startNewChat(currentRef, selectedTranslation)
+            }
+            return@LaunchedEffect
         }
+        if (lastHandledRef == currentRef && state.currentChatId != null) return@LaunchedEffect
+        lastHandledRef = currentRef
+        // If current chat already is for this ref, don't recreate it
+        if (state.currentChatId != null && state.currentBibleRef == currentRef) return@LaunchedEffect
+        viewModel.startNewChat(currentRef, selectedTranslation)
     }
 
     LaunchedEffect(state.messages.size, state.isLoading, state.streamingText.length / 300) {
@@ -412,7 +415,11 @@ fun AiChatScreen(
                     onClick = {
                         val q = input.trim()
                         if (q.isBlank()) return@IconButton
-                        viewModel.send(q, latestRef, selectedImage, selectedTranslation)
+                        // FIX 3: Never send "". Fallback chain: ViewModel ref -> screen ref -> latestRef
+                        // Old: viewModel.send(q, latestRef, ...) could send "" if currentRef was "" at that moment.
+                        // New: prefer state.currentBibleRef (what ViewModel actually holds), then latestRef.
+                        val refToSend = state.currentBibleRef.ifBlank { latestRef }
+                        viewModel.send(q, refToSend, selectedImage, selectedTranslation)
                         input = ""
                         selectedImage = null
                     },
