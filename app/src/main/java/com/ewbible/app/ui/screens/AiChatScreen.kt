@@ -256,6 +256,22 @@ fun AiChatScreen(
         }
     }
 
+    // FIX 1: Push Bible tab ref to ChatViewModel. Bible tab is NKJV only, so only ref, no translation.
+    // This works even if parent forgets to call setBibleRef().
+    LaunchedEffect(currentRef) {
+        if (currentRef.isNotBlank()) {
+            viewModel.setBibleRef(currentRef)
+        }
+    }
+
+    // FIX 2: Sync local picker from ViewModel. When you open an old chat, ViewModel resets to NKJV
+    // (ChatEntity has no translation column), so UI must show NKJV again.
+    LaunchedEffect(state.currentTranslation) {
+        if (selectedTranslation != state.currentTranslation) {
+            selectedTranslation = state.currentTranslation
+        }
+    }
+
     LaunchedEffect(Unit) {
         viewModel.refreshModels(context)
         viewModel.loadChats()
@@ -266,13 +282,14 @@ fun AiChatScreen(
         // FIX: If we came from a verse, start new chat with that verse.
         // Don't open old chat, or the old ref will confuse the AI.
         if (currentRef.isNotBlank()) {
-            viewModel.startNewChat(currentRef)
+            // FIX 3: Pass translation, otherwise new chat always uses ViewModel default
+            viewModel.startNewChat(currentRef, selectedTranslation)
         } else if (state.chats.isNotEmpty()) {
             viewModel.openChat(state.chats.first().id)
         } else {
             // FIX: Pass currentRef as LOW priority context, NOT as forced Bible type.
             // Repository decides: explicit verse > news > general > currentRef (only if referred to)
-            viewModel.startNewChat(currentRef)
+            viewModel.startNewChat(currentRef, selectedTranslation)
         }
     }
 
@@ -325,13 +342,21 @@ fun AiChatScreen(
                         Text(currentRef, color = gold, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     // FIX: New chat keeps currentRef as fallback, not ""
-                    IconButton(onClick = { viewModel.startNewChat(latestRef) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
+                    // FIX: Pass translation too
+                    IconButton(onClick = { viewModel.startNewChat(latestRef, selectedTranslation) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
                 }
                 Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     translations.forEach { t ->
                         val isSelected = selectedTranslation == t
                         Box(
-                            modifier = Modifier.weight(1f).height(32.dp).background(if (isSelected) gold else panel, shape = RoundedCornerShape(16.dp)).clickable { selectedTranslation = t }.padding(horizontal = 4.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f).height(32.dp).background(if (isSelected) gold else panel, shape = RoundedCornerShape(16.dp))
+                                .clickable {
+                                    // FIX 4: This was missing - picker only changed local state, AI stayed NKJV
+                                    // Now it syncs to ChatViewModel, which is used in send()
+                                    selectedTranslation = t
+                                    viewModel.setChatTranslation(t)
+                                }
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(t, color = if (isSelected) Color.White else textColor, fontSize = 12.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
@@ -380,6 +405,7 @@ fun AiChatScreen(
                         if (q.isBlank()) return@IconButton
                         // FIX: Pass currentRef - Repository will ignore it for news/general,
                         // use it only for "explain this / what does this mean" etc.
+                        // send() in ChatViewModel now creates chat if needed, so question is never dropped.
                         viewModel.send(q, latestRef, selectedImage, selectedTranslation)
                         input = ""
                         selectedImage = null
