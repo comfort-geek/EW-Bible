@@ -9,11 +9,14 @@ import java.util.zip.Inflater
 object CommentaryHelper {
 
     private val htmlCache = LruCache<Long, String>(60)
-    // FIX: LruCache is NOT thread-safe. ViewModel calls this from Main + IO.
-    // All get/put must be locked.
     private val htmlCacheLock = Any()
     private fun getHtmlCached(k: Long): String? = synchronized(htmlCacheLock) { htmlCache.get(k) }
     private fun putHtmlCached(k: Long, html: String) = synchronized(htmlCacheLock) { htmlCache.put(k, html) }
+
+    // NEW: separate cache for AI plain text - so we don't strip HTML every time
+    private val textCache = LruCache<Long, String>(60)
+    private fun getTextCached(k: Long): String? = synchronized(htmlCacheLock) { textCache.get(k) }
+    private fun putTextCached(k: Long, text: String) = synchronized(htmlCacheLock) { textCache.put(k, text) }
 
     private val bufferPool = ThreadLocal.withInitial { ByteArray(65536) }
     private val outPool = ThreadLocal.withInitial { ByteArray(262144) }
@@ -21,6 +24,7 @@ object CommentaryHelper {
     private fun key(bookId: Int, chapter: Int): Long =
         (bookId.toLong() shl 32) or chapter.toLong()
 
+    // --- YOUR ORIGINAL - KEEP, already correct zlib ---
     fun decompress(compressed: ByteArray?): String {
         if (compressed == null || compressed.isEmpty()) return ""
         val inflater = Inflater()
@@ -52,6 +56,44 @@ object CommentaryHelper {
         }
     }
 
+    // --- NEW: FOR AI ONLY ---
+    // Usage in ChatViewModel: CommentaryHelper.getPlainTextCommentary(bookId, chapter, compressed)
+    fun getPlainTextCommentary(bookId: Int, chapter: Int, compressed: ByteArray?): String {
+        if (compressed == null || compressed.isEmpty()) return ""
+        val k = key(bookId, chapter)
+        getTextCached(k)?.let { return it }
+        val html = getHtmlCommentary(bookId, chapter, compressed)
+        val plain = stripHtml(html).take(2500)
+        if (plain.isNotBlank()) putTextCached(k, plain)
+        return plain
+    }
+
+    fun getPlainTextCommentary(compressed: ByteArray?): String {
+        if (compressed == null || compressed.isEmpty()) return ""
+        return stripHtml(cleanHtml(decompress(compressed))).take(2500)
+    }
+
+    private fun stripHtml(html: String): String {
+        var t = html
+        // <br>, </p>, </div>, </h2> -> newline
+        t = t.replace(Regex("(?i)<br[^>]*>"), "\n")
+        t = t.replace(Regex("(?i)</(p|div|h[1-6]|li|tr)[^>]*>"), "\n")
+        // remove all other tags
+        t = t.replace(Regex("<[^>]+>"), "")
+        // decode entities
+        t = t.replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+        // collapse whitespace, keep paragraphs
+        t = t.replace(Regex("[ \t]+"), " ")
+        t = t.replace(Regex("\n\\s*\n+"), "\n")
+        return t.trim()
+    }
+
+    // --- YOUR ORIGINAL cleanHtml etc - KEEP ALL BELOW ---
     fun cleanHtml(html: String): String {
         if (html.isEmpty()) return ""
         var t = html
@@ -97,19 +139,12 @@ object CommentaryHelper {
         return sb.toString()
     }
 
-    // RULE: Every chapter must start with "A."
-    // e.g. Genesis 1 -> "A. Thoughts to begin..."
-    //      Genesis 4 -> "A. Cain's murder of Abel."
-    // "A." is already bold in the data, so we don't touch it.
     private fun startFromA(html: String): String {
-        // Find the first "A." heading
-        // Matches: <h2>A. ...</h2> / <p><b>A. ...</b></p> / <p><b>A.</b> Thoughts...</p>
         val aHeading = Regex(
             """(?i)<(h[1-6]|p|div)[^>]*>(?:\s*<[^>]+>)*\s*A\.(?:\s|&nbsp;|<)"""
         )
         val match = aHeading.find(html)
         if (match != null) {
-            // Start the chapter here — everything before A. is ignored
             return html.substring(match.range.first)
         }
         return html
@@ -129,7 +164,6 @@ object CommentaryHelper {
         return html
     }
 
-    // FIX 1: Check cache without hitting DB - for instant Next
     fun getCached(bookId: Int, chapter: Int): String? {
         return getHtmlCached(key(bookId, chapter))
     }
@@ -138,7 +172,6 @@ object CommentaryHelper {
         return getHtmlCached(key(bookId, chapter)) != null
     }
 
-    // FIX 2: Preload from bytes (your old version - keep it)
     fun preload(bookId: Int, chapter: Int, compressed: ByteArray?) {
         if (compressed == null || compressed.isEmpty()) return
         val k = key(bookId, chapter)
@@ -147,7 +180,6 @@ object CommentaryHelper {
         putHtmlCached(k, html)
     }
 
-    // FIX 3: THE INSTANT FIX - preload NEXT chapter by loading from DB in background
     fun preloadNext(
         scope: CoroutineScope,
         currentBookId: Int,
@@ -175,7 +207,6 @@ object CommentaryHelper {
         chapter: Int,
         loader: suspend (bookId: Int, chapter: Int) -> ByteArray?
     ) {
-        // FIX: bounds check - never ask DAO for chapter 0 or > max
         if (bookId !in 1..66) return
         if (chapter !in 1..BookCatalog.chapters(bookId)) return
         val k = key(bookId, chapter)
@@ -188,6 +219,6 @@ object CommentaryHelper {
     }
 
     fun clearCache() {
-        synchronized(htmlCacheLock) { htmlCache.evictAll() }
+        synchronized(htmlCacheLock) { htmlCache.evictAll(); textCache.evictAll() }
     }
 }
