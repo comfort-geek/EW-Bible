@@ -37,8 +37,8 @@ data class ChatState(
     val availableModels: List<String> = emptyList()
 )
 
-// FIXED: No @HiltViewModel - you create this via ChatViewModelFactory manually
-// Params MUST match ChatViewModelFactory: bibleDao, geminiRepository, syncManager
+// Matches ChatViewModelFactory exactly: bibleDao, geminiRepository, syncManager
+// No @HiltViewModel - created manually via Factory
 class ChatViewModel(
     private val bibleDao: BibleDao,
     private val geminiRepository: AiRepository,
@@ -81,10 +81,10 @@ class ChatViewModel(
         }
     }
 
+    // FIXED: AiRepository has refreshModels(context), NOT getAvailableModels()
     fun refreshModels(context: Context) {
         viewModelScope.launch {
-            val models = runCatching { geminiRepository.getAvailableModels(context) }.getOrDefault(emptyList())
-            _state.update { it.copy(availableModels = models) }
+            runCatching { geminiRepository.refreshModels(context) }
         }
     }
 
@@ -103,19 +103,11 @@ class ChatViewModel(
         viewModelScope.launch {
             val id = runCatching {
                 bibleDao.insertChat(
-                    ChatEntity(
-                        id = 0L,
-                        title = if (cleanRef.isNotBlank()) cleanRef else "New Chat",
-                        ref = cleanRef,
-                        createdAt = System.currentTimeMillis()
-                    )
+                    ChatEntity(id = 0L, title = if (cleanRef.isNotBlank()) cleanRef else "New Chat", ref = cleanRef, createdAt = System.currentTimeMillis())
                 )
             }.getOrDefault(System.currentTimeMillis())
             _state.update {
-                it.copy(
-                    currentChatId = id, messages = emptyList(), streamingText = "",
-                    isLoading = false, currentBibleRef = cleanRef, currentTranslation = cleanTrans
-                )
+                it.copy(currentChatId = id, messages = emptyList(), streamingText = "", isLoading = false, currentBibleRef = cleanRef, currentTranslation = cleanTrans)
             }
             loadChats()
         }
@@ -141,10 +133,7 @@ class ChatViewModel(
 
     fun deleteChat(chatId: Long) {
         viewModelScope.launch {
-            runCatching {
-                bibleDao.deleteMessagesForChat(chatId)
-                bibleDao.deleteChat(chatId)
-            }
+            runCatching { bibleDao.deleteMessagesForChat(chatId); bibleDao.deleteChat(chatId) }
             if (_state.value.currentChatId == chatId) {
                 _state.update { it.copy(currentChatId = null, messages = emptyList()) }
             }
@@ -165,23 +154,11 @@ class ChatViewModel(
             if (chatId == null) {
                 chatId = runCatching {
                     bibleDao.insertChat(
-                        ChatEntity(
-                            id = 0L,
-                            title = if (useRef.isNotBlank()) useRef else "New Chat",
-                            ref = useRef,
-                            createdAt = System.currentTimeMillis()
-                        )
+                        ChatEntity(id = 0L, title = if (useRef.isNotBlank()) useRef else "New Chat", ref = useRef, createdAt = System.currentTimeMillis())
                     )
                 }.getOrDefault(System.currentTimeMillis())
                 _state.update {
-                    it.copy(
-                        currentChatId = chatId,
-                        messages = emptyList(),
-                        currentBibleRef = useRef,
-                        currentTranslation = useTranslation,
-                        isLoading = false,
-                        streamingText = ""
-                    )
+                    it.copy(currentChatId = chatId, messages = emptyList(), currentBibleRef = useRef, currentTranslation = useTranslation, isLoading = false, streamingText = "")
                 }
                 loadChats()
             }
@@ -191,43 +168,43 @@ class ChatViewModel(
             _state.update { it.copy(messages = it.messages + userMsg, isLoading = true, streamingText = "") }
 
             runCatching {
-                bibleDao.insertMessage(
-                    MessageEntity(chatId = finalChatId, text = q, isUser = true, timestamp = System.currentTimeMillis())
-                )
+                bibleDao.insertMessage(MessageEntity(chatId = finalChatId, text = q, isUser = true, timestamp = System.currentTimeMillis()))
             }
 
-            val type = detectType(q, useRef)
-            val bibleContext = if (type == ChatType.BIBLE || type == ChatType.BIBLE_WITH_REF) {
+            // History for AiRepository - must be MessageEntity list
+            val history = runCatching { bibleDao.getMessagesForChatSync(finalChatId) }.getOrDefault(emptyList())
+
+            // Bible grounding: only for Bible questions. AiRepository already does web search for NEWS/GENERAL itself.
+            // We do NOT build a systemPrompt here - AiRepository.buildPrompt() does that internally.
+            // We only pass bibleContext + translation, so we don't fight its logic.
+            val bibleContext = if (isBibleQuestion(q, useRef)) {
                 buildBibleContext(useRef, q, useTranslation)
             } else ""
 
-            val systemPrompt = buildSystemPrompt(type, useTranslation)
-            val fullPrompt = buildString {
-                if (bibleContext.isNotBlank()) { append(bibleContext); append("\n\n") }
-                append("USER QUESTION: ").append(q)
-            }
-
             var aiText = ""
             try {
-                geminiRepository.sendStream(
-                    systemPrompt = systemPrompt,
-                    prompt = fullPrompt,
+                // FIXED: real method is askStreaming(question, currentRef, history, image, bibleContext, translation)
+                geminiRepository.askStreaming(
+                    question = q,
+                    currentRef = useRef,
+                    history = history,
                     image = image,
-                    onChunk = { chunk ->
+                    bibleContext = bibleContext,
+                    translation = useTranslation
+                ).collect { chunk ->
+                    if (chunk.isNotEmpty()) {
                         aiText += chunk
                         _state.update { it.copy(streamingText = aiText) }
                     }
-                )
+                }
             } catch (e: Exception) {
-                aiText = aiText.ifBlank { "Sorry, I couldn't get an answer. Please try again." }
+                if (aiText.isBlank()) aiText = "Sorry, I couldn't get an answer. Please try again."
             }
 
             val aiMsg = ChatMessage(text = aiText, isUser = false)
             _state.update { it.copy(messages = it.messages + aiMsg, isLoading = false, streamingText = "") }
             runCatching {
-                bibleDao.insertMessage(
-                    MessageEntity(chatId = finalChatId, text = aiText, isUser = false, timestamp = System.currentTimeMillis())
-                )
+                bibleDao.insertMessage(MessageEntity(chatId = finalChatId, text = aiText, isUser = false, timestamp = System.currentTimeMillis()))
             }
             runCatching {
                 val existing = bibleDao.getChatById(finalChatId) ?: return@runCatching
@@ -239,37 +216,14 @@ class ChatViewModel(
         }
     }
 
-    private enum class ChatType { GENERAL, NEWS, BIBLE, BIBLE_WITH_REF }
-
-    private fun detectType(q: String, ref: String): ChatType {
+    private fun isBibleQuestion(q: String, ref: String): Boolean {
         val lower = q.lowercase()
-        if (lower.contains("news") || lower.contains("today") || lower.contains("latest") ||
-            lower.contains("what happened") || lower.contains("breaking")) return ChatType.NEWS
-        if (Regex("""\b(1|2|3)?\s?[a-z]+\s+\d+:\d+""", RegexOption.IGNORE_CASE).containsMatchIn(q)) return ChatType.BIBLE_WITH_REF
-        if (lower.contains("explain this") || lower.contains("what does this mean") ||
-            lower.contains("this verse") || lower.contains("this chapter") ||
-            lower.contains("this passage")) return ChatType.BIBLE
+        if (Regex("""\b(1|2|3)?\s?[a-z]+\s+\d+:\d+""", RegexOption.IGNORE_CASE).containsMatchIn(q)) return true
+        if (lower.contains("explain this") || lower.contains("what does this mean") || lower.contains("this verse") || lower.contains("this chapter") || lower.contains("this passage")) return true
         val bibleWords = listOf("bible", "verse", "scripture", "god", "jesus", "psalm", "proverb", "gospel", "apostle", "pray")
-        if (bibleWords.any { lower.contains(it) }) return ChatType.BIBLE
-        if (ref.isNotBlank() && (lower.contains("explain") || lower.contains("meaning") || lower.length < 30)) return ChatType.BIBLE
-        return ChatType.GENERAL
-    }
-
-    private fun buildSystemPrompt(type: ChatType, requestedTranslation: String): String {
-        return when (type) {
-            ChatType.BIBLE, ChatType.BIBLE_WITH_REF -> """
-                You are a Bible study assistant in the EWBible app.
-                Answer from the passage provided below.
-                User requested translation for AI answer: $requestedTranslation.
-                You know ALL translations (NKJV, KJV, NIV, ESV, CSB).
-                The verses below are NKJV because Bible tab / local DB only has NKJV.
-                If user asked for $requestedTranslation, answer/quote in $requestedTranslation,
-                but keep meaning identical to NKJV text below. Do not invent verse text.
-                Use commentary/summary only as background.
-            """.trimIndent()
-            ChatType.NEWS -> "You are a news assistant. Do NOT force a Bible answer."
-            ChatType.GENERAL -> "You are a helpful general assistant. Do NOT force a Bible answer unless user asked."
-        }
+        if (bibleWords.any { lower.contains(it) }) return true
+        if (ref.isNotBlank() && (lower.contains("explain") || lower.contains("meaning") || lower.length < 30)) return true
+        return false
     }
 
     private suspend fun buildBibleContext(ref: String, question: String, requestedTranslation: String): String {
