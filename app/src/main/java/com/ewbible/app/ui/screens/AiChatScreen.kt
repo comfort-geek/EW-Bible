@@ -47,23 +47,20 @@ private fun cleanSourceNumbering(text: String): String {
 
 private fun cleanMarkdownForDisplay(text: String): String {
     var t = cleanSourceNumbering(text)
-    // FIX: Remove > blockquote symbol
+    // FIX: remove > quote symbol
     t = t.replace(Regex("(?m)^\\s*>\\s*"), "")
     t = t.replace(">", "")
     t = t.replace("|", "")
     t = t.replace("**Bold Title:**", "").replace("**Bold Title**", "")
         .replace("Bold Title:", "").replace("Bold Title", "")
-    // Keep headings - just make them bold, don't delete them. Don't force any heading.
     t = t.replace(Regex("(?m)^#{1,6}\\s*(.+)$"), "**$1**")
     t = t.replace("```", "")
     t = t.replace(Regex("(?m)^---\\s*$"), "")
-    // Fix odd bold
     val boldCount = Regex("\\*\\*").findAll(t).count()
     if (boldCount % 2 == 1) {
         val last = t.lastIndexOf("**")
         if (last >= 0) t = t.removeRange(last, last + 2)
     }
-    // Preserve bolds, don't delete single * (bullets) - show as AI wrote them
     val bolds = mutableListOf<String>()
     t = Regex("\\*\\*(.+?)\\*\\*").replace(t) { match ->
         bolds.add(match.groupValues[1])
@@ -85,7 +82,7 @@ private fun cleanForCopy(text: String): String {
         .replace("*", "")
 }
 
-// --- SOURCES: parse + organize ---
+// --- SOURCES: domain only ---
 private data class SourceItem(val title: String, val url: String)
 
 private fun splitSources(text: String): Pair<String, List<SourceItem>> {
@@ -98,13 +95,10 @@ private fun splitSources(text: String): Pair<String, List<SourceItem>> {
     val sources = mutableListOf<SourceItem>()
     val regex = Regex("""\[([^\]]+)\]\((https?://[^)]+)\)|(https?://[^\s)]+)""")
     regex.findAll(raw).forEach { m ->
-        val title = m.groups[1]?.value?.trim()
         val url = m.groups[2]?.value ?: m.groups[3]?.value ?: return@forEach
-        val cleanTitle = if (!title.isNullOrBlank()) title else url
-            .removePrefix("https://").removePrefix("www.")
-            .substringBefore("/").take(30)
-        val shortTitle = if (cleanTitle.length > 65) cleanTitle.take(62) + "..." else cleanTitle
-        sources.add(SourceItem(shortTitle, url))
+        // FIX: title = domain only, no duplicate second line
+        val domain = domainOf(url)
+        sources.add(SourceItem(domain, url))
     }
     return main to sources.distinctBy { domainOf(it.url) }.take(3)
 }
@@ -211,9 +205,7 @@ private fun MessageBubble(
     ) {
         Box(
             modifier = Modifier
-                // FIX: was fillMaxWidth(0.85f) which clipped on right. Use full width with end padding.
-                .fillMaxWidth()
-                .padding(end = if (isUser) 0.dp else 32.dp)
+                .fillMaxWidth(if (isUser) 0.85f else 0.95f)
                 .background(if (isUser) gold else panel, RoundedCornerShape(12.dp))
                 .padding(12.dp)
         ) {
@@ -236,20 +228,17 @@ private fun MessageBubble(
                         fontWeight = FontWeight.Bold,
                         color = Color.Gray
                     )
-                    // FIX: Just links. No dots, no plain title, no second domain line.
+                    // FIX: domain only, plaintext open, no bullet, no second line, no icon
                     sources.forEach { s ->
                         Text(
-                            text = domainOf(s.url),
+                            text = s.title,
                             fontSize = 13.sp,
-                            lineHeight = 20.sp,
                             color = Color(0xFF1A73E8),
                             textDecoration = TextDecoration.Underline,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { uriHandler.openUri(s.url) }
-                                .padding(vertical = 6.dp)
+                                .padding(vertical = 5.dp)
                         )
                     }
                 }
@@ -453,8 +442,7 @@ fun AiChatScreen(
                     item(key = "loading-${state.currentChatId}", contentType = "loading") {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                             Box(
-                                modifier = Modifier.fillMaxWidth()
-                                    .padding(end = 32.dp)
+                                modifier = Modifier.fillMaxWidth(0.95f)
                                     .background(panel, RoundedCornerShape(12.dp))
                                     .padding(10.dp)
                             ) {
