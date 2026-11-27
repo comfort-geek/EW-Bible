@@ -112,17 +112,19 @@ class AiRepository {
         val BIBLE_REF_REGEX = Regex("\\b(${BIBLE_BOOKS.joinToString("|")})s?\\s+\\d+")
         val NUMBERED_BOOK_REGEX = Regex("\\b[12]\\s+(samuel|kings|chronicles|corinthians|thessalonians|timothy|peter|john)\\s+\\d+")
 
+        // FIXED: Only time-sensitive / real-world-changeable things are NEWS.
+        // REMOVED: "who is", "what is", "what are", "who are", "tell me about",
+        // "biography", "history of", "facts about", "define", "definition"
+        // Those are GENERAL - "What is faith?" / "Tell me about David" must NOT become NEWS.
         val FACTUAL_INTENT = listOf(
-            "who is", "who won", "who was", "who became", "who appointed",
+            "who won", "who became", "who appointed",
             "what happened", "what is happening", "latest", "recent", "current",
             "today", "yesterday", "this week", "this year",
             "when did", "when will", "how many", "how much",
             "election", "results", "president", "minister", "government",
             "job", "jobs", "hiring", "vacancy", "vacancies", "apply", "salary",
             "news", "pope", "war", "football", "soccer", "score",
-            "price of", "exchange rate", "weather",
-            "tell me about", "biography", "history of",
-            "what is", "what are", "who are", "facts about", "define", "definition"
+            "price of", "exchange rate", "weather"
         )
 
         val BREAKDOWN_PHRASES = listOf(
@@ -237,9 +239,6 @@ class AiRepository {
         return WORLD_REGIONS.any { s.contains(it) }
     }
 
-    // FIXED: currentRef is LOWEST priority, but still callable.
-    // Only true when user actually refers to the passage they are reading.
-    // Same rule as ChatViewModel. No generic "this" / "it" / length check.
     private fun shouldUseCurrentRef(question: String, currentRef: String): Boolean {
         if (currentRef.isBlank()) return false
         val q = question.lowercase().trim()
@@ -262,7 +261,6 @@ class AiRepository {
         if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you"))
             return Decision(ContextType.GENERAL, listOf(ContextType.GENERAL), ActionType.NONE, 1.0)
         val action = detectAction(q)
-        // FIXED: Pass currentRef through, don't ignore it. decideWithoutAction handles priority.
         val d = decideWithoutAction(question, currentRef, history)
         return d.copy(action = action)
     }
@@ -288,12 +286,13 @@ class AiRepository {
         if (q.contains("bible") || q.contains("scripture") || q.contains("verse") || q.contains("psalm") || q.contains("in the bible") || q.contains("bible says"))
             return Decision(ContextType.BIBLE, listOf(ContextType.BIBLE), action)
 
-        // Priority 4: Factual = News - BUT NOT if user is referring to currentRef
-        // "what does this mean?" contains "what" but is Bible, not factual news
+        // Priority 4: Factual / time-sensitive = News - BUT NOT if user is referring to currentRef
+        // FIXED: FACTUAL_INTENT no longer contains bare "what is" / "who is" / "tell me about"
+        // so "What is faith?" stays GENERAL, "Who won election today?" still goes NEWS
         if (!shouldUseCurrentRef(question, currentRef) && FACTUAL_INTENT.any { q.contains(it) })
             return Decision(ContextType.NEWS, listOf(ContextType.NEWS), action)
 
-        // Priority 5: LOWEST - currentRef, only when referred to. Main purpose of app.
+        // Priority 5: LOWEST - currentRef, only when referred to.
         if (shouldUseCurrentRef(question, currentRef)) {
             return if (hasBreakdown) Decision(ContextType.BREAKDOWN, listOf(ContextType.BREAKDOWN), action)
             else Decision(ContextType.BIBLE, listOf(ContextType.BIBLE), action)
@@ -317,7 +316,6 @@ class AiRepository {
         if (isWorldNewsQuery(q)) return true
         val decision = decide(question, currentRef, history)
         if (decision.type == ContextType.NEWS || decision.type == ContextType.MIXED) return true
-        // Bible via currentRef does NOT need web search
         if (decision.type == ContextType.BIBLE || decision.type == ContextType.BREAKDOWN) return false
         if (decision.type == ContextType.GENERAL) {
             if (decision.action == ActionType.RECOMMEND || decision.action == ActionType.COMPARE || decision.action == ActionType.LIST) return true
@@ -336,8 +334,6 @@ class AiRepository {
         val key = question.trim().lowercase()
         if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) return cachedWeb
         val lastUser = history.lastOrNull { it.isUser }?.text ?: ""
-        // FIXED: Don't pass currentRef (e.g. "John 1") as search context for news.
-        // That was poisoning news search with Bible. Search only needs the question.
         val searchContext = ""
         return withTimeoutOrNull(SEARCH_TIMEOUT_MS) { searchWorker(question, searchContext, lastUser) } ?: ""
     }
@@ -577,8 +573,6 @@ class AiRepository {
             ActionType.NONE -> ""
         }
         val sb = StringBuilder()
-        // FIXED: Only show currentRef when it's actually Bible/Breakdown.
-        // Before it leaked "Current reading: John 1" into news/general prompts.
         if (context == ContextType.BIBLE || context == ContextType.BREAKDOWN) {
             sb.append("Today is $today. Use $translation when quoting Scripture. Current reading: $currentRef.\n")
         } else {
