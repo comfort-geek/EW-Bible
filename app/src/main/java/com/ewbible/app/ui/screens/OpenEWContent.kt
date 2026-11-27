@@ -3,6 +3,7 @@ package com.ewbible.app.ui.screens
 import android.graphics.Typeface
 import android.text.Spannable
 import android.text.SpannableString
+import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.method.LinkMovementMethod
 import android.text.style.ForegroundColorSpan
@@ -151,7 +152,6 @@ private fun linkifyMatch(m: MatchResult): String {
 
 private val HEADING_LINE = Regex("""^(?:[A-Z]\.|[0-9]+\.|[a-z]\.)\s+[A-Z].{0,90}$""")
 
-// FIX 2: Clone spans per paragraph. Never reuse same span object.
 private fun cloneSpan(span: Any): Any? {
     return when (span) {
         is URLSpan -> URLSpan(span.url)
@@ -192,7 +192,6 @@ private fun splitIntoParagraphs(full: SpannableString): List<SpannableString> {
                 val spanS = maxOf(range.first, s)
                 val spanE = minOf(range.second, e)
                 if (spanE > spanS) {
-                    // FIX: new instance per chunk
                     cloneSpan(span)?.let {
                         chunk.setSpan(it, spanS - s, spanE - s, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     }
@@ -208,6 +207,17 @@ private fun splitIntoParagraphs(full: SpannableString): List<SpannableString> {
         start = end + 1
     }
     return result
+}
+
+// FIX: Combine 8 paragraphs into 1 CharSequence, so 1 TextView shows 8 paragraphs.
+// SpannableStringBuilder.append() copies spans, so links still work.
+private fun combineChunk(chunk: List<SpannableString>): CharSequence {
+    val b = SpannableStringBuilder()
+    for ((i, p) in chunk.withIndex()) {
+        b.append(p)
+        if (i < chunk.size - 1) b.append("\n\n")
+    }
+    return b
 }
 
 @Composable
@@ -234,31 +244,20 @@ fun OpenEWContent(
 
     val cacheKey = "$bookName-$chapter"
 
-    LaunchedEffect(cacheKey) {
-        if (bookName.isBlank() || chapter < 1) return@LaunchedEffect
-        kotlinx.coroutines.delay(300)
-        val bookId = BookCatalog.id(bookName)
-        val total = BookCatalog.chapters(bookId)
-        if (chapter < total) onPrefetchChapter(bookName, chapter + 1)
-        if (chapter > 1) onPrefetchChapter(bookName, chapter - 1)
-        if (chapter == total) {
-            val all = BookCatalog.allDisplayNames()
-            val idx = all.indexOfFirst { BookCatalog.canonicalName(it) == BookCatalog.canonicalName(bookName) }
-            if (idx != -1 && idx + 1 < all.size) onPrefetchChapter(all[idx + 1], 1)
-        }
-    }
+    // FIX: DELETED prefetch LaunchedEffect here.
+    // ViewModel.preloadNextCommentary already prefetches next/prev with 500ms delay.
+    // Having this one too = parsing 2 chapters during swipe = lag.
 
     val cachedInstant = remember(cacheKey) { getParsedCached(cacheKey) }
 
-    val paragraphs by produceState<List<SpannableString>?>(initialValue = cachedInstant, cacheKey, commentaryHtml) {
-        // FIX 3: If cached, return instantly, don't go to Default thread
+    // FIX: key = cacheKey ONLY. Don't put huge commentaryHtml string in key.
+    val paragraphs by produceState<List<SpannableString>?>(initialValue = cachedInstant, cacheKey) {
         getParsedCached(cacheKey)?.let { value = it; return@produceState }
         if (commentaryHtml.isBlank()) {
             value = null
             return@produceState
         }
         value = withContext(Dispatchers.Default) {
-            // Double-check inside background - prewarm may have finished it
             getParsedCached(cacheKey) ?: parseHtml(bookName, chapter, commentaryHtml)?.also { putParsedCached(cacheKey, it) }
         }
     }
@@ -274,6 +273,11 @@ fun OpenEWContent(
     val displayParagraphs = paragraphs ?: lastGoodParagraphs ?: emptyList()
     val displayKey = if (paragraphs != null) cacheKey else lastGoodKey
     val displayTitle = if (bookName.isNotBlank()) "$bookName $chapter" else lastGoodKey
+
+    // FIX: Chunk paragraphs so LazyColumn has ~12 items, not ~100
+    val chunked = remember(displayParagraphs, displayKey) {
+        displayParagraphs.chunked(8).map { combineChunk(it) }
+    }
 
     Column(
         modifier = Modifier
@@ -324,8 +328,6 @@ fun OpenEWContent(
                 )
             }
         } else {
-            // FIX 1: key() around LazyColumn = fresh listState per chapter = starts at top
-            // No scrollToItem(0) needed, no blocked swipe
             key(displayKey) {
                 val listState = rememberLazyListState()
                 LazyColumn(
@@ -334,9 +336,10 @@ fun OpenEWContent(
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)
                 ) {
                     itemsIndexed(
-                        items = displayParagraphs,
-                        key = { index, _ -> "$displayKey-$index" }
-                    ) { _, paragraph ->
+                        items = chunked,
+                        key = { index, _ -> "$displayKey-chunk-$index" },
+                        contentType = { "chunk" }
+                    ) { _, chunkText ->
                         AndroidView(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                             factory = { ctx ->
@@ -381,9 +384,9 @@ fun OpenEWContent(
                             update = { textView ->
                                 textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
                                 textView.setTextColor(textColor.toArgb())
-                                if (textView.tag !== paragraph) {
-                                    textView.tag = paragraph
-                                    textView.text = paragraph
+                                if (textView.tag !== chunkText) {
+                                    textView.tag = chunkText
+                                    textView.text = chunkText
                                 }
                             }
                         )
