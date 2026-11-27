@@ -1,475 +1,292 @@
-package com.ewbible.app.ui.viewmodel
+package com.example.bibleapp.viewmodel
 
-import android.content.Context
-import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ewbible.app.data.ai.AiRepository
-import com.ewbible.app.data.database.BibleDao
-import com.ewbible.app.data.database.BookCatalog
-import com.ewbible.app.data.database.ChatEntity
-import com.ewbible.app.data.database.CommentaryHelper
-import com.ewbible.app.data.database.MessageEntity
-import com.ewbible.app.data.sync.CloudMessage
-import com.ewbible.app.data.sync.SyncManager
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
+import com.example.bibleapp.BuildConfig
+import com.example.bibleapp.data.*
+import com.example.bibleapp.network.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
 
-data class ChatState(
-    val chats: List<ChatEntity> = emptyList(),
-    val messages: List<MessageEntity> = emptyList(),
-    val currentChatId: Long? = null,
-    val currentChatType: String = "general",
-    val isLoading: Boolean = false,
-    val streamingText: String = "",
-    val dailyCount: Int = 0,
-    val error: String? = null,
-    val chatsLoaded: Boolean = false
-)
+class ChatViewModel : ViewModel() {
 
-class ChatViewModel(
-    private val bibleDao: BibleDao,
-    private val geminiRepository: AiRepository,
-    private val syncManager: SyncManager? = null
-) : ViewModel() {
-
-    private val VERSE_REGEX = Regex("""((?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+){0,2})\s+(\d+):(\d+)""")
-
-    private val contextCache = object : LinkedHashMap<String, String>(20, 0.75f, true) {
-        override fun removeEldestEntry(e: MutableMap.MutableEntry<String, String>?) = size > 20
-    }
-
-    private val chatTypes = mutableMapOf<Long, String>()
-    private val chatContexts = mutableMapOf<Long, String>()
-
-    private var sendJob: Job? = null
-    private var lastStreamEmit = 0L
-    private var chatsLoading = false
-
+    private val api = RetrofitInstance.api
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+    private var sendJob: Job? = null
 
-    fun refreshModels(context: Context) {
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                geminiRepository.refreshModels(context)
-            }
+    var currentRef: String = ""
+        private set
+
+    var currentChatId: String = ""
+        private set
+
+    private var isNewChat: Boolean = true
+    private var currentChat: Chat? = null
+
+    // Explicit verse typed by user: John 3:16, Romans 8:28, Genesis 1:1 etc.
+    private val VERSE_REGEX = Regex("""\b(?:Genesis|Exodus|Leviticus|Numbers|Deuteronomy|Joshua|Judges|Ruth|1 Samuel|2 Samuel|1 Kings|2 Kings|1 Chronicles|2 Chronicles|Ezra|Nehemiah|Esther|Job|Psalms?|Proverbs|Ecclesiastes|Song of Songs|Isaiah|Jeremiah|Lamentations|Ezekiel|Daniel|Hosea|Joel|Amos|Obadiah|Jonah|Micah|Nahum|Habakkuk|Zephaniah|Haggai|Zechariah|Malachi|Matthew|Mark|Luke|John|Acts|Romans|1 Corinthians|2 Corinthians|Galatians|Ephesians|Philippians|Colossians|1 Thessalonians|2 Thessalonians|1 Timothy|2 Timothy|Titus|Philemon|Hebrews|James|1 Peter|2 Peter|1 John|2 John|3 John|Jude|Revelation)\s+\d+:\d+""", RegexOption.IGNORE_CASE)
+
+    fun loadChats() {
+        val chats = StorageHelper.loadChats()
+        _state.value = _state.value.copy(chats = chats)
+    }
+
+    fun setCurrentRef(ref: String) {
+        currentRef = ref
+    }
+
+    fun startNewChat(
+        currentRef: String = "",
+        title: String = "New Chat",
+        type: String = "general",
+        context: String = ""
+    ) {
+        // Keep currentRef for later use, but DO NOT force type = bible
+        // Type stays general. currentRef is lowest priority fallback,
+        // but still callable when user refers to it.
+        this.currentRef = currentRef
+        val newChat = Chat(
+            id = UUID.randomUUID().toString(),
+            title = title,
+            type = type,
+            context = context
+        )
+        currentChatId = newChat.id
+        currentChat = newChat
+        isNewChat = true
+        val chats = StorageHelper.loadChats().toMutableList()
+        chats.add(0, newChat)
+        StorageHelper.saveChats(chats)
+        _state.value = _state.value.copy(
+            messages = emptyList(),
+            chats = chats,
+            currentChat = newChat,
+            isTyping = false
+        )
+    }
+
+    fun openChat(chat: Chat) {
+        currentChatId = chat.id
+        currentChat = chat
+        isNewChat = false
+        val messages = StorageHelper.loadMessages(chat.id)
+        _state.value = _state.value.copy(messages = messages, currentChat = chat)
+    }
+
+    fun openChatFromHistory(chat: Chat) {
+        currentChatId = chat.id
+        currentChat = chat
+        isNewChat = false
+        val messages = StorageHelper.loadMessages(chat.id)
+        _state.value = _state.value.copy(messages = messages, currentChat = chat)
+    }
+
+    fun clearError() { _errorMessage.value = null }
+
+    fun deleteChat(chatId: String) {
+        StorageHelper.deleteChat(chatId)
+        if (chatId == currentChatId) {
+            currentChatId = ""
+            currentChat = null
+            _state.value = _state.value.copy(messages = emptyList(), currentChat = null)
         }
+        loadChats()
     }
 
-    private suspend fun getGlobalTodayCount(): Int =
-        runCatching {
-            withContext(Dispatchers.IO) { bibleDao.getTodayUserMessageCountGlobal() }
-        }.getOrDefault(0)
-
-    private fun isStillCurrent(chatId: Long): Boolean {
-        return _state.value.currentChatId == chatId
+    fun deleteAllChats() {
+        StorageHelper.deleteAllChats()
+        currentChatId = ""
+        currentChat = null
+        _state.value = _state.value.copy(messages = emptyList(), currentChat = null, chats = emptyList())
     }
 
-    fun loadChats(force: Boolean = false) {
-        if (chatsLoading) return
-        if (_state.value.chatsLoaded && !force) return
-        chatsLoading = true
-        viewModelScope.launch {
-            try {
-                val chats = withContext(Dispatchers.IO) { bibleDao.getAllChatsSync() }
-                _state.update { it.copy(chats = chats, chatsLoaded = true) }
-                val cloud = withContext(Dispatchers.IO) { syncManager?.getChatList()?.getOrNull() } ?: return@launch
-                for (c in cloud) {
-                    val localId = c.chatId.toLongOrNull() ?: continue
-                    chatTypes[localId] = c.type.ifBlank { "general" }
-                    chatContexts[localId] = c.context.ifBlank { c.bibleRef }
-                }
-                _state.value.currentChatId?.let { id ->
-                    _state.update { it.copy(currentChatType = chatTypes[id] ?: it.currentChatType) }
-                }
-            } finally {
-                chatsLoading = false
-            }
-        }
+    fun clearCurrentChat() {
+        currentChatId = ""
+        currentChat = null
+        _state.value = _state.value.copy(messages = emptyList(), currentChat = null)
     }
 
-    fun startNewChat(title: String = "New Chat", type: String = "general", context: String = "", currentRef: String = "") {
+    fun sendMessage(
+        message: String,
+        context: String = "",
+        type: String = "general",
+        imageFile: File? = null
+    ) {
+        if (message.isBlank()) return
         sendJob?.cancel()
-        sendJob = null
-        viewModelScope.launch {
-            val ref = if (type == "bible") context.ifBlank { currentRef } else ""
-            val id = withContext(Dispatchers.IO) {
-                val chat = ChatEntity(title = title, ref = ref)
-                bibleDao.insertChat(chat)
-            }
-            chatTypes[id] = type
-            chatContexts[id] = context.ifBlank { ref }
-            _state.update {
-                it.copy(
-                    currentChatId = id,
-                    currentChatType = type,
-                    messages = emptyList(),
-                    streamingText = "",
-                    isLoading = false,
-                    chats = listOf(ChatEntity(id = id, title = title, ref = ref)) + it.chats
-                )
-            }
-            viewModelScope.launch(Dispatchers.IO) {
-                runCatching {
-                    syncManager?.createChat(
-                        chatId = id.toString(),
-                        title = title,
-                        type = type,
-                        context = context.ifBlank { ref },
-                        bibleRef = if (type == "bible") ref else "",
-                        translation = ""
-                    )
-                }
-            }
-        }
-    }
+        _state.value = _state.value.copy(isTyping = true)
+        val userMsg = ChatMessage(
+            id = UUID.randomUUID().toString(),
+            chatId = currentChatId,
+            text = message,
+            isUser = true,
+            timestamp = System.currentTimeMillis()
+        )
+        val updated = _state.value.messages + userMsg
+        _state.value = _state.value.copy(messages = updated)
+        StorageHelper.saveMessages(currentChatId, updated)
+        if (isNewChat) updateChatTitle(currentChatId, message)
 
-    fun startNewChat(currentRef: String) {
-        val type = if (currentRef.isBlank()) "general" else "bible"
-        startNewChat(title = "New Chat", type = type, context = currentRef, currentRef = currentRef)
-    }
-
-    fun openChat(chatId: Long) {
-        if (_state.value.currentChatId == chatId && _state.value.messages.isNotEmpty()) return
-        if (_state.value.currentChatId != null && _state.value.currentChatId != chatId) {
-            sendJob?.cancel()
-            sendJob = null
-        }
-        viewModelScope.launch {
-            val messages = withContext(Dispatchers.IO) { bibleDao.getMessagesForChatSync(chatId) }
-            val todayCount = getGlobalTodayCount()
-            val local = withContext(Dispatchers.IO) {
-                _state.value.chats.find { it.id == chatId } ?: bibleDao.getChatById(chatId)
-            }
-            val type = chatTypes[chatId]
-                ?: local?.let { if (it.ref.isBlank()) "general" else "bible" }
-                ?: "general"
-            if (messages.isNotEmpty()) {
-                _state.update {
-                    it.copy(
-                        currentChatId = chatId,
-                        currentChatType = type,
-                        messages = messages,
-                        streamingText = "",
-                        isLoading = false,
-                        dailyCount = todayCount
-                    )
-                }
-                return@launch
-            }
-            _state.update {
-                it.copy(
-                    currentChatId = chatId,
-                    currentChatType = type,
-                    messages = emptyList(),
-                    streamingText = "",
-                    isLoading = false,
-                    dailyCount = todayCount
-                )
-            }
-            val cloudMsgs = withContext(Dispatchers.IO) { syncManager?.getMessages(chatId.toString())?.getOrNull() } ?: return@launch
-            if (cloudMsgs.isNotEmpty()) {
-                val restored = withContext(Dispatchers.IO) {
-                    val list = mutableListOf<MessageEntity>()
-                    for (cm in cloudMsgs) {
-                        val m = MessageEntity(chatId = chatId, text = cm.text, isUser = cm.role == "user", timestamp = cm.timestamp)
-                        val newId = bibleDao.insertMessage(m)
-                        list.add(m.copy(id = newId))
-                    }
-                    list
-                }
-                if (isStillCurrent(chatId)) {
-                    _state.update { it.copy(messages = restored) }
-                }
-            }
-        }
-    }
-
-    fun deleteChat(chatId: Long) {
-        if (_state.value.currentChatId == chatId) {
-            sendJob?.cancel()
-            sendJob = null
-        }
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                bibleDao.deleteMessagesForChat(chatId)
-                bibleDao.deleteChat(chatId)
-            }
-            chatTypes.remove(chatId)
-            chatContexts.remove(chatId)
-            _state.update {
-                if (it.currentChatId == chatId) it.copy(
-                    currentChatId = null,
-                    messages = emptyList(),
-                    streamingText = "",
-                    isLoading = false,
-                    chats = it.chats.filterNot { c -> c.id == chatId }
-                )
-                else it.copy(chats = it.chats.filterNot { c -> c.id == chatId })
-            }
-            viewModelScope.launch(Dispatchers.IO) { runCatching { syncManager?.deleteChat(chatId.toString()) } }
-        }
-    }
-
-    fun renameChat(chatId: Long, newTitle: String) {
-        viewModelScope.launch {
-            val chat = withContext(Dispatchers.IO) {
-                _state.value.chats.find { it.id == chatId } ?: bibleDao.getChatById(chatId)
-            } ?: return@launch
-            val updated = chat.copy(title = newTitle)
-            withContext(Dispatchers.IO) { bibleDao.updateChat(updated) }
-            _state.update { it.copy(chats = it.chats.map { c -> if (c.id == chatId) updated else c }) }
-            viewModelScope.launch(Dispatchers.IO) {
-                runCatching {
-                    syncManager?.createChat(
-                        chatId = chatId.toString(),
-                        title = newTitle,
-                        type = chatTypes[chatId] ?: "general",
-                        context = chatContexts[chatId] ?: chat.ref,
-                        bibleRef = if ((chatTypes[chatId] ?: "general") == "bible") chat.ref else "",
-                        translation = ""
-                    )
-                }
-            }
-        }
-    }
-
-    fun send(question: String, currentRef: String, image: Bitmap?, translation: String = "NKJV") {
-        val chatId = _state.value.currentChatId ?: return
-        sendJob?.cancel()
         sendJob = viewModelScope.launch {
-            val todayCount = getGlobalTodayCount()
-            doSend(chatId, question, currentRef, image, translation, todayCount)
-        }
-    }
+            try {
+                val now = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
 
-    fun stopStreaming() {
-        sendJob?.cancel()
-        sendJob = null
-    }
+                // --- PRIORITY LOGIC ---
+                // 1. Explicit verse > 2. News > 3. General with topic > 4. currentRef (lowest, but callable)
+                val bibleContext = getBibleContext(message, context)
+                val newsContext = if (isNewsQuestion(message)) getNewsContext(message) else ""
+                val generalContext = getGeneralContext(message)
 
-    private suspend fun doSend(chatId: Long, question: String, currentRef: String, image: Bitmap?, translation: String, todayCount: Int) {
-        val historySnapshot = _state.value.messages
-        val chatType = _state.value.currentChatType
-        val chatContext = chatContexts[chatId] ?: currentRef
-
-        val userMsg = MessageEntity(chatId = chatId, text = question, isUser = true)
-        val userId = withContext(Dispatchers.IO) { bibleDao.insertMessage(userMsg) }
-        if (isStillCurrent(chatId)) {
-            _state.update {
-                it.copy(messages = it.messages + userMsg.copy(id = userId), isLoading = true, streamingText = "", error = null, dailyCount = todayCount)
-            }
-        }
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                syncManager?.uploadMessage(
-                    chatId.toString(),
-                    CloudMessage(
-                        messageId = userId.toString(),
-                        chatId = chatId.toString(),
-                        role = "user",
-                        type = if (image != null) "image" else "text",
-                        text = question,
-                        context = chatContext,
-                        bibleRef = if (chatType == "bible") chatContext else "",
-                        imageUrl = "",
-                        timestamp = userMsg.timestamp
+                val messagesList = mutableListOf<Message>()
+                messagesList.add(
+                    Message(
+                        "system",
+                        "You are a helpful assistant. Today is $now. " +
+                        "Answer ONLY in the language the user uses. " +
+                        "If newsContext is not empty, answer ONLY from newsContext. " +
+                        "If bibleContext is not empty, answer ONLY from bibleContext as Bible expert. " +
+                        "If both are empty, use generalContext / your own knowledge. " +
+                        "BIBLE CONTEXT: $bibleContext " +
+                        "NEWS CONTEXT: $newsContext " +
+                        "GENERAL CONTEXT: $generalContext"
                     )
                 )
-            }
-        }
+                messagesList.add(Message("user", message))
 
-        val bibleContext = withContext(Dispatchers.IO) {
-            if (chatType == "bible" || chatType == "study" || chatType == "prayer") {
-                buildBibleContext(question, currentRef)
-            } else ""
-        }
-
-        val fullAnswer = StringBuilder(2000)
-        lastStreamEmit = System.currentTimeMillis()
-        try {
-            geminiRepository.askStreaming(
-                question = question,
-                currentRef = currentRef,
-                history = historySnapshot,
-                image = image,
-                bibleContext = bibleContext,
-                translation = translation
-            ).collect { chunk ->
-                fullAnswer.append(chunk)
-                if (!isStillCurrent(chatId)) return@collect
-                val now = System.currentTimeMillis()
-                if (now - lastStreamEmit >= 120) {
-                    lastStreamEmit = now
-                    _state.update { it.copy(streamingText = fullAnswer.toString()) }
-                }
-            }
-            if (isStillCurrent(chatId)) {
-                _state.update { it.copy(streamingText = fullAnswer.toString()) }
-            }
-        } catch (e: CancellationException) {
-            if (fullAnswer.isNotBlank()) {
-                val partialText = cleanMarkdown(fullAnswer.toString())
-                val partialMsg = MessageEntity(chatId = chatId, text = partialText, isUser = false)
-                val partialId = withContext(Dispatchers.IO) { bibleDao.insertMessage(partialMsg) }
-                if (isStillCurrent(chatId)) {
-                    _state.update {
-                        it.copy(
-                            messages = it.messages + partialMsg.copy(id = partialId),
-                            isLoading = false,
-                            streamingText = ""
-                        )
-                    }
-                }
-                viewModelScope.launch(Dispatchers.IO) {
-                    runCatching {
-                        syncManager?.uploadMessage(
-                            chatId.toString(),
-                            CloudMessage(
-                                messageId = partialId.toString(),
-                                chatId = chatId.toString(),
-                                role = "ai",
-                                type = "text",
-                                text = partialText,
-                                context = chatContext,
-                                bibleRef = if (chatType == "bible") chatContext else "",
-                                imageUrl = "",
-                                timestamp = partialMsg.timestamp
-                            )
-                        )
-                    }
-                }
-            } else {
-                if (isStillCurrent(chatId)) {
-                    _state.update { it.copy(isLoading = false, streamingText = "") }
-                }
-            }
-            throw e
-        } catch (e: Exception) {
-            val msg = e.message ?: ""
-            val friendly = if (msg.contains("429") || msg.contains("quota", ignoreCase = true) || msg.contains("Rate limit", ignoreCase = true) || msg.contains("rate limit", ignoreCase = true)) {
-                "Free AI limit reached for today. Please try again tomorrow - it resets at midnight."
-            } else {
-                "Failed: ${e.message}"
-            }
-            if (isStillCurrent(chatId)) {
-                _state.update { it.copy(isLoading = false, streamingText = "", error = friendly) }
-            }
-            return
-        }
-
-        val answerText = cleanMarkdown(fullAnswer.toString()).ifBlank { "Sorry, I couldn't answer that." }
-        val aiMsg = MessageEntity(chatId = chatId, text = answerText, isUser = false)
-        val aiId = withContext(Dispatchers.IO) { bibleDao.insertMessage(aiMsg) }
-        if (isStillCurrent(chatId)) {
-            _state.update {
-                it.copy(
-                    messages = it.messages + aiMsg.copy(id = aiId),
-                    isLoading = false,
-                    streamingText = "",
-                    dailyCount = todayCount + 1
+                val key = "Bearer " + BuildConfig.OPENROUTER_API_KEY
+                val req = ChatRequest(
+                    model = "openai/gpt-4o-mini",
+                    messages = messagesList,
+                    temperature = 0.7
                 )
-            }
-        }
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                syncManager?.uploadMessage(
-                    chatId.toString(),
-                    CloudMessage(
-                        messageId = aiId.toString(),
-                        chatId = chatId.toString(),
-                        role = "ai",
-                        type = "text",
-                        text = answerText,
-                        context = chatContext,
-                        bibleRef = if (chatType == "bible") chatContext else "",
-                        imageUrl = "",
-                        timestamp = aiMsg.timestamp
-                    )
+                val res = api.sendMessage(key, req)
+                val botText = res.choices.firstOrNull()?.message?.content ?: "No response"
+                val botMsg = ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    chatId = currentChatId,
+                    text = botText,
+                    isUser = false,
+                    timestamp = System.currentTimeMillis()
                 )
+                val finalList = _state.value.messages + botMsg
+                _state.value = _state.value.copy(messages = finalList, isTyping = false)
+                StorageHelper.saveMessages(currentChatId, finalList)
+            } catch (e: Exception) {
+                val botMsg = ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    chatId = currentChatId,
+                    text = "Error: ${e.message}",
+                    isUser = false,
+                    timestamp = System.currentTimeMillis()
+                )
+                val finalList = _state.value.messages + botMsg
+                _state.value = _state.value.copy(messages = finalList, isTyping = false)
+                StorageHelper.saveMessages(currentChatId, finalList)
             }
         }
     }
 
-    private suspend fun buildBibleContext(question: String, currentRef: String): String {
+    // --- CORE FIX ---
+    private fun getBibleContext(question: String, context: String): String {
+        // 1. HIGHEST: Explicit verse typed in question -> always wins
+        if (VERSE_REGEX.containsMatchIn(question)) {
+            return buildBibleContext(question, currentRef)
+        }
+        // 2. News wins over currentRef
+        if (isNewsQuestion(question)) return ""
+        // 3. General question with its own topic wins over currentRef
+        if (isGeneralQuestionWithTopic(question)) return ""
+        // 4. LOWEST: currentRef - only if question refers to it
+        // e.g. "explain this", "what does this mean?", "summarize this chapter"
+        // This is the main purpose of the app, so keep it callable
+        if (shouldUseCurrentRef(question)) {
+            return buildBibleContext(question, currentRef)
+        }
+        // 5. If context passed from old Bible chat, use it
+        if (context.isNotBlank()) return context
+        return ""
+    }
+
+    // FIXED: Only true when user actually refers to current passage
+    // Removed generic "this" / "it" / length < 30 - that matched everything
+    private fun shouldUseCurrentRef(question: String): Boolean {
+        if (currentRef.isBlank()) return false
+        val q = question.lowercase().trim()
+        return q.contains("this verse") || q.contains("this chapter") ||
+               q.contains("this passage") || q.contains("this psalm") ||
+               q.contains("this scripture") || q.contains("this book") ||
+               q.contains("explain this") || q.contains("summarize this") ||
+               q.contains("what does this mean") || q.contains("what does it mean") ||
+               q.contains("explain it") || q.contains("meaning of this") ||
+               q == "explain" || q == "explain?" || q == "summarize" ||
+               q == "what does this mean?" || q == "what is this about?"
+    }
+
+    // FIXED: Check shouldUseCurrentRef first, so Bible can still win when referred to
+    private fun isGeneralQuestionWithTopic(question: String): Boolean {
+        val q = question.lowercase()
+        if (shouldUseCurrentRef(question)) return false
+        return q.startsWith("who is") || q.startsWith("what is") ||
+               q.startsWith("tell me about") || q.startsWith("who was") ||
+               q.contains("elon musk") || q.contains("america") ||
+               q.contains("malawi") || q.contains("football")
+    }
+
+    private fun isNewsQuestion(q: String): Boolean {
+        val lower = q.lowercase()
+        return lower.contains("news") || lower.contains("latest") ||
+               lower.contains("breaking") || lower.contains("headline") ||
+               lower.contains("today") || lower.contains("happening")
+    }
+
+    private fun buildBibleContext(question: String, currentRef: String): String {
+        val verseMatch = VERSE_REGEX.find(question)
+        val refToUse = verseMatch?.value ?: currentRef.ifBlank { "" }
+        if (refToUse.isBlank()) return ""
         return try {
-            val match = VERSE_REGEX.find(question)
-            if (match != null) {
-                val bookName = match.groupValues[1].trim()
-                val chapter = match.groupValues[2].toIntOrNull() ?: 1
-                val verse = match.groupValues[3].toIntOrNull() ?: 1
-                val cacheKey = "v:$bookName-$chapter:$verse"
-                contextCache[cacheKey]?.let { return it }
-                val bookId = BookCatalog.id(bookName)
-                val text = bibleDao.getVerse(bookId, chapter, verse)?.text ?: ""
-                val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
-                val result = "USER ASKED ABOUT $bookName $chapter:$verse\nNKJV TEXT: $text\nSUMMARY: $summary\n"
-                contextCache[cacheKey] = result
-                return result
+            val verseText = BibleData.getVerse(refToUse) ?: ""
+            val summary = BibleData.getSummary(refToUse) ?: ""
+            "BIBLE PASSAGE: $refToUse\nVERSE TEXT: $verseText\nSUMMARY: $summary\nUser is reading $refToUse. Explain it in simple, clear language."
+        } catch (e: Exception) { "" }
+    }
+
+    private fun getNewsContext(question: String): String {
+        return try {
+            val query = when {
+                question.contains("malawi", true) -> "Malawi"
+                question.contains("america", true) || question.contains("usa", true) || question.contains("us ", true) -> "United States"
+                question.contains("world", true) -> "world"
+                else -> "world"
             }
-            val cacheKey = "c:$currentRef"
-            contextCache[cacheKey]?.let { return it }
-            val parts = currentRef.trim().split(" ")
-            val chapter = parts.lastOrNull()?.toIntOrNull() ?: 1
-            val bookName = parts.dropLast(1).joinToString(" ")
-            val bookId = BookCatalog.id(bookName)
-            val chapterText = bibleDao.getVerseRange(bookId, chapter, 1, 30)
-                .joinToString("\n") { "${it.verse}. ${it.text}" }
-            val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
-            val compressed = bibleDao.getCommentaryCompressed(bookId, chapter)
-            val commentary = runCatching {
-                compressed?.let { CommentaryHelper.decompress(it) } ?: ""
-            }.getOrDefault("").take(3000)
-            val result = "USER IS READING $bookName $chapter (NKJV):\n$chapterText\n\nSUMMARY: $summary\nCOMMENTARY: $commentary\n"
-            contextCache[cacheKey] = result
-            result
-        } catch (e: Exception) {
-            ""
-        }
+            val res = kotlinx.coroutines.runBlocking { api.getNews(query, BuildConfig.NEWS_API_KEY) }
+            val articles = res.articles.take(5)
+            if (articles.isEmpty()) return ""
+            articles.joinToString("\n") { "- ${it.title}: ${it.description ?: ""}" }
+        } catch (e: Exception) { "" }
     }
 
-    // FIXED: Strip single * completely, keep **bold**, keep 1. / - / • lists
-    // FIXED RAG: Do NOT strip Sources - model needs to show [Title](URL) citations
-    private fun cleanMarkdown(text: String): String {
-        var cleaned = text
-            .replace("**Bold Title:**", "")
-            .replace("**Bold Title**", "")
-            .replace("Bold Title:", "")
-            .replace("Bold Title", "")
-            .replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "")
-            .replace("`", "")
-
-        // 1. Protect **bold** so we don't kill it
-        val bolds = mutableListOf<String>()
-        cleaned = Regex("\\*\\*(.+?)\\*\\*").replace(cleaned) { m ->
-            bolds.add(m.groupValues[1])
-            "\u0000BOLD${bolds.size - 1}\u0000"
-        }
-
-        // 2. Strip ALL leftover single * and _italic_
-        cleaned = cleaned.replace("*", "")
-        cleaned = cleaned.replace(Regex("_(.+?)_"), "$1")
-        cleaned = cleaned.replace("__", "")
-
-        // 3. Restore **bold**
-        bolds.forEachIndexed { i, b ->
-            cleaned = cleaned.replace("\u0000BOLD$i\u0000", "**$b**")
-        }
-
-        return cleaned.lines().joinToString("\n") { line ->
-            line.trimStart()
-        }.trim()
+    private fun getGeneralContext(question: String): String {
+        return "General question: $question"
     }
 
-    fun clearError() {
-        _state.update { it.copy(error = null) }
+    private fun updateChatTitle(chatId: String, firstMessage: String) {
+        val chats = StorageHelper.loadChats().toMutableList()
+        val index = chats.indexOfFirst { it.id == chatId }
+        if (index != -1) {
+            val title = firstMessage.take(40)
+            chats[index] = chats[index].copy(title = title)
+            StorageHelper.saveChats(chats)
+            _state.value = _state.value.copy(chats = chats)
+        }
     }
 }
