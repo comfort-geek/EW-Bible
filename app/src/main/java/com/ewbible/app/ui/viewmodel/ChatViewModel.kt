@@ -4,19 +4,18 @@ import android.content.Context
 import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.ewbible.app.data.ai.AiRepository
 import com.ewbible.app.data.database.BibleDao
 import com.ewbible.app.data.database.BookCatalog
 import com.ewbible.app.data.database.ChatEntity
 import com.ewbible.app.data.database.CommentaryHelper
 import com.ewbible.app.data.database.MessageEntity
-import com.ewbible.app.data.repository.AiRepository
-import dagger.hilt.android.lifecycle.HiltViewModel
+import com.ewbible.app.data.sync.SyncManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import javax.inject.Inject
 
 data class ChatMessage(
     val id: String = System.currentTimeMillis().toString() + "_" + (0..99999).random(),
@@ -34,26 +33,24 @@ data class ChatState(
     val isLoading: Boolean = false,
     val streamingText: String = "",
     val currentBibleRef: String = "",
-    val currentTranslation: String = "NKJV", // AI chat only, NOT Bible tab, NOT in DB
+    val currentTranslation: String = "NKJV",
     val availableModels: List<String> = emptyList()
 )
 
-@HiltViewModel
-class ChatViewModel @Inject constructor(
-    private val bibleDao: BibleDao, // ONLY DAO - Bible + Chat are both here
-    private val aiRepository: AiRepository
+// FIXED: No @HiltViewModel - you create this via ChatViewModelFactory manually
+// Params MUST match ChatViewModelFactory: bibleDao, geminiRepository, syncManager
+class ChatViewModel(
+    private val bibleDao: BibleDao,
+    private val geminiRepository: AiRepository,
+    private val syncManager: SyncManager? = null
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
-    // Bible tab: NKJV only. Only gives ref, e.g. "Matthew 26"
     private var bibleRef: String = ""
-    // AiChatScreen: gives translation for AI, e.g. "NIV" - memory only, NOT in ChatEntity
     private var chatTranslation: String = "NKJV"
 
-    // Called from Bible tab / parent when book/chapter changes
-    // Bible tab has ONLY NKJV, so we do NOT touch translation here
     fun setBibleRef(ref: String) {
         val cleanRef = ref.trim()
         if (cleanRef == bibleRef) return
@@ -62,8 +59,6 @@ class ChatViewModel @Inject constructor(
         saveRefToCurrentChat(cleanRef)
     }
 
-    // Called ONLY from AiChatScreen translation picker
-    // NOT saved to DB - ChatEntity has no translation column
     fun setChatTranslation(translation: String) {
         val clean = translation.ifBlank { "NKJV" }.uppercase()
         if (clean == chatTranslation) return
@@ -81,7 +76,6 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching {
                 val existing = bibleDao.getChatById(chatId) ?: return@launch
-                // ChatEntity: id, title, ref, createdAt - NO translation
                 bibleDao.updateChat(existing.copy(ref = ref))
             }
         }
@@ -89,7 +83,7 @@ class ChatViewModel @Inject constructor(
 
     fun refreshModels(context: Context) {
         viewModelScope.launch {
-            val models = runCatching { aiRepository.getAvailableModels(context) }.getOrDefault(emptyList())
+            val models = runCatching { geminiRepository.getAvailableModels(context) }.getOrDefault(emptyList())
             _state.update { it.copy(availableModels = models) }
         }
     }
@@ -114,7 +108,6 @@ class ChatViewModel @Inject constructor(
                         title = if (cleanRef.isNotBlank()) cleanRef else "New Chat",
                         ref = cleanRef,
                         createdAt = System.currentTimeMillis()
-                        // NO translation - ChatEntity has no such field
                     )
                 )
             }.getOrDefault(System.currentTimeMillis())
@@ -133,7 +126,6 @@ class ChatViewModel @Inject constructor(
             val entity = runCatching { bibleDao.getChatById(chatId) }.getOrNull() ?: return@launch
             val msgs = runCatching { bibleDao.getMessagesForChatSync(chatId) }.getOrDefault(emptyList())
             bibleRef = entity.ref
-            // entity.translation DOES NOT EXIST - translation resets to NKJV, user picks again in AiChatScreen
             chatTranslation = "NKJV"
             _state.update {
                 it.copy(
@@ -160,7 +152,6 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    // FIXED: Never drops question. If no chat exists, creates it IN THE SAME coroutine, then sends.
     fun send(question: String, ref: String, image: Bitmap?, translation: String) {
         val q = question.trim()
         if (q.isBlank()) return
@@ -170,7 +161,6 @@ class ChatViewModel @Inject constructor(
         setChatTranslation(useTranslation)
 
         viewModelScope.launch {
-            // 1. Ensure chat exists - create here if needed, do NOT return
             var chatId = _state.value.currentChatId
             if (chatId == null) {
                 chatId = runCatching {
@@ -197,7 +187,6 @@ class ChatViewModel @Inject constructor(
             }
             val finalChatId = chatId ?: return@launch
 
-            // 2. Show user message immediately
             val userMsg = ChatMessage(text = q, isUser = true)
             _state.update { it.copy(messages = it.messages + userMsg, isLoading = true, streamingText = "") }
 
@@ -207,7 +196,6 @@ class ChatViewModel @Inject constructor(
                 )
             }
 
-            // 3. Build Bible context only if needed
             val type = detectType(q, useRef)
             val bibleContext = if (type == ChatType.BIBLE || type == ChatType.BIBLE_WITH_REF) {
                 buildBibleContext(useRef, q, useTranslation)
@@ -219,10 +207,9 @@ class ChatViewModel @Inject constructor(
                 append("USER QUESTION: ").append(q)
             }
 
-            // 4. Stream AI answer
             var aiText = ""
             try {
-                aiRepository.sendStream(
+                geminiRepository.sendStream(
                     systemPrompt = systemPrompt,
                     prompt = fullPrompt,
                     image = image,
@@ -292,20 +279,17 @@ class ChatViewModel @Inject constructor(
         val (bookId, bookName, chapter, verseFrom, verseTo) = parsed
 
         return runCatching {
-            // BibleDao.getVerseRange(bookId, chapter, startVerse, endVerse)
             val verses = if (verseFrom != null) {
                 bibleDao.getVerseRange(bookId, chapter, verseFrom, verseTo ?: verseFrom)
             } else {
                 bibleDao.getVerseRange(bookId, chapter, 1, 200)
             }.joinToString("\n") { "${it.verse}: ${it.text}" }
 
-            // BibleDao.getSummary(bookId, chapter) -> SummaryEntity? - fields NOT nullable
             val summary = runCatching { bibleDao.getSummary(bookId, chapter) }.getOrNull()
             val summaryText = if (summary != null) {
                 "Summary: ${summary.summary}\nWhat happened: ${summary.whatHappened}\nApplication: ${summary.application}"
             } else ""
 
-            // BibleDao.getCommentaryCompressed(bookId, chapter) -> ByteArray?
             val compressed = runCatching { bibleDao.getCommentaryCompressed(bookId, chapter) }.getOrNull()
             val commentaryHtml = if (compressed != null) {
                 CommentaryHelper.getHtmlCommentary(bookId, chapter, compressed)
@@ -359,7 +343,6 @@ class ChatViewModel @Inject constructor(
         val chapter = m.groups[3]?.value?.toIntOrNull() ?: return null
         val verseFrom = m.groups[4]?.value?.toIntOrNull()
         val verseTo = m.groups[5]?.value?.toIntOrNull()
-        // Same as BibleContent / HomeViewModel: BookCatalog.id(String)
         val bookId = BookCatalog.id(nameRaw)
         return ParsedRef(bookId, BookCatalog.name(bookId), chapter, verseFrom, verseTo)
     }
