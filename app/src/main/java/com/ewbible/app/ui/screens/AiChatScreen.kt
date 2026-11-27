@@ -45,20 +45,22 @@ private fun cleanSourceNumbering(text: String): String {
 
 private fun cleanMarkdownForDisplay(text: String): String {
     var t = cleanSourceNumbering(text)
-    t = t.replace(Regex("(?m)^#{1,6}\\s*"), "")
+    // Keep headings - just make them bold, don't delete them. Don't force any heading.
+    t = t.replace(Regex("(?m)^#{1,6}\\s*(.+)$"), "**$1**")
     t = t.replace("```", "")
     t = t.replace(Regex("(?m)^---\\s*$"), "")
+    // Fix odd bold
     val boldCount = Regex("\\*\\*").findAll(t).count()
     if (boldCount % 2 == 1) {
         val last = t.lastIndexOf("**")
         if (last >= 0) t = t.removeRange(last, last + 2)
     }
+    // Preserve bolds, don't delete single * (bullets) - show as AI wrote them
     val bolds = mutableListOf<String>()
     t = Regex("\\*\\*(.+?)\\*\\*").replace(t) { match ->
         bolds.add(match.groupValues[1])
         "\u0000BOLD${bolds.size - 1}\u0000"
     }
-    t = t.replace("*", "")
     t = t.replace(Regex("_(.+?)_"), "$1")
     t = t.replace("`", "")
     bolds.forEachIndexed { index, bold ->
@@ -97,7 +99,8 @@ private fun splitSources(text: String): Pair<String, List<SourceItem>> {
         val shortTitle = if (cleanTitle.length > 65) cleanTitle.take(62) + "..." else cleanTitle
         sources.add(SourceItem(shortTitle, url))
     }
-    return main to sources.distinctBy { it.url }.take(3)
+    // Dedupe by DOMAIN, not full URL - so aljazeera.com shows once even with 2 different links
+    return main to sources.distinctBy { domainOf(it.url) }.take(3)
 }
 
 private fun domainOf(url: String): String {
@@ -170,7 +173,7 @@ private fun LinkText(
     }
     ClickableText(
         text = annotated,
-        style = LocalTextStyle.current.copy(color = color, fontSize = 15.sp),
+        style = LocalTextStyle.current.copy(color = color, fontSize = 15.sp, lineHeight = 22.sp),
         modifier = modifier,
         onClick = { offset ->
             annotated.getStringAnnotations("URL", offset, offset)
