@@ -319,7 +319,7 @@ fun AiChatScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     // Display only - shows what passage you came from, does NOT force Bible mode
                     if (currentRef.isNotBlank()) {
-                        Text("Reading: $currentRef", color = gold, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(currentRef, color = gold, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     // FIX: New chat keeps currentRef as fallback, not ""
                     IconButton(onClick = { viewModel.startNewChat(latestRef) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
