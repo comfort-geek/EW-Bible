@@ -47,7 +47,6 @@ private fun cleanSourceNumbering(text: String): String {
 
 private fun cleanMarkdownForDisplay(text: String): String {
     var t = cleanSourceNumbering(text)
-    // FIX: remove > quote symbol
     t = t.replace(Regex("(?m)^\\s*>\\s*"), "")
     t = t.replace(">", "")
     t = t.replace("|", "")
@@ -82,21 +81,17 @@ private fun cleanForCopy(text: String): String {
         .replace("*", "")
 }
 
-// --- SOURCES: domain only ---
 private data class SourceItem(val title: String, val url: String)
 
 private fun splitSources(text: String): Pair<String, List<SourceItem>> {
     val regexHeading = Regex("(?m)^\\s*(?:#{1,6}\\s*)?\\*\\*Sources\\*\\*\\s*:?\\s*$|^\\s*Sources\\s*:?\\s*$")
     val match = regexHeading.find(text) ?: return text to emptyList()
-
     val main = text.substring(0, match.range.first).trim()
     val raw = text.substring(match.range.last + 1).trim()
-
     val sources = mutableListOf<SourceItem>()
     val regex = Regex("""\[([^\]]+)\]\((https?://[^)]+)\)|(https?://[^\s)]+)""")
     regex.findAll(raw).forEach { m ->
         val url = m.groups[2]?.value ?: m.groups[3]?.value ?: return@forEach
-        // FIX: title = domain only, no duplicate second line
         val domain = domainOf(url)
         sources.add(SourceItem(domain, url))
     }
@@ -131,22 +126,12 @@ private fun LinkText(
                 val rawUrl = match.groups[4]?.value
                 when {
                     boldText != null -> {
-                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                            append(boldText)
-                        }
+                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(boldText) }
                     }
                     linkTitle != null && linkUrl != null -> {
                         val start = length
                         append(linkTitle)
-                        addStyle(
-                            style = SpanStyle(
-                                color = Color(0xFF1A73E8),
-                                textDecoration = TextDecoration.Underline,
-                                fontWeight = FontWeight.Bold
-                            ),
-                            start = start,
-                            end = length
-                        )
+                        addStyle(style = SpanStyle(color = Color(0xFF1A73E8), textDecoration = TextDecoration.Underline, fontWeight = FontWeight.Bold), start = start, end = length)
                         addStringAnnotation("URL", linkUrl, start, length)
                     }
                     rawUrl != null -> {
@@ -156,19 +141,13 @@ private fun LinkText(
                         }
                         val start = length
                         append(url)
-                        addStyle(
-                            style = SpanStyle(color = Color(0xFF1A73E8), textDecoration = TextDecoration.Underline),
-                            start = start,
-                            end = length
-                        )
+                        addStyle(style = SpanStyle(color = Color(0xFF1A73E8), textDecoration = TextDecoration.Underline), start = start, end = length)
                         addStringAnnotation("URL", url, start, length)
                     }
                 }
                 lastIndex = match.range.last + 1
             }
-            if (lastIndex < cleanText.length) {
-                append(cleanText.substring(lastIndex))
-            }
+            if (lastIndex < cleanText.length) append(cleanText.substring(lastIndex))
         }
     }
     ClickableText(
@@ -176,8 +155,7 @@ private fun LinkText(
         style = LocalTextStyle.current.copy(color = color, fontSize = 15.sp, lineHeight = 22.sp),
         modifier = modifier,
         onClick = { offset ->
-            annotated.getStringAnnotations("URL", offset, offset)
-                .firstOrNull()?.let { uriHandler.openUri(it.item) }
+            annotated.getStringAnnotations("URL", offset, offset).firstOrNull()?.let { uriHandler.openUri(it.item) }
         }
     )
 }
@@ -194,11 +172,9 @@ private fun MessageBubble(
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
     val cleanTextForCopy = remember(text) { cleanForCopy(text) }
-
     val (mainText, sources) = remember(text, isUser) {
         if (isUser) text to emptyList() else splitSources(text)
     }
-
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
@@ -210,35 +186,17 @@ private fun MessageBubble(
                 .padding(12.dp)
         ) {
             Column {
-                LinkText(
-                    text = mainText,
-                    color = if (isUser) Color.White else textColor,
-                    modifier = Modifier.fillMaxWidth(),
-                    isUser = isUser
-                )
-
+                LinkText(text = mainText, color = if (isUser) Color.White else textColor, modifier = Modifier.fillMaxWidth(), isUser = isUser)
                 if (sources.isNotEmpty()) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
-                        color = Color(0xFFE0E0E0)
-                    )
-                    Text(
-                        text = "Sources",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Gray
-                    )
-                    // FIX: domain only, plaintext open, no bullet, no second line, no icon
+                    HorizontalDivider(modifier = Modifier.padding(top = 12.dp, bottom = 8.dp), color = Color(0xFFE0E0E0))
+                    Text(text = "Sources", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
                     sources.forEach { s ->
                         Text(
                             text = s.title,
                             fontSize = 13.sp,
                             color = Color(0xFF1A73E8),
                             textDecoration = TextDecoration.Underline,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { uriHandler.openUri(s.url) }
-                                .padding(vertical = 5.dp)
+                            modifier = Modifier.fillMaxWidth().clickable { uriHandler.openUri(s.url) }.padding(vertical = 5.dp)
                         )
                     }
                 }
@@ -252,12 +210,7 @@ private fun MessageBubble(
                 },
                 modifier = Modifier.size(32.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.ContentCopy,
-                    contentDescription = "Copy",
-                    tint = Color.Gray,
-                    modifier = Modifier.size(16.dp)
-                )
+                Icon(imageVector = Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.Gray, modifier = Modifier.size(16.dp))
             }
         }
     }
@@ -283,6 +236,10 @@ fun AiChatScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+
+    // FIX: Keep latest currentRef for send - if Bible home changes ref while AI is open,
+    // we still send the newest one, not a stale "".
+    val latestRef by rememberUpdatedState(currentRef)
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
@@ -310,8 +267,9 @@ fun AiChatScreen(
         if (state.chats.isNotEmpty()) {
             viewModel.openChat(state.chats.first().id)
         } else {
-            // FIX: AI is separate - do NOT create new chat with Bible home ref
-            viewModel.startNewChat("")
+            // FIX: Pass currentRef as LOW priority context, NOT as forced Bible type.
+            // Repository decides: explicit verse > news > general > currentRef (only if referred to)
+            viewModel.startNewChat(currentRef)
         }
     }
 
@@ -331,22 +289,12 @@ fun AiChatScreen(
     val thinkingText = "Thinking..."
 
     if (showHistory) {
-        ModalBottomSheet(
-            onDismissRequest = { showHistory = false }
-        ) {
+        ModalBottomSheet(onDismissRequest = { showHistory = false }) {
             Text("Chat History", fontWeight = FontWeight.Bold, modifier = Modifier.padding(16.dp))
-            LazyColumn(
-                modifier = Modifier.fillMaxHeight(0.6f),
-                contentPadding = PaddingValues(bottom = 16.dp)
-            ) {
+            LazyColumn(modifier = Modifier.fillMaxHeight(0.6f), contentPadding = PaddingValues(bottom = 16.dp)) {
                 items(state.chats, key = { it.id }) { chat ->
                     Row(
-                        modifier = Modifier.fillMaxWidth()
-                            .clickable {
-                                viewModel.openChat(chat.id)
-                                showHistory = false
-                            }
-                            .padding(12.dp),
+                        modifier = Modifier.fillMaxWidth().clickable { viewModel.openChat(chat.id); showHistory = false }.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
@@ -363,74 +311,34 @@ fun AiChatScreen(
     Scaffold(
         containerColor = background,
         topBar = {
-            Column(
-                modifier = Modifier
-                    .background(background)
-                    .statusBarsPadding()
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+            Column(modifier = Modifier.background(background).statusBarsPadding()) {
+                Row(modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onClose, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Close, null, tint = textColor) }
                     IconButton(onClick = { showHistory = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.History, null, tint = textColor) }
-                    Text(
-                        titleText,
-                        color = textColor,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
+                    Text(titleText, color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        currentRef,
-                        color = gold,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    // FIX: New chat must NOT use Bible home ref
-                    IconButton(onClick = { viewModel.startNewChat("") }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
+                    // Display only - shows what passage you came from, does NOT force Bible mode
+                    if (currentRef.isNotBlank()) {
+                        Text("Reading: $currentRef", color = gold, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    // FIX: New chat keeps currentRef as fallback, not ""
+                    IconButton(onClick = { viewModel.startNewChat(latestRef) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
                 }
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     translations.forEach { t ->
                         val isSelected = selectedTranslation == t
                         Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(32.dp)
-                                .background(if (isSelected) gold else panel, shape = RoundedCornerShape(16.dp))
-                                .clickable { selectedTranslation = t }
-                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f).height(32.dp).background(if (isSelected) gold else panel, shape = RoundedCornerShape(16.dp)).clickable { selectedTranslation = t }.padding(horizontal = 4.dp, vertical = 6.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                t,
-                                color = if (isSelected) Color.White else textColor,
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                maxLines = 1
-                            )
+                            Text(t, color = if (isSelected) Color.White else textColor, fontSize = 12.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
                         }
                     }
                 }
             }
         }
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .background(background)
-                .imePadding()
-        ) {
+        Column(modifier = Modifier.fillMaxSize().padding(innerPadding).background(background).imePadding()) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
@@ -443,23 +351,11 @@ fun AiChatScreen(
                 if (state.isLoading) {
                     item(key = "loading-${state.currentChatId}", contentType = "loading") {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                            Box(
-                                modifier = Modifier.fillMaxWidth(0.95f)
-                                    .background(panel, RoundedCornerShape(12.dp))
-                                    .padding(10.dp)
-                            ) {
+                            Box(modifier = Modifier.fillMaxWidth(0.95f).background(panel, RoundedCornerShape(12.dp)).padding(10.dp)) {
                                 if (state.streamingText.isNotEmpty()) {
-                                    LinkText(
-                                        text = state.streamingText,
-                                        color = textColor,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
+                                    LinkText(text = state.streamingText, color = textColor, modifier = Modifier.fillMaxWidth())
                                 } else {
-                                    Text(
-                                        text = thinkingText,
-                                        color = textColor,
-                                        fontSize = 15.sp
-                                    )
+                                    Text(text = thinkingText, color = textColor, fontSize = 15.sp)
                                 }
                             }
                         }
@@ -467,37 +363,21 @@ fun AiChatScreen(
                 }
             }
             if (selectedImage != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().background(background).padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(modifier = Modifier.fillMaxWidth().background(background).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Image attached ✓", color = gold, fontSize = 13.sp, modifier = Modifier.weight(1f))
                     TextButton(onClick = { selectedImage = null }) { Text("Remove") }
                 }
             }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(background)
-                    .navigationBarsPadding()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(modifier = Modifier.fillMaxWidth().background(background).navigationBarsPadding().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { picker.launch("image/*") }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Image, null, tint = gold) }
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    placeholder = { Text(if (state.isLoading) "Type next question..." else "Ask anything...", maxLines = 1) },
-                    modifier = Modifier.weight(1f),
-                    maxLines = 4,
-                    enabled = true
-                )
+                OutlinedTextField(value = input, onValueChange = { input = it }, placeholder = { Text(if (state.isLoading) "Type next question..." else "Ask anything...", maxLines = 1) }, modifier = Modifier.weight(1f), maxLines = 4, enabled = true)
                 IconButton(
                     onClick = {
                         val q = input.trim()
                         if (q.isBlank()) return@IconButton
-                        // FIX: AI is separate - send "" not Bible home currentRef
-                        viewModel.send(q, "", selectedImage, selectedTranslation)
+                        // FIX: Pass currentRef - Repository will ignore it for news/general,
+                        // use it only for "explain this / what does this mean" etc.
+                        viewModel.send(q, latestRef, selectedImage, selectedTranslation)
                         input = ""
                         selectedImage = null
                     },
