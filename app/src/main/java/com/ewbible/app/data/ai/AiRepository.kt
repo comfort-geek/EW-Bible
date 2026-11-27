@@ -316,91 +316,111 @@ class AiRepository {
     private suspend fun getWebContext(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): String {
         if (!needsWebSearch(question, currentRef, history)) return ""
         val key = question.trim().lowercase()
-        if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) return cachedWeb
+        if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) {
+            Log.d("EW_SEARCH", "CACHE HIT query=$question")
+            return cachedWeb
+        }
         val lastUser = history.lastOrNull { it.isUser }?.text ?: ""
-        val searchContext = ""
-        return withTimeoutOrNull(SEARCH_TIMEOUT_MS) { searchWorker(question, searchContext, lastUser) } ?: ""
+        val searchContext = if (lastUser.isNotBlank() && lastUser.lowercase() != key) lastUser else ""
+        val result = withTimeoutOrNull(SEARCH_TIMEOUT_MS) { searchWorker(question, searchContext, lastUser) } ?: ""
+        if (result.isBlank()) Log.d("EW_SEARCH", "EMPTY result query=$question")
+        return result
     }
 
     private suspend fun searchWorker(query: String, context: String = "", lastQuestion: String = ""): String {
-        return try {
-            var conn: HttpURLConnection? = null
-            try {
-                val searchUrl = URL(PROXY_BASE + "search")
-                conn = (searchUrl.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    setRequestProperty("Content-Type", "application/json")
-                    setRequestProperty("Accept", "application/json, text/plain, */*")
-                    setRequestProperty("Accept-Language", "en-US,en;q=0.9")
-                    setRequestProperty("Accept-Encoding", "gzip, deflate, br")
-                    setRequestProperty("Origin", "https://ewbible.comfortcha34.workers.dev")
-                    setRequestProperty("Referer", "https://ewbible.comfortcha34.workers.dev/")
-                    setRequestProperty("Sec-Fetch-Dest", "empty")
-                    setRequestProperty("Sec-Fetch-Mode", "cors")
-                    setRequestProperty("Sec-Fetch-Site", "same-origin")
-                    setRequestProperty("Sec-Ch-Ua", "\"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\", \"Not-A.Brand\";v=\"99\"")
-                    setRequestProperty("Sec-Ch-Ua-Mobile", "?1")
-                    setRequestProperty("Sec-Ch-Ua-Platform", "\"Android\"")
-                    setRequestProperty(PROXY_HEADER, PROXY_VALUE)
-                    setRequestProperty("User-Agent", USER_AGENT)
-                    connectTimeout = 2500
-                    readTimeout = SEARCH_TIMEOUT_MS.toInt()
-                    doOutput = true
-                    instanceFollowRedirects = true
-                    useCaches = false
-                }
-                val body = JSONObject()
-                    .put("query", query)
-                    .put("context", context)
-                    .put("last_question", lastQuestion)
-                    .put("search_depth", chooseSearchDepth(query))
-                    .put("let_rag_choose_depth", true)
-                    .put("depth", "auto")
-                    .put("default_depth", "basic")
-                    .toString()
-                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                if (conn.responseCode !in 200..299) return ""
-                val text = conn.inputStream.bufferedReader().readText()
-                val json = JSONObject(text)
-                val depthPicked = json.optString("search_depth", "").ifBlank { json.optString("depth", "basic") }.ifBlank { "basic" }.lowercase()
-                val providerUsed = json.optString("provider", "").ifBlank { json.optString("search_provider", "unknown") }.ifBlank { "unknown" }.lowercase()
-                val safeDepth = if (depthPicked == "advanced") "advanced" else "basic"
-                val headerLine = "[SEARCH: depth=$safeDepth | provider=$providerUsed]"
-                Log.d("EW_SEARCH", "$headerLine query=$query")
-                val rag = json.optString("rag_context")
-                if (rag.isNotBlank()) {
-                    val out = "$headerLine\n${rag.take(2000)}"
-                    cachedQuery = query.trim().lowercase()
-                    cachedWeb = out
-                    cachedAt = System.currentTimeMillis()
-                    return out
-                }
-                val sb = StringBuilder()
-                sb.append("$headerLine\n")
-                val answer = json.optString("answer")
-                if (answer.isNotBlank()) sb.append("TAVILY ANSWER: $answer\n\n")
-                val results = json.optJSONArray("results")
-                if (results != null) {
-                    for (i in 0 until minOf(results.length(), 2)) {
-                        val r = results.getJSONObject(i)
-                        sb.append("SOURCE:\n")
-                        sb.append("Title: ${r.optString("title")}\n")
-                        sb.append("URL: ${r.optString("url")}\n")
-                        sb.append("Content: ${r.optString("content").take(300)}\n")
-                        sb.append("Published: ${r.optString("published_date")}\n\n")
-                    }
-                }
-                val out = sb.toString().take(2000)
-                if (out.isNotBlank() && out != "$headerLine\n") {
-                    cachedQuery = query.trim().lowercase()
-                    cachedWeb = out
-                    cachedAt = System.currentTimeMillis()
-                }
-                out
-            } finally {
-                runCatching { conn?.disconnect() }
+        var conn: HttpURLConnection? = null
+        try {
+            val searchUrl = URL(PROXY_BASE + "search")
+            conn = (searchUrl.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                // BROWSER HEADERS - proven in Pydroid, STATUS 200
+                // DO NOT add Accept-Encoding - it returns gzip/br garbage
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json, text/plain, */*")
+                setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+                setRequestProperty("Origin", "https://ewbible.comfortcha34.workers.dev")
+                setRequestProperty("Referer", "https://ewbible.comfortcha34.workers.dev/")
+                setRequestProperty("Sec-Fetch-Dest", "empty")
+                setRequestProperty("Sec-Fetch-Mode", "cors")
+                setRequestProperty("Sec-Fetch-Site", "same-origin")
+                setRequestProperty("Sec-Ch-Ua", "\"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\", \"Not-A.Brand\";v=\"99\"")
+                setRequestProperty("Sec-Ch-Ua-Mobile", "?1")
+                setRequestProperty("Sec-Ch-Ua-Platform", "\"Android\"")
+                setRequestProperty(PROXY_HEADER, PROXY_VALUE)
+                setRequestProperty("User-Agent", USER_AGENT)
+                connectTimeout = 2500
+                readTimeout = SEARCH_TIMEOUT_MS.toInt()
+                doOutput = true
+                instanceFollowRedirects = true
+                useCaches = false
             }
-        } catch (_: Exception) { "" }
+            val body = JSONObject()
+                .put("query", query)
+                .put("context", context)
+                .put("last_question", lastQuestion)
+                .put("search_depth", chooseSearchDepth(query))
+                .put("let_rag_choose_depth", true)
+                .put("depth", "auto")
+                .put("default_depth", "basic")
+                .toString()
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val err = try { conn.errorStream?.bufferedReader()?.readText() ?: "" } catch (_: Exception) { "" }
+                Log.d("EW_SEARCH", "Worker FAILED code=$code query=$query err=${err.take(300)}")
+                return ""
+            }
+            val text = conn.inputStream.bufferedReader().readText()
+            if (text.isBlank()) return ""
+            val json = JSONObject(text)
+            val depthPicked = json.optString("search_depth", "").ifBlank { json.optString("depth", "basic") }.ifBlank { "basic" }.lowercase()
+            val providerUsed = json.optString("provider", "").ifBlank { json.optString("search_provider", "unknown") }.ifBlank { "unknown" }.lowercase()
+            val safeDepth = if (depthPicked == "advanced") "advanced" else "basic"
+            val headerLine = "[SEARCH: depth=$safeDepth | provider=$providerUsed]"
+            Log.d("EW_SEARCH", "$headerLine query=$query len=${text.length}")
+            // Worker returns rag_context like in Pydroid test: "Use the following... [1] Title: ... URL: ..."
+            val rag = json.optString("rag_context")
+            if (rag.isNotBlank()) {
+                val out = "$headerLine\n${rag.take(3500)}"
+                cachedQuery = query.trim().lowercase()
+                cachedWeb = out
+                cachedAt = System.currentTimeMillis()
+                return out
+            }
+            // Fallback: only results[] without rag_context
+            val sb = StringBuilder()
+            sb.append("$headerLine\n")
+            val answer = json.optString("answer")
+            if (answer.isNotBlank()) sb.append("TAVILY ANSWER: $answer\n\n")
+            val results = json.optJSONArray("results")
+            if (results != null) {
+                for (i in 0 until minOf(results.length(), 5)) {
+                    val r = results.getJSONObject(i)
+                    val title = r.optString("title")
+                    val url = r.optString("url")
+                    val content = r.optString("content")
+                    val published = r.optString("published_date")
+                    if (title.isBlank() && url.isBlank()) continue
+                    sb.append("SOURCE:\n")
+                    sb.append("Title: $title\n")
+                    sb.append("URL: $url\n")
+                    sb.append("Content: ${content.take(500)}\n")
+                    sb.append("Published: $published\n\n")
+                }
+            }
+            val out = sb.toString().take(3500)
+            if (out.isNotBlank() && out != "$headerLine\n") {
+                cachedQuery = query.trim().lowercase()
+                cachedWeb = out
+                cachedAt = System.currentTimeMillis()
+            }
+            return out
+        } catch (e: Exception) {
+            Log.d("EW_SEARCH", "searchWorker exception query=$query err=${e.message}")
+            return ""
+        } finally {
+            runCatching { conn?.disconnect() }
+        }
     }
 
     fun askStreaming(
@@ -581,7 +601,7 @@ class AiRepository {
         sb.append("\n")
         if (bibleContext.isNotBlank() && (context == ContextType.BIBLE || context == ContextType.BREAKDOWN)) sb.append("BIBLE CONTEXT:\n${bibleContext.take(4000)}\n\n")
         if (webContext.isNotBlank()) {
-            sb.append("WEB SEARCH RESULTS (true facts as of $today):\n${webContext.take(2000)}\n\n")
+            sb.append("WEB SEARCH RESULTS (true facts as of $today):\n${webContext.take(3500)}\n\n")
         } else if (context == ContextType.NEWS) {
             sb.append("No web results were available. Do not guess. Say you don't have verified info.\n\n")
         }
