@@ -152,22 +152,13 @@ fun HomeScreen(
     val isCommentaryForCurrent = state.commentaryBookId == state.currentBookId &&
         state.commentaryChapter == state.selectedChapter
     val effectiveCommentaryHtml = if (isCommentaryForCurrent) state.commentaryHtml else ""
-    val isCommentaryLoading = false
+    // FIX: was hardcoded false, so loading UI never showed
+    val isCommentaryLoading = state.selectedTab == "Open EW" && !isCommentaryForCurrent
 
-    // FIXED: ViewModel already loads summary + commentary on bookChapterKey change.
-    // Don't call loadSummary / loadCommentary here again - that cancels the first job.
-    // HomeScreen only prefetches neighbours here.
-    LaunchedEffect(state.currentBookId, state.selectedChapter) {
-        val max = BookCatalog.chapters(state.currentBookId)
-        if (state.selectedChapter < max) {
-            viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter + 1)
-        } else if (state.currentBookId < 66) {
-            viewModel.prefetchCommentary(state.currentBookId + 1, 1)
-        }
-        if (state.selectedChapter > 1) {
-            viewModel.prefetchCommentary(state.currentBookId, state.selectedChapter - 1)
-        }
-    }
+    // FIX: DELETED the LaunchedEffect that called prefetchCommentary on every chapter change.
+    // That ran even on Bible tab and undid ViewModel tab-gating.
+    // ViewModel.preloadNextCommentary already prefetches next/prev with 500ms delay + tab check.
+    // OpenEWContent also prefetches. No need for a 3rd prefetch here.
 
     LaunchedEffect(state.isReadingRestored, savedScrollIndex, savedScrollOffset) {
         if (state.isReadingRestored) initialLoadDone = true
