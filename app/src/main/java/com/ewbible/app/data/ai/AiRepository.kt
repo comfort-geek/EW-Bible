@@ -42,11 +42,11 @@ class AiRepository {
     private var remoteVersion = 3
 
     // --- AI MODELS MEMORY ---
-    // Remembers last working model per provider so next chat starts with the one that worked.
     private var lastWorkingGemini: String? = null
     private var lastWorkingGroq: String? = null
     private var lastWorkingCloudflare: String? = null
     private var lastWorkingLoaded = false
+    private var appContext: Context? = null
 
     private fun orderedModels(models: List<String>, lastWorking: String?): List<String> {
         if (lastWorking == null || !models.contains(lastWorking)) return models
@@ -54,10 +54,15 @@ class AiRepository {
     }
 
     private fun rememberWorkingModel(provider: String, model: String) {
+        var changed = false
         when (provider) {
-            "Gemini" -> if (lastWorkingGemini != model) lastWorkingGemini = model
-            "Groq" -> if (lastWorkingGroq != model) lastWorkingGroq = model
-            "Cloudflare" -> if (lastWorkingCloudflare != model) lastWorkingCloudflare = model
+            "Gemini" -> if (lastWorkingGemini != model) { lastWorkingGemini = model; changed = true }
+            "Groq" -> if (lastWorkingGroq != model) { lastWorkingGroq = model; changed = true }
+            "Cloudflare" -> if (lastWorkingCloudflare != model) { lastWorkingCloudflare = model; changed = true }
+        }
+        // FIX: auto-save, don't wait for ViewModel to call persistModelsMemory()
+        if (changed) {
+            appContext?.let { saveModelsMemory(it) }
         }
     }
 
@@ -151,6 +156,8 @@ class AiRepository {
     }
 
     suspend fun refreshModels(context: Context) {
+        // Keep context so rememberWorkingModel can auto-save
+        if (appContext == null) appContext = context.applicationContext
         val prefs = context.getSharedPreferences("ew_models", Context.MODE_PRIVATE)
         loadModelsMemory(prefs)
         try {
@@ -505,7 +512,6 @@ class AiRepository {
         val basePrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext, isBreakdown, context, decision.action)
         val errors = mutableListOf<String>()
 
-        // Models memory: last working model goes first, so we don't retry dead models every time
         val groqModels = orderedModels(remoteGroq, lastWorkingGroq)
         val cfModels = orderedModels(remoteCloudflare, lastWorkingCloudflare)
         val geminiModels = orderedModels(remoteGemini, lastWorkingGemini)
@@ -517,8 +523,7 @@ class AiRepository {
                     stream.collect { chunk ->
                         if (chunk.isNotEmpty()) { gotAnything = true; emit(chunk) }
                     }
-                    true
-                } ?: false
+                }
                 if (gotAnything) {
                     rememberWorkingModel(provider, model)
                     return true
@@ -572,64 +577,67 @@ class AiRepository {
         val cfModels = orderedModels(remoteCloudflare, lastWorkingCloudflare)
         val geminiModels = orderedModels(remoteGemini, lastWorkingGemini)
 
+        suspend fun tryOneSync(provider: String, model: String, stream: Flow<String>): Boolean {
+            sb.clear()
+            try {
+                withTimeoutOrNull(STREAM_TIMEOUT_MS) {
+                    stream.collect { sb.append(it) }
+                }
+                // FIX: don't discard partial answer on timeout, return what we got
+                if (sb.isNotBlank()) {
+                    rememberWorkingModel(provider, model)
+                    return true
+                }
+                return false
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (sb.isNotBlank()) { rememberWorkingModel(provider, model); return true }
+                sb.clear()
+                return false
+            }
+        }
+
         return try {
             var lastErr: Exception? = null
             if (image != null) {
                 for (model in geminiModels) {
                     try {
-                        sb.clear()
-                        val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                            tryGeminiStreaming(model, fullPrompt, image, prompt, isBreakdown).collect { sb.append(it) }
-                            true
-                        } ?: false
-                        if (sb.isNotBlank() && completed) { rememberWorkingModel("Gemini", model); return Result.success(cleanMarkdown(sb.toString()).trim()) }
-                        if (sb.isNotBlank() && !completed) continue
+                        if (tryOneSync("Gemini", model, tryGeminiStreaming(model, fullPrompt, image, prompt, isBreakdown))) {
+                            return Result.success(cleanMarkdown(sb.toString()).trim())
+                        }
                     } catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { lastErr = e; sb.clear() }
+                    catch (e: Exception) { lastErr = e }
                 }
                 return Result.failure(Exception("Could not read the image. Please try again."))
             }
             for (model in groqModels) {
                 try {
-                    sb.clear()
-                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                        tryGroqStreaming(model, fullPrompt, isBreakdown, prompt).collect { sb.append(it) }
-                        true
-                    } ?: false
-                    if (sb.isNotBlank() && completed) { rememberWorkingModel("Groq", model); return Result.success(cleanMarkdown(sb.toString()).trim()) }
-                    if (sb.isNotBlank() && !completed) continue
+                    if (tryOneSync("Groq", model, tryGroqStreaming(model, fullPrompt, isBreakdown, prompt))) {
+                        return Result.success(cleanMarkdown(sb.toString()).trim())
+                    }
                 } catch (e: CancellationException) { throw e }
-                catch (e: Exception) { lastErr = e; sb.clear() }
+                catch (e: Exception) { lastErr = e }
             }
             for (model in cfModels) {
                 try {
-                    sb.clear()
-                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                        tryCloudflareStreaming(model, fullPrompt, isBreakdown, prompt).collect { sb.append(it) }
-                        true
-                    } ?: false
-                    if (sb.isNotBlank() && completed) { rememberWorkingModel("Cloudflare", model); return Result.success(cleanMarkdown(sb.toString()).trim()) }
-                    if (sb.isNotBlank() && !completed) continue
+                    if (tryOneSync("Cloudflare", model, tryCloudflareStreaming(model, fullPrompt, isBreakdown, prompt))) {
+                        return Result.success(cleanMarkdown(sb.toString()).trim())
+                    }
                 } catch (e: CancellationException) { throw e }
-                catch (e: Exception) { lastErr = e; sb.clear() }
+                catch (e: Exception) { lastErr = e }
             }
             for (model in geminiModels) {
                 try {
-                    sb.clear()
-                    val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                        tryGeminiStreaming(model, fullPrompt, null, prompt, isBreakdown).collect { sb.append(it) }
-                        true
-                    } ?: false
-                    if (sb.isNotBlank() && completed) { rememberWorkingModel("Gemini", model); return Result.success(cleanMarkdown(sb.toString()).trim()) }
-                    if (sb.isNotBlank() && !completed) continue
+                    if (tryOneSync("Gemini", model, tryGeminiStreaming(model, fullPrompt, null, prompt, isBreakdown))) {
+                        return Result.success(cleanMarkdown(sb.toString()).trim())
+                    }
                 } catch (e: CancellationException) { throw e }
-                catch (e: Exception) { lastErr = e; sb.clear() }
+                catch (e: Exception) { lastErr = e }
             }
             Result.failure(lastErr ?: Exception("I am busy right now. Please try again in a minute."))
         } catch (e: CancellationException) { throw e }
     }
 
-    // Call this from ViewModel onStop / after a successful chat to persist memory to disk
     fun persistModelsMemory(context: Context) {
         saveModelsMemory(context)
     }
