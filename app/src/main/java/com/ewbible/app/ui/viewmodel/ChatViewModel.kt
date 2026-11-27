@@ -174,10 +174,14 @@ class ChatViewModel(
             // History for AiRepository - must be MessageEntity list
             val history = runCatching { bibleDao.getMessagesForChatSync(finalChatId) }.getOrDefault(emptyList())
 
-            // Bible grounding: only for Bible questions. AiRepository already does web search for NEWS/GENERAL itself.
-            // We do NOT build a systemPrompt here - AiRepository.buildPrompt() does that internally.
-            // We only pass bibleContext + translation, so we don't fight its logic.
-            val bibleContext = if (isBibleQuestion(q, useRef)) {
+            // FIX: No more isBibleQuestion() keyword gate.
+            // Questions change - "why did he say that?", "what's the lesson here?",
+            // "summarize it", "verse 5?" would all fail the keyword list and make AI blind.
+            // Now: if we have a ref, ALWAYS pass bibleContext.
+            // buildBibleContext() itself tells the model when to use it vs ignore it.
+            // So Bible questions work with ANY phrasing, and news/general questions
+            // still work because the model is told to ignore the passage context.
+            val bibleContext = if (useRef.isNotBlank()) {
                 buildBibleContext(useRef, q, useTranslation)
             } else ""
 
@@ -216,15 +220,8 @@ class ChatViewModel(
         }
     }
 
-    private fun isBibleQuestion(q: String, ref: String): Boolean {
-        val lower = q.lowercase()
-        if (Regex("""\b(1|2|3)?\s?[a-z]+\s+\d+:\d+""", RegexOption.IGNORE_CASE).containsMatchIn(q)) return true
-        if (lower.contains("explain this") || lower.contains("what does this mean") || lower.contains("this verse") || lower.contains("this chapter") || lower.contains("this passage")) return true
-        val bibleWords = listOf("bible", "verse", "scripture", "god", "jesus", "psalm", "proverb", "gospel", "apostle", "pray")
-        if (bibleWords.any { lower.contains(it) }) return true
-        if (ref.isNotBlank() && (lower.contains("explain") || lower.contains("meaning") || lower.length < 30)) return true
-        return false
-    }
+    // DELETED: isBibleQuestion() - keyword list can never cover all question phrasings.
+    // Replaced by always-send-context + relevance rule inside buildBibleContext().
 
     private suspend fun buildBibleContext(ref: String, question: String, requestedTranslation: String): String {
         val targetRef = extractVerseRef(question) ?: ref.ifBlank { bibleRef }
@@ -261,6 +258,14 @@ class ChatViewModel(
 
             """
             $translationInstruction
+
+            CURRENT SCREEN CONTEXT:
+            User is currently reading: $bookName $chapter${if (verseFrom != null) ":$verseFrom${if (verseTo != null && verseTo != verseFrom) "-$verseTo" else ""}" else ""} ($requestedTranslation)
+
+            RELEVANCE RULE - READ THIS FIRST:
+            - If the user's question is about this passage / Bible / verse / meaning / explanation / lesson / summary - even if phrased vaguely like "what does this mean?", "why did he say that?", "what's the lesson here?", "summarize it", "verse 5?" - it refers to THIS passage. Answer about THIS passage using the verses below.
+            - Do NOT ask "which passage?" - you already know it: it is the CURRENT SCREEN passage above.
+            - If the question is unrelated (news, weather, programming, general knowledge, sports, etc.) - IGNORE this passage context completely and answer normally. Do NOT force a Bible answer.
 
             PASSAGE: $bookName $chapter${if (verseFrom != null) ":$verseFrom${if (verseTo != null && verseTo != verseFrom) "-$verseTo" else ""}" else ""}
             VERSES (NKJV, from local DB):
