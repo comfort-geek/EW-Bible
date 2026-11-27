@@ -34,7 +34,7 @@ data class ChatState(
     val isLoading: Boolean = false,
     val streamingText: String = "",
     val currentBibleRef: String = "",
-    val currentTranslation: String = "NKJV", // AI chat only, NOT Bible tab
+    val currentTranslation: String = "NKJV", // AI chat only, NOT Bible tab, NOT in DB
     val availableModels: List<String> = emptyList()
 )
 
@@ -49,7 +49,7 @@ class ChatViewModel @Inject constructor(
 
     // Bible tab: NKJV only. Only gives ref, e.g. "Matthew 26"
     private var bibleRef: String = ""
-    // AiChatScreen: gives translation for AI, e.g. "NIV"
+    // AiChatScreen: gives translation for AI, e.g. "NIV" - memory only, NOT in ChatEntity
     private var chatTranslation: String = "NKJV"
 
     // Called from Bible tab / parent when book/chapter changes
@@ -59,16 +59,16 @@ class ChatViewModel @Inject constructor(
         if (cleanRef == bibleRef) return
         bibleRef = cleanRef
         _state.update { it.copy(currentBibleRef = cleanRef) }
-        saveToCurrentChat(cleanRef, chatTranslation)
+        saveRefToCurrentChat(cleanRef)
     }
 
     // Called ONLY from AiChatScreen translation picker
+    // NOT saved to DB - ChatEntity has no translation column
     fun setChatTranslation(translation: String) {
         val clean = translation.ifBlank { "NKJV" }.uppercase()
         if (clean == chatTranslation) return
         chatTranslation = clean
         _state.update { it.copy(currentTranslation = clean) }
-        saveToCurrentChat(bibleRef, clean)
     }
 
     fun setScreenContext(ref: String, translation: String) {
@@ -76,12 +76,13 @@ class ChatViewModel @Inject constructor(
         if (translation.isNotBlank()) setChatTranslation(translation)
     }
 
-    private fun saveToCurrentChat(ref: String, translation: String) {
+    private fun saveRefToCurrentChat(ref: String) {
         val chatId = _state.value.currentChatId ?: return
         viewModelScope.launch {
             runCatching {
                 val existing = bibleDao.getChatById(chatId) ?: return@launch
-                bibleDao.updateChat(existing.copy(ref = ref, translation = translation))
+                // ChatEntity: id, title, ref, createdAt - NO translation
+                bibleDao.updateChat(existing.copy(ref = ref))
             }
         }
     }
@@ -95,7 +96,6 @@ class ChatViewModel @Inject constructor(
 
     fun loadChats() {
         viewModelScope.launch {
-            // Your DAO: getAllChatsSync(), not getAllChats()
             val entities = runCatching { bibleDao.getAllChatsSync() }.getOrDefault(emptyList())
             _state.update { it.copy(chats = entities.map { ChatItem(it.id, it.title, it.ref) }, chatsLoaded = true) }
         }
@@ -107,15 +107,14 @@ class ChatViewModel @Inject constructor(
         bibleRef = cleanRef
         chatTranslation = cleanTrans
         viewModelScope.launch {
-            // Your DAO: insertChat returns Long
             val id = runCatching {
                 bibleDao.insertChat(
                     ChatEntity(
                         id = 0L,
                         title = if (cleanRef.isNotBlank()) cleanRef else "New Chat",
                         ref = cleanRef,
-                        translation = cleanTrans,
                         createdAt = System.currentTimeMillis()
+                        // NO translation - ChatEntity has no such field
                     )
                 )
             }.getOrDefault(System.currentTimeMillis())
@@ -131,17 +130,17 @@ class ChatViewModel @Inject constructor(
 
     fun openChat(chatId: Long) {
         viewModelScope.launch {
-            // Your DAO: getChatById(Long) + getMessagesForChatSync(Long)
             val entity = runCatching { bibleDao.getChatById(chatId) }.getOrNull() ?: return@launch
             val msgs = runCatching { bibleDao.getMessagesForChatSync(chatId) }.getOrDefault(emptyList())
             bibleRef = entity.ref
-            chatTranslation = entity.translation.ifBlank { "NKJV" }
+            // entity.translation DOES NOT EXIST - translation resets to NKJV, user picks again in AiChatScreen
+            chatTranslation = "NKJV"
             _state.update {
                 it.copy(
                     currentChatId = chatId,
                     messages = msgs.map { m -> ChatMessage(m.id.toString(), m.text, m.isUser) },
                     currentBibleRef = entity.ref,
-                    currentTranslation = chatTranslation,
+                    currentTranslation = "NKJV",
                     isLoading = false, streamingText = ""
                 )
             }
@@ -178,7 +177,6 @@ class ChatViewModel @Inject constructor(
         _state.update { it.copy(messages = it.messages + userMsg, isLoading = true, streamingText = "") }
 
         viewModelScope.launch {
-            // Your DAO: insertMessage(MessageEntity)
             runCatching {
                 bibleDao.insertMessage(
                     MessageEntity(chatId = chatId, text = q, isUser = true, timestamp = System.currentTimeMillis())
@@ -261,7 +259,6 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    // Same entities as BibleContent.kt: VerseEntity + SummaryEntity
     private suspend fun buildBibleContext(ref: String, question: String, requestedTranslation: String): String {
         val targetRef = extractVerseRef(question) ?: ref.ifBlank { bibleRef }
         if (targetRef.isBlank()) return ""
@@ -269,21 +266,20 @@ class ChatViewModel @Inject constructor(
         val (bookId, bookName, chapter, verseFrom, verseTo) = parsed
 
         return runCatching {
-            // Your DAO: getVerseRange(bookId, chapter, startVerse, endVerse)
-            // For whole chapter, use 1..200 - same as BibleContent loads whole chapter
+            // BibleDao.getVerseRange(bookId, chapter, startVerse, endVerse)
             val verses = if (verseFrom != null) {
                 bibleDao.getVerseRange(bookId, chapter, verseFrom, verseTo ?: verseFrom)
             } else {
                 bibleDao.getVerseRange(bookId, chapter, 1, 200)
             }.joinToString("\n") { "${it.verse}: ${it.text}" }
 
-            // Your DAO: getSummary(bookId, chapter) -> SummaryEntity?
+            // BibleDao.getSummary(bookId, chapter) -> SummaryEntity? - fields NOT nullable
             val summary = runCatching { bibleDao.getSummary(bookId, chapter) }.getOrNull()
             val summaryText = if (summary != null) {
-                "Summary: ${summary.summary}\nWhat happened: ${summary.whatHappened ?: ""}\nApplication: ${summary.application ?: ""}"
+                "Summary: ${summary.summary}\nWhat happened: ${summary.whatHappened}\nApplication: ${summary.application}"
             } else ""
 
-            // Your DAO: getCommentaryCompressed(bookId, chapter) -> ByteArray?
+            // BibleDao.getCommentaryCompressed(bookId, chapter) -> ByteArray?
             val compressed = runCatching { bibleDao.getCommentaryCompressed(bookId, chapter) }.getOrNull()
             val commentaryHtml = if (compressed != null) {
                 CommentaryHelper.getHtmlCommentary(bookId, chapter, compressed)
