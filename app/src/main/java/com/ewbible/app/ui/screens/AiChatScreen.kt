@@ -41,10 +41,15 @@ private fun cleanSourceNumbering(text: String): String {
     return text
         .replace(Regex("(?m)^Source\\s*\\d+\\s*[-:.]\\s*"), "")
         .replace(Regex("(?m)^\\d+\\.\\s*Source\\s*[-:.]\\s*"), "")
+        .replace(Regex("(?m)^\\s*\\d+\\.\\s*(?=\\[)"), "")
+        .replace(Regex("(?m)^\\s*\\d+\\)\\s*(?=\\[)"), "")
 }
 
 private fun cleanMarkdownForDisplay(text: String): String {
     var t = cleanSourceNumbering(text)
+    t = t.replace("|", "")
+    t = t.replace("**Bold Title:**", "").replace("**Bold Title**", "")
+        .replace("Bold Title:", "").replace("Bold Title", "")
     // Keep headings - just make them bold, don't delete them. Don't force any heading.
     t = t.replace(Regex("(?m)^#{1,6}\\s*(.+)$"), "**$1**")
     t = t.replace("```", "")
