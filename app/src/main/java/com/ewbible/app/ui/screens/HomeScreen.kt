@@ -152,13 +152,7 @@ fun HomeScreen(
     val isCommentaryForCurrent = state.commentaryBookId == state.currentBookId &&
         state.commentaryChapter == state.selectedChapter
     val effectiveCommentaryHtml = if (isCommentaryForCurrent) state.commentaryHtml else ""
-    // FIX: was hardcoded false, so loading UI never showed
     val isCommentaryLoading = state.selectedTab == "Open EW" && !isCommentaryForCurrent
-
-    // FIX: DELETED the LaunchedEffect that called prefetchCommentary on every chapter change.
-    // That ran even on Bible tab and undid ViewModel tab-gating.
-    // ViewModel.preloadNextCommentary already prefetches next/prev with 500ms delay + tab check.
-    // OpenEWContent also prefetches. No need for a 3rd prefetch here.
 
     LaunchedEffect(state.isReadingRestored, savedScrollIndex, savedScrollOffset) {
         if (state.isReadingRestored) initialLoadDone = true
@@ -233,9 +227,9 @@ fun HomeScreen(
                 onSelectTab = { viewModel.selectTab(it) },
                 onSettings = { settingsOpen = true }
             )
-            if (state.selectedTab == "Bible") {
-                Text(text = "$currentBookName ${state.selectedChapter}", color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-            }
+            // FIX: Duplicate header DELETED here.
+            // BibleContent already shows "$displayBookName $displayChapter".
+            // Keeping this one caused 2x Genesis 14.
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when (state.selectedTab) {
                     "Bible" -> {
@@ -244,7 +238,8 @@ fun HomeScreen(
                             versesList = state.verses, currentHighlightMap = state.highlights, fontSize = state.fontSize,
                             gold = gold, panel = panel, textColor = textColor, listState = listState,
                             onVerseClick = { viewModel.selectVerse(it) }, onVerseLongClick = { viewModel.selectVerse(it) },
-                            onNextChapter = { viewModel.nextChapter() }, onPreviousChapter = { viewModel.previousChapter() },
+                            onNextChapter = { viewModel.nextChapter(); scope.launch { runCatching { listState.scrollToItem(0) } } },
+                            onPreviousChapter = { viewModel.previousChapter(); scope.launch { runCatching { listState.scrollToItem(0) } } },
                             summaryLoading = state.summaryLoading
                         )
                     }
