@@ -49,9 +49,8 @@ private fun cleanMarkdownForDisplay(text: String): String {
     var t = cleanSourceNumbering(text)
     t = t.replace(Regex("(?m)^\\s*>\\s*"), "")
     t = t.replace(">", "")
-    t = t.replace("|", "")
-    t = t.replace("**Bold Title:**", "").replace("**Bold Title**", "")
-        .replace("Bold Title:", "").replace("Bold Title", "")
+    // FIX: Removed t.replace("|", "") - it was breaking tables
+    // FIX: Removed Bold Title stripping - it was deleting bold headings
     t = t.replace(Regex("(?m)^#{1,6}\\s*(.+)$"), "**$1**")
     t = t.replace("```", "")
     t = t.replace(Regex("(?m)^---\\s*$"), "")
@@ -249,7 +248,7 @@ fun AiChatScreen(
                     ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                         val max = 1024
                         val scale = maxOf(info.size.width / max.toFloat(), info.size.height / max.toFloat(), 1f)
-                        if (scale > 1f) decoder.setTargetSize((info.size.width / scale).toInt(), (info.size.height / scale).toInt())
+                        if (scale > 1f) decoder.setTargetSize((info.size.width / scale).toInt(), info.size.height / scale.toInt())
                     }
                 }.getOrNull()
                 if (bitmap != null) withContext(Dispatchers.Main) { selectedImage = bitmap }
@@ -264,7 +263,11 @@ fun AiChatScreen(
     LaunchedEffect(state.chatsLoaded) {
         if (!state.chatsLoaded) return@LaunchedEffect
         if (state.currentChatId != null) return@LaunchedEffect
-        if (state.chats.isNotEmpty()) {
+        // FIX: If we came from a verse, start new chat with that verse.
+        // Don't open old chat, or the old ref will confuse the AI.
+        if (currentRef.isNotBlank()) {
+            viewModel.startNewChat(currentRef)
+        } else if (state.chats.isNotEmpty()) {
             viewModel.openChat(state.chats.first().id)
         } else {
             // FIX: Pass currentRef as LOW priority context, NOT as forced Bible type.
