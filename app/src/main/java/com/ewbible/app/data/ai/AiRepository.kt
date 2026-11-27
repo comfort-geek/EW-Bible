@@ -41,7 +41,9 @@ class AiRepository {
     private var remoteCloudflare = FALLBACK_CLOUDFLARE
     private var remoteVersion = 3
 
-    // --- AI MODELS MEMORY ---
+    // --- AI MODELS MEMORY ONLY ---
+    // ONLY in "ew_models" prefs. ONLY 3 keys. Never touches Bible, chat, or any other prefs.
+    // All wrapped in try/catch so it can never crash the app.
     private var lastWorkingGemini: String? = null
     private var lastWorkingGroq: String? = null
     private var lastWorkingCloudflare: String? = null
@@ -60,7 +62,6 @@ class AiRepository {
             "Groq" -> if (lastWorkingGroq != model) { lastWorkingGroq = model; changed = true }
             "Cloudflare" -> if (lastWorkingCloudflare != model) { lastWorkingCloudflare = model; changed = true }
         }
-        // FIX: auto-save, don't wait for ViewModel to call persistModelsMemory()
         if (changed) {
             appContext?.let { saveModelsMemory(it) }
         }
@@ -87,7 +88,6 @@ class AiRepository {
         } catch (_: Exception) { }
     }
 
-    // FIX: was 30000 - cut answers mid-sentence
     private val STREAM_TIMEOUT_MS = 90000L
     private val MAX_TOKENS = 4096
     private val SEARCH_TIMEOUT_MS = 7500L
@@ -100,7 +100,8 @@ class AiRepository {
     private companion object {
         const val STYLE_RULE = "You are Ask Anything - a warm, smart friend. Talk naturally like a person. Do not mention what model you are. Do not say 'as an AI'. Match your length to the question: short question = short answer, deep question = deeper answer. Use paragraphs, headings or bullet lists only if they help clarity - do not force them. Do not force Bible verses, prayer, or a Sources section unless the question actually needs it. NEVER use tables. NEVER use the | character. NEVER use --- for a table. Use a bullet list instead of a table. If the user is just chatting, just talk back. If the user is talking about the Bible, a verse, or prayer, stay warm and simple, explain it in the flow of the story, then ask a question back. If the user asks about something that could have changed recently, use the WEB SEARCH RESULTS and do not guess."
 
-        const val SYSTEM_MSG = "You are Ask Anything - a warm, smart friend. NEVER use tables. NEVER use the | character. Use a bullet list instead of a table. Never mention what model or provider you are."
+        // FIX: Same prompt for ALL providers. Before Groq/Cloudflare got a short different prompt.
+        const val SYSTEM_MSG = STYLE_RULE
 
         val BIBLE_BOOKS = listOf(
             "genesis", "exodus", "leviticus", "numbers", "deuteronomy",
@@ -119,15 +120,6 @@ class AiRepository {
         val BIBLE_REF_REGEX = Regex("\\b(${BIBLE_BOOKS.joinToString("|")})s?\\s+\\d+")
         val NUMBERED_BOOK_REGEX = Regex("\\b[12]\\s+(samuel|kings|chronicles|corinthians|thessalonians|timothy|peter|john)\\s+\\d+")
 
-        val BIBLE_WORDS = setOf(
-            "verse", "chapter", "bible", "scripture", "psalm", "proverb",
-            "jesus", "god", "lord", "church", "pastor",
-            "david", "moses", "apostle", "gospel", "sin", "faith",
-            "salvation", "holy spirit", "baptism", "heaven", "hell",
-            "abraham", "isaac", "jacob", "joseph", "samuel", "elijah",
-            "peter", "paul", "john", "mary", "solomon", "noah"
-        )
-
         val FACTUAL_INTENT = listOf(
             "who is", "who won", "who was", "who became", "who appointed",
             "what happened", "what is happening", "latest", "recent", "current",
@@ -141,22 +133,29 @@ class AiRepository {
             "what is", "what are", "who are", "facts about", "define", "definition"
         )
 
-        val GENERAL_TOPICS = listOf(
-            "coding", "python", "java", "javascript", "programming", "developer",
-            "computer", "laptop", "phone", "android", "app", "website",
-            "cooking", "recipe", "football", "soccer", "music", "movie",
-            "school", "exam", "business", "money", "job", "car", "house"
-        )
-
         val BREAKDOWN_PHRASES = listOf(
             "break down", "breakdown", "break it down", "verse by verse",
             "in portions", "in parts", "deep study", "deep dive", "go deep",
             "explain this passage", "explain this chapter"
         )
+
+        // World news - any continent / country
+        val WORLD_REGIONS = listOf(
+            "america", "africa", "asia", "europe", "oceania", "australia",
+            "north america", "south america",
+            "usa", "united states", "uk", "england", "france", "germany",
+            "china", "india", "japan", "korea", "russia", "ukraine",
+            "israel", "palestine", "iran", "iraq", "syria", "turkey",
+            "egypt", "nigeria", "kenya", "south africa", "ghana",
+            "malawi", "zambia", "zimbabwe", "tanzania", "mozambique",
+            "canada", "mexico", "brazil", "argentina", "italy", "spain",
+            "netherlands", "poland", "sweden", "norway", "denmark",
+            "pakistan", "bangladesh", "indonesia", "thailand", "vietnam",
+            "philippines", "saudi", "uae", "dubai", "qatar", "ethiopia"
+        )
     }
 
     suspend fun refreshModels(context: Context) {
-        // Keep context so rememberWorkingModel can auto-save
         if (appContext == null) appContext = context.applicationContext
         val prefs = context.getSharedPreferences("ew_models", Context.MODE_PRIVATE)
         loadModelsMemory(prefs)
@@ -221,23 +220,6 @@ class AiRepository {
         val confidence: Double = 1.0
     )
 
-    private data class Scores(
-        val bible: Double,
-        val breakdown: Double,
-        val news: Double,
-        val general: Double
-    ) {
-        fun topTwo(): List<Pair<ContextType, Double>> {
-            return listOf(
-                ContextType.BIBLE to bible,
-                ContextType.BREAKDOWN to breakdown,
-                ContextType.NEWS to news,
-                ContextType.GENERAL to general
-            ).sortedByDescending { it.second }
-        }
-        fun best(): ContextType = topTwo()[0].first
-    }
-
     private fun detectAction(q: String): ActionType {
         val s = q.lowercase().trim()
         if (s.contains("recommend") || s.contains("suggest") || s.contains("what should i do") ||
@@ -258,6 +240,18 @@ class AiRepository {
         return ActionType.NONE
     }
 
+    // --- WORLD NEWS DETECTION ---
+    // Any news from any country / continent in the world
+    private fun isWorldNewsQuery(q: String): Boolean {
+        val s = q.lowercase()
+        val hasNewsWord = s.contains("news") || s.contains("latest") || s.contains("breaking") ||
+            s.contains("happening") || s.contains("update") || s.contains("today")
+        if (!hasNewsWord) return false
+        // "news from X" / "news in X" / "news about X" = always news, any place
+        if (s.contains("news from") || s.contains("news in") || s.contains("news about")) return true
+        return WORLD_REGIONS.any { s.contains(it) }
+    }
+
     private fun decide(
         question: String,
         currentRef: String = "",
@@ -267,148 +261,63 @@ class AiRepository {
         if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you"))
             return Decision(ContextType.GENERAL, listOf(ContextType.GENERAL), ActionType.NONE, 1.0)
         val action = detectAction(q)
-        val d = decideWithoutAction(question, currentRef, history)
+        // FIX: AI is separate from Bible home. currentRef is IGNORED here on purpose.
+        // Bible home must not force AI to answer as Bible.
+        val d = decideWithoutAction(question, "", history)
         return d.copy(action = action)
     }
 
+    // FIX: Simple priority, no scoring, no follow-up trap, no history trap.
+    // Each question is judged on its own words.
     private fun decideWithoutAction(
         question: String,
         currentRef: String = "",
         history: List<MessageEntity> = emptyList()
     ): Decision {
         val q = question.lowercase().trim()
-        val parts = q.split(Regex("\\s+and\\s+|\\s+also\\s+|\\s+plus\\s+|\\s+then\\s+|;|\\?"))
-            .map { it.trim() }.filter { it.length > 3 }
-        val segments = if (parts.size > 1) parts else listOf(q)
-        val lastIntent = getLastIntent(history)
-        val found = mutableListOf<ContextType>()
-        var totalConfidence = 0.0
-
-        for (seg in segments) {
-            val isFollowUp = isFollowUpSegment(seg)
-            val scores = scoreOne(seg, currentRef, history, isSegment = segments.size > 1)
-            val top = scores.topTwo()
-            val gap = top[0].second - top[1].second
-            val confidence = if (top[0].second <= 0) 0.0 else (gap / (top[0].second + 1.0)).coerceIn(0.0, 1.0)
-            totalConfidence += confidence
-            var best = scores.best()
-            if (isFollowUp && lastIntent != null && top[0].second < 6.0) {
-                best = lastIntent
-            }
-            if (segments.size == 1 && gap < 1.5 && top[0].second >= 4.0 && top[1].second >= 4.0) {
-                val both = listOf(top[0].first, top[1].first).distinct()
-                return Decision(ContextType.MIXED, both, ActionType.NONE, confidence = 0.5)
-            }
-            found.add(best)
-        }
-
-        val distinct = found.distinct()
-        val avgConfidence = if (segments.isNotEmpty()) totalConfidence / segments.size else 1.0
-        if (avgConfidence < 0.15 && distinct == listOf(ContextType.GENERAL)) {
-            return Decision(ContextType.GENERAL, listOf(ContextType.GENERAL), ActionType.NONE, avgConfidence)
-        }
-        if (distinct.size > 1) {
-            val withoutBible = distinct.filter { it != ContextType.BIBLE }
-            if (distinct.contains(ContextType.BREAKDOWN) && withoutBible.size == 1 && withoutBible[0] == ContextType.BREAKDOWN) {
-                return Decision(ContextType.BREAKDOWN, listOf(ContextType.BREAKDOWN), ActionType.NONE, avgConfidence)
-            }
-            return Decision(ContextType.MIXED, distinct, ActionType.NONE, avgConfidence)
-        }
-        return Decision(distinct.first(), distinct, ActionType.NONE, avgConfidence)
-    }
-
-    private fun isFollowUpSegment(seg: String): Boolean {
-        val s = seg.lowercase().trim()
-        val referring = listOf("it", "that", "this", "he", "she", "his", "her", "them", "verse", "chapter").any { s.contains(it) }
-        val short = s.length < 60
-        val startsWithAnd = s.startsWith("and ") || s.startsWith("what about") || s.startsWith("and what")
-        val bareRef = BIBLE_REF_REGEX.containsMatchIn(s) || s.contains("verse") || s.contains("his ") || s.contains("her ")
-        return (short && referring) || startsWithAnd || (short && bareRef)
-    }
-
-    private fun getLastIntent(history: List<MessageEntity>): ContextType? {
-        if (history.isEmpty()) return null
-        val lastUser = history.lastOrNull { it.isUser } ?: return null
-        val lastText = lastUser.text.lowercase()
-        val scores = scoreOne(lastText, "", emptyList(), isSegment = false)
-        val best = scores.best()
-        val topScore = scores.topTwo()[0].second
-        if (topScore < 4.0) return null
-        return best
-    }
-
-    private fun scoreOne(
-        q: String,
-        currentRef: String,
-        history: List<MessageEntity>,
-        isSegment: Boolean
-    ): Scores {
-        var bibleScore = 0.0
-        var breakdownScore = 0.0
-        var newsScore = 0.0
-        var generalScore = 1.0
+        val action = detectAction(q)
 
         val hasBibleRef = BIBLE_REF_REGEX.containsMatchIn(q) || NUMBERED_BOOK_REGEX.containsMatchIn(q)
-        if (hasBibleRef) bibleScore += 10
-        if (q.contains("in the bible") || q.contains("bible says") || q.contains("according to the bible") || q.contains("from scripture")) bibleScore += 10
+        val hasBreakdown = BREAKDOWN_PHRASES.any { q.contains(it) }
 
-        val bibleWordCount = BIBLE_WORDS.count { q.contains(it) }
-        bibleScore += minOf(bibleWordCount * 2.0, 6.0)
+        // Priority 1: Explicit Bible reference = Bible / Breakdown
+        if (hasBibleRef && hasBreakdown) return Decision(ContextType.BREAKDOWN, listOf(ContextType.BREAKDOWN), action)
+        if (hasBibleRef) return Decision(ContextType.BIBLE, listOf(ContextType.BIBLE), action)
 
-        val hasBreakdownPhrase = BREAKDOWN_PHRASES.any { q.contains(it) }
-        if (hasBreakdownPhrase) {
-            if (hasBibleRef || bibleWordCount > 0) breakdownScore += 9
-            else if (q.contains("this") || q.contains("that") || q.contains("passage") || q.contains("chapter")) breakdownScore += 4
-            else breakdownScore += 0.5
-        }
-        if (q.contains("step by step")) {
-            if (hasBibleRef || bibleWordCount > 0) breakdownScore += 8 else generalScore += 3
-        }
+        // Priority 2: World news - America, Africa, Asia, Europe, any country
+        if (isWorldNewsQuery(q)) return Decision(ContextType.NEWS, listOf(ContextType.NEWS), action)
 
-        val hasMeaning = listOf("mean", "explain", "teach", "lesson", "understand", "interpret").any { q.contains(it) }
-        val isReferring = listOf("this", "that", "it", "verse", "chapter", "passage").any { q.contains(it) }
-        if (hasMeaning && isReferring) {
-            if (hasBibleRef || bibleWordCount > 0) bibleScore += 4 else generalScore += 2
-        }
-        if (q.contains("teach me") && !q.contains("bible") && !q.contains("verse")) generalScore += 3
+        // Priority 3: Bible only if user explicitly says bible / scripture / verse / psalm
+        // NOT for names like john, peter, paul, mary - those are also normal names
+        if (q.contains("bible") || q.contains("scripture") || q.contains("verse") || q.contains("psalm") || q.contains("in the bible") || q.contains("bible says"))
+            return Decision(ContextType.BIBLE, listOf(ContextType.BIBLE), action)
 
-        val generalTopicCount = GENERAL_TOPICS.count { q.contains(it) }
-        if (generalTopicCount > 0) {
-            generalScore += generalTopicCount * 4.0
-            bibleScore -= generalTopicCount * 5.0
-            breakdownScore -= generalTopicCount * 5.0
-        }
-        if ((q.contains("how do i start") || q.contains("how to start") || q.contains("learn")) && bibleWordCount == 0 && !hasBibleRef) generalScore += 4
+        // Priority 4: Factual = News
+        if (FACTUAL_INTENT.any { q.contains(it) })
+            return Decision(ContextType.NEWS, listOf(ContextType.NEWS), action)
 
-        val factualCount = FACTUAL_INTENT.count { q.contains(it) }
-        newsScore += factualCount * 3.0
-        if (q.contains("malawi") && (q.contains("election") || q.contains("news") || q.contains("president") || q.contains("job"))) newsScore += 6
-
-        if (!isSegment) {
-            val ref = currentRef.lowercase().trim()
-            val isInBibleView = ref.isNotBlank() && ref != "home" && !ref.contains("chat")
-            if (isInBibleView && q.length < 80 && (hasMeaning || q.contains("today") || q.contains("apply") || q.contains("for me"))) bibleScore += 1.5
-            if (history.isNotEmpty()) {
-                val lastTwo = history.takeLast(2).joinToString(" ") { it.text.lowercase() }
-                val wasBible = lastTwo.contains("verse") || lastTwo.contains("bible") || lastTwo.contains("psalm") || lastTwo.contains("scripture")
-                val wasNews = lastTwo.contains("election") || lastTwo.contains("news") || lastTwo.contains("president")
-                if (wasBible && isReferring && hasMeaning) bibleScore += 1.5
-                if (wasNews && (q.contains("it") || q.contains("that"))) newsScore += 1.5
-            }
+        // Priority 5: Mixed - Bible + News in one message, split by "and" / "also" / "plus"
+        val parts = q.split(Regex("\\s+and\\s+|\\s+also\\s+|\\s+plus\\s+"))
+            .map { it.trim() }.filter { it.length > 3 }
+        if (parts.size > 1) {
+            val types = parts.map { decideWithoutAction(it, "", emptyList()).type }.distinct()
+            if (types.size > 1) return Decision(ContextType.MIXED, types, action)
         }
 
-        return Scores(bibleScore, breakdownScore, newsScore, generalScore)
+        return Decision(ContextType.GENERAL, listOf(ContextType.GENERAL), action)
     }
 
     private fun needsWebSearch(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): Boolean {
+        val q = question.lowercase().trim()
+        if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you")) return false
+        if (q.length < 10) return false
+        // World news always searches
+        if (isWorldNewsQuery(q)) return true
         val decision = decide(question, currentRef, history)
         if (decision.type == ContextType.NEWS || decision.type == ContextType.MIXED) return true
         if (decision.type == ContextType.GENERAL) {
-            val q = question.lowercase().trim()
-            if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you")) return false
-            if (q.length < 10) return false
             if (decision.action == ActionType.RECOMMEND || decision.action == ActionType.COMPARE || decision.action == ActionType.LIST) return true
-            return FACTUAL_INTENT.any { q.contains(it) } || q.contains("malawi") ||
+            return FACTUAL_INTENT.any { q.contains(it) } ||
                 q.contains("how to") || q.contains("how do") || q.contains("best") ||
                 q.contains("price") || q.contains("salary") || q.contains("job") ||
                 q.contains("business") || q.contains("money") || q.contains("scholarship")
@@ -583,7 +492,6 @@ class AiRepository {
                 withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                     stream.collect { sb.append(it) }
                 }
-                // FIX: don't discard partial answer on timeout, return what we got
                 if (sb.isNotBlank()) {
                     rememberWorkingModel(provider, model)
                     return true
