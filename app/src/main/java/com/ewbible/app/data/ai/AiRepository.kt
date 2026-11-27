@@ -140,7 +140,8 @@ class AiRepository {
             "canada", "mexico", "brazil", "argentina", "italy", "spain",
             "netherlands", "poland", "sweden", "norway", "denmark",
             "pakistan", "bangladesh", "indonesia", "thailand", "vietnam",
-            "philippines", "saudi", "uae", "dubai", "qatar", "ethiopia"
+            "philippines", "saudi", "uae", "dubai", "qatar", "ethiopia",
+            "congo", "sudan", "somalia", "uganda", "rwanda", "botswana", "namibia", "angola", "madagascar"
         )
     }
 
@@ -230,11 +231,7 @@ class AiRepository {
 
     private fun isWorldNewsQuery(q: String): Boolean {
         val s = q.lowercase()
-        val hasNewsWord = s.contains("news") || s.contains("latest") || s.contains("breaking") ||
-            s.contains("happening") || s.contains("update") || s.contains("today")
-        if (!hasNewsWord) return false
-        if (s.contains("news from") || s.contains("news in") || s.contains("news about")) return true
-        return WORLD_REGIONS.any { s.contains(it) }
+        return WORLD_REGIONS.any { s.contains(it) } || s.contains("news") || s.contains("headlines") || s.contains("happening") || s.contains("latest") || s.contains("update")
     }
 
     private fun shouldUseCurrentRef(question: String, currentRef: String): Boolean {
@@ -296,19 +293,11 @@ class AiRepository {
     private fun needsWebSearch(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): Boolean {
         val q = question.lowercase().trim()
         if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you")) return false
-        if (q.length < 10) return false
         if (isWorldNewsQuery(q)) return true
         val decision = decide(question, currentRef, history)
-        if (decision.type == ContextType.NEWS || decision.type == ContextType.MIXED) return true
         if (decision.type == ContextType.BIBLE || decision.type == ContextType.BREAKDOWN) return false
-        if (decision.type == ContextType.GENERAL) {
-            if (decision.action == ActionType.RECOMMEND || decision.action == ActionType.COMPARE || decision.action == ActionType.LIST) return true
-            return FACTUAL_INTENT.any { q.contains(it) } ||
-                q.contains("how to") || q.contains("how do") || q.contains("best") ||
-                q.contains("price") || q.contains("salary") || q.contains("job") ||
-                q.contains("business") || q.contains("money") || q.contains("scholarship")
-        }
-        return false
+        // UNLOCKED: for NEWS, MIXED and GENERAL, always try web
+        return true
     }
 
     private fun chooseSearchDepth(question: String): String { return "auto" }
@@ -576,9 +565,9 @@ class AiRepository {
         val contextRule = when (context) {
             ContextType.BIBLE -> "This looks like a Bible question. Answer from Scripture, quote $translation where helpful, and end with a practical application if natural. Do not force news or a Sources section."
             ContextType.BREAKDOWN -> "This looks like a Bible breakdown request. Go verse by verse / section by section in a natural way."
-            ContextType.NEWS -> "This looks like a factual / news question. Answer ONLY from the WEB SEARCH RESULTS below. If the results do not contain the answer, say you don't have verified info and don't guess names, dates or results. If results are provided, end with EXACTLY this format, max 3, short titles only:\n**Sources**\n- [Short Title](URL)\n- [Short Title](URL)\nDo NOT number them. Do NOT write Source 1, Source 2, 1. or 1). Never invent a URL, title or date. Use ONLY titles and URLs from the results."
+            ContextType.NEWS -> "This looks like a factual / news question. Use the WEB SEARCH RESULTS below if they are provided. If no results are provided, still answer helpfully from your general knowledge and say this may have changed, check for latest update. Do not refuse. If results are provided, end with EXACTLY this format, max 3, short titles only:\n**Sources**\n- [Short Title](URL)\n- [Short Title](URL)\nDo NOT number them. Do NOT write Source 1, Source 2, 1. or 1). Never invent a URL, title or date. Use ONLY titles and URLs from the results."
             ContextType.GENERAL -> "This looks like a general question. Answer helpfully and directly. If WEB SEARCH RESULTS are provided below, use them for facts. Do not force Bible verses. If results were provided, end with EXACTLY this format, max 3, short titles only:\n**Sources**\n- [Short Title](URL)\n- [Short Title](URL)\nIf no results were provided, do NOT add Sources. Do NOT number them. Never invent a URL. Use ONLY titles and URLs from the results."
-            ContextType.MIXED -> "This question has MULTIPLE different parts. Answer EACH part separately under its own heading, e.g. **Part 1**, **Part 2**. For the Bible part, use Scripture. For the news/factual part, use ONLY WEB SEARCH RESULTS, never guess. At the very end, if web results were used, add EXACTLY:\n**Sources**\n- [Short Title](URL)\nMax 3. Do not force Bible verses into the non-Bible parts, and do not force Sources into the Bible part."
+            ContextType.MIXED -> "This question has MULTIPLE different parts. Answer EACH part separately under its own heading, e.g. **Part 1**, **Part 2**. For the Bible part, use Scripture. For the news/factual part, use ONLY WEB SEARCH RESULTS if provided, otherwise answer from general knowledge and note it may have changed. At the very end, if web results were used, add EXACTLY:\n**Sources**\n- [Short Title](URL)\nMax 3. Do not force Bible verses into the non-Bible parts, and do not force Sources into the Bible part."
         }
         val actionRule = when (action) {
             ActionType.RECOMMEND -> "ACTION: RECOMMEND. Recommend the user on some ideas to get things right and solved. Give 3 to 5 practical ideas, explain briefly why each one works, then end with 1 clear best pick and the first step to take. Keep it practical, not theoretical."
@@ -603,7 +592,7 @@ class AiRepository {
         if (webContext.isNotBlank()) {
             sb.append("WEB SEARCH RESULTS (true facts as of $today):\n${webContext.take(3500)}\n\n")
         } else if (context == ContextType.NEWS) {
-            sb.append("No web results were available. Do not guess. Say you don't have verified info.\n\n")
+            sb.append("No web results were available. Answer from your general knowledge and note it may not be the very latest.\n\n")
         }
         if (history.isNotEmpty()) {
             sb.append("CONVERSATION HISTORY (last 4):\n")
