@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ModalDrawerSheet
@@ -63,6 +64,8 @@ fun BookDrawer(
         ntBookEntities.associate { it.id to maxOf(chapterCounts[it.id] ?: 0, BookCatalog.chapters(it.id)) }
     }
 
+    val listState = rememberLazyListState()
+
     ModalDrawerSheet(
         drawerShape = RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp),
         modifier = Modifier.fillMaxWidth(0.85f).widthIn(max = 320.dp),
@@ -93,7 +96,11 @@ fun BookDrawer(
             if (otBookEntities.isEmpty() && ntBookEntities.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = gold) }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 100.dp)) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 100.dp)
+                ) {
                     item(contentType = "header") { Text("Old Testament", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp); Spacer(Modifier.height(8.dp)) }
                     items(otBookEntities, key = { it.id }, contentType = { "book" }) { book ->
                         BookDrawerRow(
