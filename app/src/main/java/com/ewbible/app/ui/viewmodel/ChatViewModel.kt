@@ -160,6 +160,7 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    // FIXED: Never drops question. If no chat exists, creates it IN THE SAME coroutine, then sends.
     fun send(question: String, ref: String, image: Bitmap?, translation: String) {
         val q = question.trim()
         if (q.isBlank()) return
@@ -168,21 +169,45 @@ class ChatViewModel @Inject constructor(
         if (useRef.isNotBlank()) setBibleRef(useRef)
         setChatTranslation(useTranslation)
 
-        val chatId = _state.value.currentChatId ?: run {
-            startNewChat(useRef, useTranslation)
-            return
-        }
-
-        val userMsg = ChatMessage(text = q, isUser = true)
-        _state.update { it.copy(messages = it.messages + userMsg, isLoading = true, streamingText = "") }
-
         viewModelScope.launch {
+            // 1. Ensure chat exists - create here if needed, do NOT return
+            var chatId = _state.value.currentChatId
+            if (chatId == null) {
+                chatId = runCatching {
+                    bibleDao.insertChat(
+                        ChatEntity(
+                            id = 0L,
+                            title = if (useRef.isNotBlank()) useRef else "New Chat",
+                            ref = useRef,
+                            createdAt = System.currentTimeMillis()
+                        )
+                    )
+                }.getOrDefault(System.currentTimeMillis())
+                _state.update {
+                    it.copy(
+                        currentChatId = chatId,
+                        messages = emptyList(),
+                        currentBibleRef = useRef,
+                        currentTranslation = useTranslation,
+                        isLoading = false,
+                        streamingText = ""
+                    )
+                }
+                loadChats()
+            }
+            val finalChatId = chatId ?: return@launch
+
+            // 2. Show user message immediately
+            val userMsg = ChatMessage(text = q, isUser = true)
+            _state.update { it.copy(messages = it.messages + userMsg, isLoading = true, streamingText = "") }
+
             runCatching {
                 bibleDao.insertMessage(
-                    MessageEntity(chatId = chatId, text = q, isUser = true, timestamp = System.currentTimeMillis())
+                    MessageEntity(chatId = finalChatId, text = q, isUser = true, timestamp = System.currentTimeMillis())
                 )
             }
 
+            // 3. Build Bible context only if needed
             val type = detectType(q, useRef)
             val bibleContext = if (type == ChatType.BIBLE || type == ChatType.BIBLE_WITH_REF) {
                 buildBibleContext(useRef, q, useTranslation)
@@ -194,6 +219,7 @@ class ChatViewModel @Inject constructor(
                 append("USER QUESTION: ").append(q)
             }
 
+            // 4. Stream AI answer
             var aiText = ""
             try {
                 aiRepository.sendStream(
@@ -213,11 +239,11 @@ class ChatViewModel @Inject constructor(
             _state.update { it.copy(messages = it.messages + aiMsg, isLoading = false, streamingText = "") }
             runCatching {
                 bibleDao.insertMessage(
-                    MessageEntity(chatId = chatId, text = aiText, isUser = false, timestamp = System.currentTimeMillis())
+                    MessageEntity(chatId = finalChatId, text = aiText, isUser = false, timestamp = System.currentTimeMillis())
                 )
             }
             runCatching {
-                val existing = bibleDao.getChatById(chatId) ?: return@runCatching
+                val existing = bibleDao.getChatById(finalChatId) ?: return@runCatching
                 if (existing.title == "New Chat" || existing.title.isBlank()) {
                     bibleDao.updateChat(existing.copy(title = q.take(50)))
                 }
@@ -333,7 +359,7 @@ class ChatViewModel @Inject constructor(
         val chapter = m.groups[3]?.value?.toIntOrNull() ?: return null
         val verseFrom = m.groups[4]?.value?.toIntOrNull()
         val verseTo = m.groups[5]?.value?.toIntOrNull()
-        // Same as BibleContent: BookCatalog.id(String)
+        // Same as BibleContent / HomeViewModel: BookCatalog.id(String)
         val bookId = BookCatalog.id(nameRaw)
         return ParsedRef(bookId, BookCatalog.name(bookId), chapter, verseFrom, verseTo)
     }
