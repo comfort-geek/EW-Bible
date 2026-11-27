@@ -395,10 +395,11 @@ class ChatViewModel(
         }
     }
 
-    // FIXED: Stronger Bible RAG
+    // FIXED: Bible mode still works, News mode is unlocked
     private suspend fun buildBibleContext(question: String, currentRef: String): String {
         return try {
             // A. EXPLICIT VERSE: John 3:16 -> 5 verses + commentary + summary
+            // This always wins, even if question also has news words.
             val match = VERSE_REGEX.find(question)
             if (match != null) {
                 val bookName = match.groupValues[1].trim()
@@ -432,7 +433,47 @@ class ChatViewModel(
                 return result
             }
 
-            // B. CURRENT REF: John 1 -> FULL chapter 1-60, not just 1-30
+            // B. UNLOCK CHECK: If this is news/general, send NO Bible context
+            // so AiRepository can go to web search.
+            val q = question.lowercase()
+
+            val isBibleWord = q.contains("bible") || q.contains("scripture") ||
+                q.contains("verse") || q.contains("chapter") || q.contains("passage") ||
+                q.contains("psalm") || q.contains("jesus") || q.contains("christ") ||
+                q.contains("god") || q.contains("lord") || q.contains("david") ||
+                q.contains("moses") || q.contains("apostle") || q.contains("prophet") ||
+                q.contains("pray") || q.contains("prayer") || q.contains("faith") ||
+                q.contains("gospel") || q.contains("testament")
+
+            val isAboutCurrentRef = q.contains("this") || q.contains("that") ||
+                q.contains("it") || q.contains("verse") || q.contains("chapter") ||
+                q.contains("passage") || q.contains("mean") || q.contains("explain") ||
+                q.contains("what does")
+
+            val isNewsWord = q.contains("news") || q.contains("headlines") ||
+                q.contains("happening") || q.contains("latest") ||
+                q.contains("update") || q.contains("today") || q.contains("currently")
+
+            // Only block Bible context for pure news, not for Bible questions.
+            // "Who is David?" -> isBibleWord = true, so Bible context still sent.
+            // "Explain this verse" -> isAboutCurrentRef = true, so Bible context still sent.
+            // "What is happening in Malawi?" -> isNewsWord = true, no Bible word, not about ref -> return ""
+            if (isNewsWord && !isBibleWord && !isAboutCurrentRef) return ""
+            if (isBibleWord || isAboutCurrentRef) {
+                // Fall through to C below to send chapter context
+            } else if (currentRef.isNotBlank()) {
+                // For pure general questions with no Bible word and no "this",
+                // also don't force Bible context - let AiRepository decide.
+                // But if user is clearly in a Bible chat and asks a short follow-up,
+                // keep context. We check: if question is very short, keep context.
+                if (q.length > 15 && !isNewsWord) {
+                    // Long general question like "Tell me about Elon Musk" -> no Bible context
+                    return ""
+                }
+            }
+
+            // C. CURRENT REF: John 1 -> FULL chapter 1-60, not just 1-30
+            // This only runs for Bible questions now.
             if (currentRef.isBlank()) return ""
             val cacheKey = "c:$currentRef"
             contextCache[cacheKey]?.let { return it }
@@ -467,10 +508,6 @@ class ChatViewModel(
 
     private fun cleanMarkdown(text: String): String {
         var cleaned = text
-            .replace("**Bold Title:**", "")
-            .replace("**Bold Title**", "")
-            .replace("Bold Title:", "")
-            .replace("Bold Title", "")
             .replace("### ", "").replace("## ", "").replace("# ", "").replace("---", "")
             .replace("`", "")
         val bolds = mutableListOf<String>()
