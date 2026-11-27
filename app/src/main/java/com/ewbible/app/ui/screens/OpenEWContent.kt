@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -56,8 +57,6 @@ private val BOOK_PATTERN = DISPLAY_NAMES
 private val VERSE_REGEX = Regex("(?<![A-Za-z])($BOOK_PATTERN)\\s+(\\d+):(\\d+)(?:\\s*-\\s*(\\d+))?(?!\\d)")
 private val H1_REGEX = Regex("(?is)<h1[^>]*>.*?</h1>")
 
-// FAST 1: Smaller cache = less GC. 100 chapters of Spannables = OOM / GC jank.
-// 24 = current + neighbours + recent swipes. LRU evicts the rest.
 private val parsedCache = LruCache<String, List<SpannableString>>(24)
 private val parsedCacheLock = Any()
 private fun getParsedCached(key: String): List<SpannableString>? =
@@ -65,8 +64,6 @@ private fun getParsedCached(key: String): List<SpannableString>? =
 private fun putParsedCached(key: String, value: List<SpannableString>) =
     synchronized(parsedCacheLock) { parsedCache.put(key, value) }
 
-// FAST 2: ONE parse path. Before: prewarm + produceState duplicated
-// HtmlCompat + linkify + split. Now both call parseHtml().
 private fun parseHtml(bookName: String, chapter: Int, html: String): List<SpannableString>? {
     if (html.isBlank()) return null
     return runCatching {
@@ -75,7 +72,6 @@ private fun parseHtml(bookName: String, chapter: Int, html: String): List<Spanna
             HtmlCompat.FROM_HTML_MODE_LEGACY, null, null
         )
         val spannable = parsedHtml as? Spannable ?: SpannableString(parsedHtml)
-        // Only URLSpans need recoloring - don't scan all spans twice
         spannable.getSpans(0, spannable.length, URLSpan::class.java).forEach { span ->
             spannable.setSpan(
                 ForegroundColorSpan(0xFFC9A227.toInt()),
@@ -92,7 +88,6 @@ fun prewarmOpenEWCache(bookName: String, chapter: Int, html: String) {
     if (html.isBlank()) return
     val key = "$bookName-$chapter"
     if (getParsedCached(key) != null) return
-    // Already on Dispatchers.Default from ViewModel - don't block UI
     parseHtml(bookName, chapter, html)?.let { putParsedCached(key, it) }
 }
 
@@ -156,18 +151,23 @@ private fun linkifyMatch(m: MatchResult): String {
 
 private val HEADING_LINE = Regex("""^(?:[A-Z]\.|[0-9]+\.|[a-z]\.)\s+[A-Z].{0,90}$""")
 
-// FAST 3: Bucket spans ONCE, not per-paragraph.
-// Before: for each paragraph, full.getSpans(s, e, Any) scanned ALL spans.
-// Now: getSpans() once, then assign each span to the paragraphs it overlaps.
+// FIX 2: Clone spans per paragraph. Never reuse same span object.
+private fun cloneSpan(span: Any): Any? {
+    return when (span) {
+        is URLSpan -> URLSpan(span.url)
+        is ForegroundColorSpan -> ForegroundColorSpan(span.foregroundColor)
+        is StyleSpan -> StyleSpan(span.style)
+        is RelativeSizeSpan -> RelativeSizeSpan(span.sizeChange)
+        else -> null
+    }
+}
+
 private fun splitIntoParagraphs(full: SpannableString): List<SpannableString> {
     val text = full.toString()
     if (text.isBlank()) return emptyList()
-    // Only copy the span types we actually create. Any::class.java was
-    // copying every internal HtmlCompat span too.
     val allSpans = full.getSpans(0, full.length, Any::class.java).filter {
         it is URLSpan || it is ForegroundColorSpan || it is StyleSpan || it is RelativeSizeSpan
     }
-    // Pre-compute span ranges once
     val spanRanges = allSpans.map { it to (full.getSpanStart(it) to full.getSpanEnd(it)) }
 
     val result = ArrayList<SpannableString>()
@@ -188,12 +188,14 @@ private fun splitIntoParagraphs(full: SpannableString): List<SpannableString> {
         while (e > s && text[e - 1].isWhitespace()) e--
         if (e > s) {
             val chunk = SpannableString(text.substring(s, e))
-            // Only check spans that overlap [s, e) - most spans are skipped by range check
             for ((span, range) in spanRanges) {
                 val spanS = maxOf(range.first, s)
                 val spanE = minOf(range.second, e)
                 if (spanE > spanS) {
-                    chunk.setSpan(span, spanS - s, spanE - s, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    // FIX: new instance per chunk
+                    cloneSpan(span)?.let {
+                        chunk.setSpan(it, spanS - s, spanE - s, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
                 }
             }
             val chunkText = chunk.toString()
@@ -231,14 +233,9 @@ fun OpenEWContent(
     val effectiveFontSize = fontSize.coerceIn(12f, 20f)
 
     val cacheKey = "$bookName-$chapter"
-    val listState = rememberLazyListState()
 
     LaunchedEffect(cacheKey) {
         if (bookName.isBlank() || chapter < 1) return@LaunchedEffect
-        // FIX: No scrollToItem(0) here - it suspends and blocks swipe animation.
-        // LazyColumn with new keys already resets to top.
-        // FIX: Wait for swipe to settle before prefetching, so prefetch
-        // doesn't run DURING the swipe and cause lag.
         kotlinx.coroutines.delay(300)
         val bookId = BookCatalog.id(bookName)
         val total = BookCatalog.chapters(bookId)
@@ -254,13 +251,15 @@ fun OpenEWContent(
     val cachedInstant = remember(cacheKey) { getParsedCached(cacheKey) }
 
     val paragraphs by produceState<List<SpannableString>?>(initialValue = cachedInstant, cacheKey, commentaryHtml) {
+        // FIX 3: If cached, return instantly, don't go to Default thread
         getParsedCached(cacheKey)?.let { value = it; return@produceState }
         if (commentaryHtml.isBlank()) {
             value = null
             return@produceState
         }
         value = withContext(Dispatchers.Default) {
-            parseHtml(bookName, chapter, commentaryHtml)?.also { putParsedCached(cacheKey, it) }
+            // Double-check inside background - prewarm may have finished it
+            getParsedCached(cacheKey) ?: parseHtml(bookName, chapter, commentaryHtml)?.also { putParsedCached(cacheKey, it) }
         }
     }
 
@@ -281,8 +280,6 @@ fun OpenEWContent(
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
-        // FIX: NO pointerInput here anymore.
-        // It was on the whole Column and fought LazyColumn vertical scroll = lag.
     ) {
         Text(
             text = displayTitle,
@@ -292,7 +289,6 @@ fun OpenEWContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp)
-                // FIX: Swipe ONLY on title bar - list scrolls freely now
                 .pointerInput(cacheKey) {
                     var totalDrag = 0f
                     detectHorizontalDragGestures(
@@ -320,7 +316,6 @@ fun OpenEWContent(
                 )
             }
         } else if (displayParagraphs.isEmpty()) {
-            // FIX: Never white blank. Show loading text, not empty Box.
             Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(18.dp)) {
                 Text(
                     "Loading commentary...",
@@ -329,65 +324,70 @@ fun OpenEWContent(
                 )
             }
         } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)
-            ) {
-                itemsIndexed(
-                    items = displayParagraphs,
-                    key = { index, _ -> "$displayKey-$index" }
-                ) { _, paragraph ->
-                    AndroidView(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                        factory = { ctx ->
-                            TextView(ctx).apply {
-                                setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
-                                setLineSpacing(0f, 1.45f)
-                                setTextColor(textColor.toArgb())
-                                breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
-                                hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
-                                isVerticalScrollBarEnabled = false
-                                movementMethod = object : LinkMovementMethod() {
-                                    override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
-                                        if (event.action == MotionEvent.ACTION_UP) {
-                                            val layout = widget.layout ?: return super.onTouchEvent(widget, buffer, event)
-                                            val x = event.x.toInt() - widget.totalPaddingLeft + widget.scrollX
-                                            val y = event.y.toInt() - widget.totalPaddingTop + widget.scrollY
-                                            if (y < 0 || y > layout.height) return super.onTouchEvent(widget, buffer, event)
-                                            val line = layout.getLineForVertical(y)
-                                            val offset = layout.getOffsetForHorizontal(line, x.toFloat())
-                                            val link = buffer.getSpans(offset, offset, URLSpan::class.java).firstOrNull()
-                                            if (link != null && link.url.startsWith("ew://verse")) {
-                                                runCatching {
-                                                    val query = link.url.substringAfter("?", "")
-                                                    val params = query.split("&").associate {
-                                                        val parts = it.split("=", limit = 2)
-                                                        if (parts.size == 2) parts[0] to URLDecoder.decode(parts[1], "UTF-8") else parts[0] to ""
+            // FIX 1: key() around LazyColumn = fresh listState per chapter = starts at top
+            // No scrollToItem(0) needed, no blocked swipe
+            key(displayKey) {
+                val listState = rememberLazyListState()
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)
+                ) {
+                    itemsIndexed(
+                        items = displayParagraphs,
+                        key = { index, _ -> "$displayKey-$index" }
+                    ) { _, paragraph ->
+                        AndroidView(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                            factory = { ctx ->
+                                TextView(ctx).apply {
+                                    setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
+                                    setLineSpacing(0f, 1.45f)
+                                    setTextColor(textColor.toArgb())
+                                    breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
+                                    hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
+                                    isVerticalScrollBarEnabled = false
+                                    movementMethod = object : LinkMovementMethod() {
+                                        override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
+                                            if (event.action == MotionEvent.ACTION_UP) {
+                                                val layout = widget.layout ?: return super.onTouchEvent(widget, buffer, event)
+                                                val x = event.x.toInt() - widget.totalPaddingLeft + widget.scrollX
+                                                val y = event.y.toInt() - widget.totalPaddingTop + widget.scrollY
+                                                if (y < 0 || y > layout.height) return super.onTouchEvent(widget, buffer, event)
+                                                val line = layout.getLineForVertical(y)
+                                                val offset = layout.getOffsetForHorizontal(line, x.toFloat())
+                                                val link = buffer.getSpans(offset, offset, URLSpan::class.java).firstOrNull()
+                                                if (link != null && link.url.startsWith("ew://verse")) {
+                                                    runCatching {
+                                                        val query = link.url.substringAfter("?", "")
+                                                        val params = query.split("&").associate {
+                                                            val parts = it.split("=", limit = 2)
+                                                            if (parts.size == 2) parts[0] to URLDecoder.decode(parts[1], "UTF-8") else parts[0] to ""
+                                                        }
+                                                        val b = params["book"]?.takeIf { it.isNotBlank() } ?: currentBookName
+                                                        val c = params["chapter"]?.toIntOrNull() ?: currentChapter
+                                                        val v = params["verse"]?.toIntOrNull() ?: 1
+                                                        val end = params["endVerse"]?.toIntOrNull() ?: v
+                                                        currentOnVerseClick(b, c, v, end)
                                                     }
-                                                    val b = params["book"]?.takeIf { it.isNotBlank() } ?: currentBookName
-                                                    val c = params["chapter"]?.toIntOrNull() ?: currentChapter
-                                                    val v = params["verse"]?.toIntOrNull() ?: 1
-                                                    val end = params["endVerse"]?.toIntOrNull() ?: v
-                                                    currentOnVerseClick(b, c, v, end)
+                                                    return true
                                                 }
-                                                return true
                                             }
+                                            return super.onTouchEvent(widget, buffer, event)
                                         }
-                                        return super.onTouchEvent(widget, buffer, event)
                                     }
                                 }
+                            },
+                            update = { textView ->
+                                textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
+                                textView.setTextColor(textColor.toArgb())
+                                if (textView.tag !== paragraph) {
+                                    textView.tag = paragraph
+                                    textView.text = paragraph
+                                }
                             }
-                        },
-                        update = { textView ->
-                            textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSize)
-                            textView.setTextColor(textColor.toArgb())
-                            if (textView.tag !== paragraph) {
-                                textView.tag = paragraph
-                                textView.text = paragraph
-                            }
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }
