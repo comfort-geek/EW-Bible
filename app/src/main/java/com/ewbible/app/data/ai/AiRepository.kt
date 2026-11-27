@@ -603,11 +603,11 @@ class AiRepository {
         if (actionRule.isNotBlank()) sb.append("$actionRule\n")
         sb.append("\n")
         if (bibleContext.isNotBlank()) {
-            sb.append("BIBLE CONTEXT:\n${bibleContext.take(4000)}\n\n")
+            sb.append("BIBLE CONTEXT:\n${bibleContext.take(8000)}\n\n")
             sb.append("RELEVANCE RULE: If the question is about the passage / Bible / verse / meaning / lesson / summary, even if phrased vaguely, it refers to the passage in BIBLE CONTEXT above. Answer about THAT passage. Do NOT ask which passage - you already know it from Current reading. If the question is unrelated (news, weather, programming, general knowledge, etc.), IGNORE BIBLE CONTEXT completely and answer normally. Do NOT force a Bible answer.\n\n")
         }
         if (webContext.isNotBlank()) {
-            sb.append("WEB SEARCH RESULTS (true facts as of $today):\n${webContext.take(3500)}\n\n")
+            sb.append("WEB SEARCH RESULTS (true facts as of $today):\n${webContext.take(4000)}\n\n")
         } else if (context == ContextType.NEWS) {
             sb.append("No web results were available. Answer from your general knowledge and note it may not be the very latest.\n\n")
         }
