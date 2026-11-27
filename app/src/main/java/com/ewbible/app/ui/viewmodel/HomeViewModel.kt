@@ -12,6 +12,7 @@ import com.ewbible.app.ui.screens.prewarmOpenEWCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -233,14 +234,20 @@ class HomeViewModel(
             }
         }
 
+        // FIX: Gate by tab. Before this loaded BOTH summary + commentary on every swipe,
+        // even on Bible tab. Commentary parse is heavy and stole CPU from Bible scroll.
         viewModelScope.launch {
-            bookChapterKey
+            combine(bookChapterKey, selectedTab) { bc, tab -> bc to tab }
                 .distinctUntilChanged()
-                .collectLatest { (bookId, chapter) ->
-                    loadSummary(bookId, chapter)
-                    loadCommentary(bookId, chapter)
-                    // FIX: prefetch summary too, not just commentary, so next swipe is instant
-                    prefetchSummaryForNeighbours(bookId, chapter)
+                .collectLatest { (bc, tab) ->
+                    val (bookId, chapter) = bc
+                    if (tab == "Bible") {
+                        loadSummary(bookId, chapter)
+                        prefetchSummaryForNeighbours(bookId, chapter)
+                    } else if (tab == "Open EW") {
+                        loadCommentary(bookId, chapter)
+                    }
+                    // Other tabs: load nothing, swipe stays light
                 }
         }
 
@@ -440,8 +447,6 @@ class HomeViewModel(
         }
     }
 
-    // FIXED: Cache hit must clear summaryLoading, otherwise BibleContent gate sticks on true.
-    // Also set loading synchronously before launching, so gate knows new chapter is coming.
     fun loadSummary(bookId: Int = currentBookId.value, chapter: Int = selectedChapter.value) {
         val key = "$bookId-$chapter"
         synchronized(summaryCache) { summaryCache.get(key) }?.let { cached ->
@@ -452,7 +457,6 @@ class HomeViewModel(
             return
         }
         summaryJob?.cancel()
-        // Set loading NOW, not inside the launched job, so UI holds old chapter immediately
         if (bookId == currentBookId.value && chapter == selectedChapter.value) {
             _summaryLoading.value = true
         }
@@ -476,7 +480,6 @@ class HomeViewModel(
         }
     }
 
-    // FIXED: Prefetch summary for next/prev so swipe is instant from cache
     fun prefetchSummary(bookId: Int, chapter: Int) {
         if (bookId !in 1..66) return
         if (chapter !in 1..BookCatalog.chapters(bookId)) return
@@ -585,8 +588,12 @@ class HomeViewModel(
         prefetchCommentary(BookCatalog.id(bookName), chapter)
     }
 
+    // FIX: delay preload so it never runs DURING swipe. Only runs if user stays 500ms.
     private fun preloadNextCommentary(bookId: Int, chapter: Int) {
         viewModelScope.launch(Dispatchers.IO) {
+            delay(500)
+            if (bookId != currentBookId.value || chapter != selectedChapter.value) return@launch
+            if (selectedTab.value != "Open EW") return@launch
             runCatching {
                 val max = BookCatalog.chapters(bookId)
                 val targets = mutableListOf<Pair<Int, Int>>()
