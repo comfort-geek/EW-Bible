@@ -47,6 +47,9 @@ private fun cleanSourceNumbering(text: String): String {
 
 private fun cleanMarkdownForDisplay(text: String): String {
     var t = cleanSourceNumbering(text)
+    // FIX: Remove > blockquote symbol
+    t = t.replace(Regex("(?m)^\\s*>\\s*"), "")
+    t = t.replace(">", "")
     t = t.replace("|", "")
     t = t.replace("**Bold Title:**", "").replace("**Bold Title**", "")
         .replace("Bold Title:", "").replace("Bold Title", "")
@@ -86,7 +89,6 @@ private fun cleanForCopy(text: String): String {
 private data class SourceItem(val title: String, val url: String)
 
 private fun splitSources(text: String): Pair<String, List<SourceItem>> {
-    // Find "Sources" heading in any form: **Sources**, ## Sources, Sources:, Sources
     val regexHeading = Regex("(?m)^\\s*(?:#{1,6}\\s*)?\\*\\*Sources\\*\\*\\s*:?\\s*$|^\\s*Sources\\s*:?\\s*$")
     val match = regexHeading.find(text) ?: return text to emptyList()
 
@@ -104,7 +106,6 @@ private fun splitSources(text: String): Pair<String, List<SourceItem>> {
         val shortTitle = if (cleanTitle.length > 65) cleanTitle.take(62) + "..." else cleanTitle
         sources.add(SourceItem(shortTitle, url))
     }
-    // Dedupe by DOMAIN, not full URL - so aljazeera.com shows once even with 2 different links
     return main to sources.distinctBy { domainOf(it.url) }.take(3)
 }
 
@@ -210,7 +211,9 @@ private fun MessageBubble(
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.85f)
+                // FIX: was fillMaxWidth(0.85f) which clipped on right. Use full width with end padding.
+                .fillMaxWidth()
+                .padding(end = if (isUser) 0.dp else 32.dp)
                 .background(if (isUser) gold else panel, RoundedCornerShape(12.dp))
                 .padding(12.dp)
         ) {
@@ -233,43 +236,21 @@ private fun MessageBubble(
                         fontWeight = FontWeight.Bold,
                         color = Color.Gray
                     )
+                    // FIX: Just links. No dots, no plain title, no second domain line.
                     sources.forEach { s ->
-                        Row(
+                        Text(
+                            text = domainOf(s.url),
+                            fontSize = 13.sp,
+                            lineHeight = 20.sp,
+                            color = Color(0xFF1A73E8),
+                            textDecoration = TextDecoration.Underline,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { uriHandler.openUri(s.url) }
-                                .padding(vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "• ",
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = s.title,
-                                    fontSize = 12.sp,
-                                    lineHeight = 16.sp,
-                                    color = Color(0xFF333333),
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = domainOf(s.url),
-                                    fontSize = 10.sp,
-                                    color = Color.Gray,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            Icon(
-                                imageVector = Icons.Default.OpenInNew,
-                                contentDescription = null,
-                                tint = Color.Gray,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
+                                .padding(vertical = 6.dp)
+                        )
                     }
                 }
             }
@@ -472,7 +453,8 @@ fun AiChatScreen(
                     item(key = "loading-${state.currentChatId}", contentType = "loading") {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                             Box(
-                                modifier = Modifier.fillMaxWidth(0.85f)
+                                modifier = Modifier.fillMaxWidth()
+                                    .padding(end = 32.dp)
                                     .background(panel, RoundedCornerShape(12.dp))
                                     .padding(10.dp)
                             ) {
