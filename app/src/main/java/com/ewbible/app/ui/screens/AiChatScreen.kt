@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,8 +50,6 @@ private fun cleanMarkdownForDisplay(text: String): String {
     var t = cleanSourceNumbering(text)
     t = t.replace(Regex("(?m)^\\s*>\\s*"), "")
     t = t.replace(">", "")
-    // FIX: Removed t.replace("|", "") - it was breaking tables
-    // FIX: Removed Bold Title stripping - it was deleting bold headings
     t = t.replace(Regex("(?m)^#{1,6}\\s*(.+)$"), "**$1**")
     t = t.replace("```", "")
     t = t.replace(Regex("(?m)^---\\s*$"), "")
@@ -59,15 +58,33 @@ private fun cleanMarkdownForDisplay(text: String): String {
         val last = t.lastIndexOf("**")
         if (last >= 0) t = t.removeRange(last, last + 2)
     }
+    // FIX: Protect **bold** first
     val bolds = mutableListOf<String>()
     t = Regex("\\*\\*(.+?)\\*\\*").replace(t) { match ->
         bolds.add(match.groupValues[1])
         "\u0000BOLD${bolds.size - 1}\u0000"
     }
-    t = t.replace(Regex("_(.+?)_"), "$1")
+    // FIX: Protect __bold__ too
+    val bolds2 = mutableListOf<String>()
+    t = Regex("__(.+?)__").replace(t) { match ->
+        bolds2.add(match.groupValues[1])
+        "\u0000BOLD2${bolds2.size - 1}\u0000"
+    }
+    // FIX: * bullet lines -> • bullet, so they are not mistaken for italic
+    t = t.replace(Regex("(?m)^\\s*\\*\\s+"), "• ")
+    // FIX: Single *italic* -> **bold** (this was the bug in screenshot:
+    // *Introduction to Programming Nanodegree* showed literal * *)
+    // Only match *...* on same line, not **, not bullet
+    t = Regex("(?<!\\*)\\*([^\\*\\n]+?)\\*(?!\\*)").replace(t) { "**${it.groupValues[1]}**" }
+    // FIX: _italic_ -> **bold** instead of stripping to plain text
+    t = Regex("_(.+?)_").replace(t) { "**${it.groupValues[1]}**" }
     t = t.replace("`", "")
+    // Restore protected bolds
     bolds.forEachIndexed { index, bold ->
         t = t.replace("\u0000BOLD$index\u0000", "**$bold**")
+    }
+    bolds2.forEachIndexed { index, bold ->
+        t = t.replace("\u0000BOLD2$index\u0000", "**$bold**")
     }
     t = t.replace(Regex("#+\\s*$"), "")
     return t.trim()
@@ -113,19 +130,28 @@ private fun LinkText(
     val cleanText = remember(text, isUser) { if (isUser) text else cleanMarkdownForDisplay(text) }
     val annotated = remember(cleanText, color) {
         buildAnnotatedString {
-            val regex = Regex("""\*\*(.+?)\*\*|\[([^\]]+)\]\((https?://[^)]+)\)|(https?://[^\s)]+)""")
+            // FIX: Added *italic* and _italic_ as fallback - if clean step missed one, still render it italic not literal *
+            val regex = Regex("""\*\*(.+?)\*\*|\*(.+?)\*|_(.+?)_|\[([^\]]+)\]\((https?://[^)]+)\)|(https?://[^\s)]+)""")
             var lastIndex = 0
             regex.findAll(cleanText).forEach { match ->
                 if (match.range.first > lastIndex) {
                     append(cleanText.substring(lastIndex, match.range.first))
                 }
                 val boldText = match.groups[1]?.value
-                val linkTitle = match.groups[2]?.value
-                val linkUrl = match.groups[3]?.value
-                val rawUrl = match.groups[4]?.value
+                val italicStar = match.groups[2]?.value
+                val italicUnder = match.groups[3]?.value
+                val linkTitle = match.groups[4]?.value
+                val linkUrl = match.groups[5]?.value
+                val rawUrl = match.groups[6]?.value
                 when {
                     boldText != null -> {
                         withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(boldText) }
+                    }
+                    italicStar != null -> {
+                        withStyle(SpanStyle(fontStyle = FontStyle.Italic, fontWeight = FontWeight.Bold)) { append(italicStar) }
+                    }
+                    italicUnder != null -> {
+                        withStyle(SpanStyle(fontStyle = FontStyle.Italic, fontWeight = FontWeight.Bold)) { append(italicUnder) }
                     }
                     linkTitle != null && linkUrl != null -> {
                         val start = length
@@ -235,9 +261,6 @@ fun AiChatScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
-
-    // FIX: Keep latest currentRef for send - if Bible home changes ref while AI is open,
-    // we still send the newest one, not a stale "".
     val latestRef by rememberUpdatedState(currentRef)
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -256,16 +279,12 @@ fun AiChatScreen(
         }
     }
 
-    // FIX 1: Push Bible tab ref to ChatViewModel. Bible tab is NKJV only, so only ref, no translation.
-    // This works even if parent forgets to call setBibleRef().
     LaunchedEffect(currentRef) {
         if (currentRef.isNotBlank()) {
             viewModel.setBibleRef(currentRef)
         }
     }
 
-    // FIX 2: Sync local picker from ViewModel. When you open an old chat, ViewModel resets to NKJV
-    // (ChatEntity has no translation column), so UI must show NKJV again.
     LaunchedEffect(state.currentTranslation) {
         if (selectedTranslation != state.currentTranslation) {
             selectedTranslation = state.currentTranslation
@@ -279,16 +298,11 @@ fun AiChatScreen(
     LaunchedEffect(state.chatsLoaded) {
         if (!state.chatsLoaded) return@LaunchedEffect
         if (state.currentChatId != null) return@LaunchedEffect
-        // FIX: If we came from a verse, start new chat with that verse.
-        // Don't open old chat, or the old ref will confuse the AI.
         if (currentRef.isNotBlank()) {
-            // FIX 3: Pass translation, otherwise new chat always uses ViewModel default
             viewModel.startNewChat(currentRef, selectedTranslation)
         } else if (state.chats.isNotEmpty()) {
             viewModel.openChat(state.chats.first().id)
         } else {
-            // FIX: Pass currentRef as LOW priority context, NOT as forced Bible type.
-            // Repository decides: explicit verse > news > general > currentRef (only if referred to)
             viewModel.startNewChat(currentRef, selectedTranslation)
         }
     }
@@ -337,12 +351,9 @@ fun AiChatScreen(
                     IconButton(onClick = { showHistory = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.History, null, tint = textColor) }
                     Text(titleText, color = textColor, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     Spacer(modifier = Modifier.width(8.dp))
-                    // Display only - shows what passage you came from, does NOT force Bible mode
                     if (currentRef.isNotBlank()) {
                         Text(currentRef, color = gold, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    // FIX: New chat keeps currentRef as fallback, not ""
-                    // FIX: Pass translation too
                     IconButton(onClick = { viewModel.startNewChat(latestRef, selectedTranslation) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
                 }
                 Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -351,8 +362,6 @@ fun AiChatScreen(
                         Box(
                             modifier = Modifier.weight(1f).height(32.dp).background(if (isSelected) gold else panel, shape = RoundedCornerShape(16.dp))
                                 .clickable {
-                                    // FIX 4: This was missing - picker only changed local state, AI stayed NKJV
-                                    // Now it syncs to ChatViewModel, which is used in send()
                                     selectedTranslation = t
                                     viewModel.setChatTranslation(t)
                                 }
@@ -403,9 +412,6 @@ fun AiChatScreen(
                     onClick = {
                         val q = input.trim()
                         if (q.isBlank()) return@IconButton
-                        // FIX: Pass currentRef - Repository will ignore it for news/general,
-                        // use it only for "explain this / what does this mean" etc.
-                        // send() in ChatViewModel now creates chat if needed, so question is never dropped.
                         viewModel.send(q, latestRef, selectedImage, selectedTranslation)
                         input = ""
                         selectedImage = null
