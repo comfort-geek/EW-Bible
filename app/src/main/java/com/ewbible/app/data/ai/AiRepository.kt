@@ -350,8 +350,9 @@ class AiRepository {
         return Scores(bibleScore, breakdownScore, newsScore, generalScore)
     }
 
-    // FAST: GENERAL only searches web if it really needs facts. RECOMMEND + business/money also searches.
-    // NOT forced on one side: NEWS / MIXED / factual GENERAL all can search. Pure BIBLE / BREAKDOWN / greetings do not.
+    // FIXED FOR "ASK ANYTHING": GENERAL also searches when it needs facts.
+    // User can ask anything - coding, money, jobs, news, health, etc.
+    // If it might have changed or needs a fact, search. Pure chat / Bible / greetings do not.
     private fun needsWebSearch(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): Boolean {
         val decision = decide(question, currentRef, history)
         if (decision.type == ContextType.NEWS || decision.type == ContextType.MIXED) return true
@@ -359,32 +360,20 @@ class AiRepository {
             val q = question.lowercase().trim()
             if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you")) return false
             if (q.length < 10) return false
-            if (decision.action == ActionType.RECOMMEND) {
-                val needsFresh = FACTUAL_INTENT.any { q.contains(it) }
-                    || q.contains("malawi")
-                    || q.contains("business")
-                    || q.contains("money")
-                    || q.contains("make money")
-                    || q.contains("job")
-                    || q.contains("scholarship")
-                    || q.contains("price")
-                    || q.contains("salary")
-                return needsFresh
-            }
-            return FACTUAL_INTENT.any { q.contains(it) } || q.contains("malawi")
+            // Ask-anything: any factual / how-to / recommend / compare / list question can benefit from fresh facts
+            if (decision.action == ActionType.RECOMMEND || decision.action == ActionType.COMPARE || decision.action == ActionType.LIST) return true
+            return FACTUAL_INTENT.any { q.contains(it) } || q.contains("malawi") ||
+                q.contains("how to") || q.contains("how do") || q.contains("best") ||
+                q.contains("price") || q.contains("salary") || q.contains("job") ||
+                q.contains("business") || q.contains("money") || q.contains("scholarship")
         }
         return false
     }
 
-    // CHANGED: Do NOT force basic vs advanced in the app.
-    // Always send "auto" and let Worker / RAG choose.
-    // Worker rule: default = basic, advanced only if needed.
     private fun chooseSearchDepth(question: String): String {
         return "auto"
     }
 
-    // PATCHED: RAG via Worker - TinyFish -> LangSearch -> Tavily, returns rag_context
-    // 7.5 sec total cap. RAG in Worker chooses basic vs advanced.
     private suspend fun getWebContext(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): String {
         if (!needsWebSearch(question, currentRef, history)) return ""
         val key = question.trim().lowercase()
@@ -421,15 +410,11 @@ class AiRepository {
                 if (conn.responseCode !in 200..299) return ""
                 val text = conn.inputStream.bufferedReader().readText()
                 val json = JSONObject(text)
-                // Worker tells app what RAG picked. Default to basic if Worker doesn't send it.
                 val depthPicked = json.optString("search_depth", "").ifBlank { json.optString("depth", "basic") }.ifBlank { "basic" }.lowercase()
                 val providerUsed = json.optString("provider", "").ifBlank { json.optString("search_provider", "unknown") }.ifBlank { "unknown" }.lowercase()
                 val safeDepth = if (depthPicked == "advanced") "advanced" else "basic"
-                // Let it know IN THE LINES: this header goes into the prompt so Groq / Cloudflare / Gemini know how deep the results are.
                 val headerLine = "[SEARCH: depth=$safeDepth | provider=$providerUsed]"
                 Log.d("EW_SEARCH", "$headerLine query=$query")
-                // Use rag_context directly - already formatted for Groq / Cloudflare / Gemini
-                // Worker order: TinyFish -> LangSearch -> Tavily, RAG picks basic vs advanced
                 val rag = json.optString("rag_context")
                 if (rag.isNotBlank()) {
                     val out = "$headerLine\n${rag.take(2000)}"
@@ -438,7 +423,6 @@ class AiRepository {
                     cachedAt = System.currentTimeMillis()
                     return out
                 }
-                // Fallback: old manual parsing - still include the header line
                 val sb = StringBuilder()
                 sb.append("$headerLine\n")
                 val answer = json.optString("answer")
@@ -551,7 +535,6 @@ class AiRepository {
                 }
                 return Result.failure(Exception("Could not read the image. Please try again."))
             }
-            // ORDER: 1. Groq -> 2. Cloudflare -> 3. Gemini
             for (model in remoteGroq) {
                 try {
                     sb.clear()
@@ -592,7 +575,6 @@ class AiRepository {
         } catch (e: CancellationException) { throw e }
     }
 
-    // Short question = fewer tokens = faster first token
     private fun maxTokensFor(question: String, isBreakdown: Boolean): Int {
         if (isBreakdown) return MAX_TOKENS
         return when {
@@ -622,12 +604,14 @@ class AiRepository {
             "Let the length fit the question. Simple question = short answer. Complex question = fuller answer. Always finish fully, never stop mid-sentence."
         }
 
+        // FIXED: All factual types use SAME Sources format so UI can parse it.
+        // Ask-anything: GENERAL also gets Sources when web results exist.
         val contextRule = when (context) {
             ContextType.BIBLE -> "This looks like a Bible question. Answer from Scripture, quote $translation where helpful, and end with a practical application if natural. Do not force news or a Sources section."
             ContextType.BREAKDOWN -> "This looks like a Bible breakdown request. Go verse by verse / section by section in a natural way."
-            ContextType.NEWS -> "This looks like a factual / news question. Answer ONLY from the WEB SEARCH RESULTS below. If the results do not contain the answer, say you don't have verified info and don't guess names, dates or results. If results are provided, list Sources at the end as a plain list using ONLY the titles and URLs given, like:\n**Sources**\n[Title](URL)\n[Title](URL)\nDo NOT number them. Do NOT write Source 1, Source 2, 1. or 1). Never invent a URL, title or date."
-            ContextType.GENERAL -> "This looks like a general question. Answer helpfully and directly. If WEB SEARCH RESULTS are provided below, use them for facts. Do not force Bible verses. Only list Sources if results were provided, as a plain list like [Title](URL) - do NOT number them, do NOT write Source 1, Source 2."
-            ContextType.MIXED -> "This question has MULTIPLE different parts. Answer EACH part separately under its own heading, e.g. **Part 1**, **Part 2**. For the Bible part, use Scripture. For the news/factual part, use ONLY WEB SEARCH RESULTS, never guess, and list Sources only for that part. For the general part, answer directly. Do not force Bible verses into the non-Bible parts, and do not force Sources into the Bible part."
+            ContextType.NEWS -> "This looks like a factual / news question. Answer ONLY from the WEB SEARCH RESULTS below. If the results do not contain the answer, say you don't have verified info and don't guess names, dates or results. If results are provided, end with EXACTLY this format, max 3, short titles only:\n**Sources**\n- [Short Title](URL)\n- [Short Title](URL)\nDo NOT number them. Do NOT write Source 1, Source 2, 1. or 1). Never invent a URL, title or date. Use ONLY titles and URLs from the results."
+            ContextType.GENERAL -> "This looks like a general question. Answer helpfully and directly. If WEB SEARCH RESULTS are provided below, use them for facts. Do not force Bible verses. If results were provided, end with EXACTLY this format, max 3, short titles only:\n**Sources**\n- [Short Title](URL)\n- [Short Title](URL)\nIf no results were provided, do NOT add Sources. Do NOT number them. Never invent a URL. Use ONLY titles and URLs from the results."
+            ContextType.MIXED -> "This question has MULTIPLE different parts. Answer EACH part separately under its own heading, e.g. **Part 1**, **Part 2**. For the Bible part, use Scripture. For the news/factual part, use ONLY WEB SEARCH RESULTS, never guess. At the very end, if web results were used, add EXACTLY:\n**Sources**\n- [Short Title](URL)\nMax 3. Do not force Bible verses into the non-Bible parts, and do not force Sources into the Bible part."
         }
 
         val actionRule = when (action) {
