@@ -244,13 +244,8 @@ fun OpenEWContent(
 
     val cacheKey = "$bookName-$chapter"
 
-    // FIX: DELETED prefetch LaunchedEffect here.
-    // ViewModel.preloadNextCommentary already prefetches next/prev with 500ms delay.
-    // Having this one too = parsing 2 chapters during swipe = lag.
-
     val cachedInstant = remember(cacheKey) { getParsedCached(cacheKey) }
 
-    // FIX: key = cacheKey ONLY. Don't put huge commentaryHtml string in key.
     val paragraphs by produceState<List<SpannableString>?>(initialValue = cachedInstant, cacheKey) {
         getParsedCached(cacheKey)?.let { value = it; return@produceState }
         if (commentaryHtml.isBlank()) {
@@ -335,11 +330,13 @@ fun OpenEWContent(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)
                 ) {
+                    // FIXED: contentType and key lambdas need explicit (Int, CharSequence) types
+                    // Old: contentType = { "chunk" } -> Kotlin could not infer index/it/chunkText
                     itemsIndexed(
                         items = chunked,
-                        key = { index, _ -> "$displayKey-chunk-$index" },
-                        contentType = { "chunk" }
-                    ) { _, chunkText ->
+                        key = { index: Int, _: CharSequence -> "$displayKey-chunk-$index" },
+                        contentType = { _: Int, _: CharSequence -> "chunk" }
+                    ) { _: Int, chunkText: CharSequence ->
                         AndroidView(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                             factory = { ctx ->
