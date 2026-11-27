@@ -92,7 +92,7 @@ class AiRepository {
     private val WEB_CACHE_MS = 10 * 60 * 1000L
 
     private companion object {
-        const val STYLE_RULE = "You are Ask Anything - a warm, smart friend. Talk naturally like a person. Do not mention what model you are. Do not say 'as an AI'. Match your length to the question: short question = short answer, deep question = deeper answer. Use paragraphs, headings or bullet lists only if they help clarity - do not force them. Do not force Bible verses, prayer, or a Sources section unless the question actually needs it. NEVER use tables. NEVER use the | character. NEVER use --- for a table. Use a bullet list instead of a table. If the user is just chatting, just talk back. If the user is talking about the Bible, a verse, or prayer, stay warm and simple, explain it in the flow of the story, then ask a question back. If the user asks about something that could have changed recently, use the WEB SEARCH RESULTS and do not guess."
+        const val STYLE_RULE = "You are Ask Anything - a warm, smart friend. Talk naturally like a person. Do not mention what model you are. Do not say 'as an AI'. Match your length to the question: short question = short answer, deep question = deeper answer. Write in medium paragraphs by default - 2 to 3 paragraphs, 2 to 4 sentences each, short and clear, not long full paragraphs. Sometimes, when the answer is naturally a list of things, use a bullet + explain pattern: a bullet with a bold title, then a medium paragraph of 2 to 4 sentences explaining that bullet, then the next bullet and its explain paragraph. Never leave a bullet standing alone with no explanation - every bullet must have its own explain paragraph. Use bullets only if needful - if the answer is not a list, just use medium paragraphs. Use headings only if they help clarity - do not force them. Do not force Bible verses, prayer, or a Sources section unless the question actually needs it. NEVER use tables. NEVER use the | character. NEVER use --- for a table. Use a bullet list instead of a table. If the user is just chatting, just talk back. If the user is talking about the Bible, a verse, or prayer, stay warm and simple, explain it in the flow of the story, then ask a question back. If the user asks about something that could have changed recently, use the WEB SEARCH RESULTS and do not guess."
         const val SYSTEM_MSG = STYLE_RULE
 
         val BIBLE_BOOKS = listOf(
@@ -333,8 +333,6 @@ class AiRepository {
             val searchUrl = URL(PROXY_BASE + "search")
             conn = (searchUrl.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
-                // BROWSER HEADERS - proven in Pydroid, STATUS 200
-                // DO NOT add Accept-Encoding - it returns gzip/br garbage
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Accept", "application/json, text/plain, */*")
                 setRequestProperty("Accept-Language", "en-US,en;q=0.9")
@@ -378,7 +376,6 @@ class AiRepository {
             val safeDepth = if (depthPicked == "advanced") "advanced" else "basic"
             val headerLine = "[SEARCH: depth=$safeDepth | provider=$providerUsed]"
             Log.d("EW_SEARCH", "$headerLine query=$query len=${text.length}")
-            // Worker returns rag_context like in Pydroid test: "Use the following... [1] Title: ... URL: ..."
             val rag = json.optString("rag_context")
             if (rag.isNotBlank()) {
                 val out = "$headerLine\n${rag.take(3500)}"
@@ -387,7 +384,6 @@ class AiRepository {
                 cachedAt = System.currentTimeMillis()
                 return out
             }
-            // Fallback: only results[] without rag_context
             val sb = StringBuilder()
             sb.append("$headerLine\n")
             val answer = json.optString("answer")
