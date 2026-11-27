@@ -235,7 +235,11 @@ fun OpenEWContent(
 
     LaunchedEffect(cacheKey) {
         if (bookName.isBlank() || chapter < 1) return@LaunchedEffect
-        listState.scrollToItem(0)
+        // FIX: No scrollToItem(0) here - it suspends and blocks swipe animation.
+        // LazyColumn with new keys already resets to top.
+        // FIX: Wait for swipe to settle before prefetching, so prefetch
+        // doesn't run DURING the swipe and cause lag.
+        kotlinx.coroutines.delay(300)
         val bookId = BookCatalog.id(bookName)
         val total = BookCatalog.chapters(bookId)
         if (chapter < total) onPrefetchChapter(bookName, chapter + 1)
@@ -250,7 +254,6 @@ fun OpenEWContent(
     val cachedInstant = remember(cacheKey) { getParsedCached(cacheKey) }
 
     val paragraphs by produceState<List<SpannableString>?>(initialValue = cachedInstant, cacheKey, commentaryHtml) {
-        // FAST 4: Don't re-parse if prewarm already did it.
         getParsedCached(cacheKey)?.let { value = it; return@produceState }
         if (commentaryHtml.isBlank()) {
             value = null
@@ -261,10 +264,6 @@ fun OpenEWContent(
         }
     }
 
-    // FAST 5: NEVER mutate state during composition.
-    // Before: if (paragraphs != null) lastGoodParagraphs = paragraphs
-    // That triggers a recomposition during composition = jank / loop.
-    // Now: update lastGood in LaunchedEffect.
     var lastGoodParagraphs by remember { mutableStateOf<List<SpannableString>?>(null) }
     var lastGoodKey by remember { mutableStateOf("") }
     LaunchedEffect(paragraphs, cacheKey) {
@@ -282,21 +281,8 @@ fun OpenEWContent(
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
-            .pointerInput(cacheKey) {
-                var totalDrag = 0f
-                detectHorizontalDragGestures(
-                    onDragStart = { totalDrag = 0f },
-                    onDragCancel = { totalDrag = 0f },
-                    onDragEnd = {
-                        when {
-                            totalDrag < -120f -> currentOnNext()
-                            totalDrag > 120f -> currentOnPrev()
-                        }
-                        totalDrag = 0f
-                    },
-                    onHorizontalDrag = { _, dragAmount -> totalDrag += dragAmount }
-                )
-            }
+        // FIX: NO pointerInput here anymore.
+        // It was on the whole Column and fought LazyColumn vertical scroll = lag.
     ) {
         Text(
             text = displayTitle,
@@ -306,6 +292,22 @@ fun OpenEWContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp)
+                // FIX: Swipe ONLY on title bar - list scrolls freely now
+                .pointerInput(cacheKey) {
+                    var totalDrag = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { totalDrag = 0f },
+                        onDragCancel = { totalDrag = 0f },
+                        onDragEnd = {
+                            when {
+                                totalDrag < -120f -> currentOnNext()
+                                totalDrag > 120f -> currentOnPrev()
+                            }
+                            totalDrag = 0f
+                        },
+                        onHorizontalDrag = { _, dragAmount -> totalDrag += dragAmount }
+                    )
+                }
         )
 
         if (hasError && displayParagraphs.isEmpty()) {
@@ -318,7 +320,14 @@ fun OpenEWContent(
                 )
             }
         } else if (displayParagraphs.isEmpty()) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth())
+            // FIX: Never white blank. Show loading text, not empty Box.
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(18.dp)) {
+                Text(
+                    "Loading commentary...",
+                    color = textColor.copy(alpha = 0.4f),
+                    fontSize = effectiveFontSize.sp
+                )
+            }
         } else {
             LazyColumn(
                 state = listState,
