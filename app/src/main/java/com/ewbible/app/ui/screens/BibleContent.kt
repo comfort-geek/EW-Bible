@@ -183,9 +183,6 @@ fun BibleContent(
     val maxChapter = remember(safeBookId) { BookCatalog.chapters(safeBookId) }
     val safeChapter = selectedChapter.coerceIn(1, maxChapter)
 
-    // FIX: Hold last COMPLETE chapter. Never show new verses with old/missing summary.
-    // Complete = verses are for this chapter AND summary load finished
-    // AND (summary is for this chapter OR there is truly no summary).
     var lastBook by remember { mutableStateOf(safeBookId) }
     var lastChapter by remember { mutableStateOf(safeChapter) }
     var lastVerses by remember { mutableStateOf<List<VerseEntity>>(emptyList()) }
@@ -198,8 +195,6 @@ fun BibleContent(
     val summaryIsForThisChapter = summary != null &&
         summary.bookId == safeBookId && summary.chapter == safeChapter
 
-    // If summaryLoading == false, DB finished. If summary is still null then,
-    // this chapter really has no summary - don't wait forever.
     val isComplete = versesAreForThisChapter && !summaryLoading &&
         (summaryIsForThisChapter || summary == null)
 
@@ -211,8 +206,6 @@ fun BibleContent(
         lastHighlights = currentHighlightMap
     }
 
-    // First ever load: no last chapter yet, show whatever we have so screen isn't blank.
-    // After that: always show last complete chapter until new one is complete.
     val hasLast = lastVerses.isNotEmpty()
     val displayBook = if (hasLast) lastBook else safeBookId
     val displayChapter = if (hasLast) lastChapter else safeChapter
@@ -222,72 +215,94 @@ fun BibleContent(
     val showSummary = summaryToShow != null &&
         summaryToShow.bookId == displayBook && summaryToShow.chapter == displayChapter
 
-    LaunchedEffect(displayBook, displayChapter) {
-        if (listState.firstVisibleItemIndex != 0 || listState.firstVisibleItemScrollOffset != 0) {
-            listState.scrollToItem(0)
-        }
+    // FIX: Don't scrollToItem in LaunchedEffect on every chapter change.
+    // It suspends and freezes the swipe. LazyColumn with key() below
+    // already recreates and starts at top.
+    // Keep it only if user manually scrolled and chapter didn't change - removed.
+
+    // Book name for header - from your catalog order 1..66
+    val displayBookName = remember(displayBook) {
+        runCatching { BookCatalog.allDisplayNames()[displayBook - 1] }.getOrDefault("Book $displayBook")
     }
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .navigationBarsPadding()
-            .swipeChapter(
-                onNextChapter = onNextChapter,
-                onPreviousChapter = onPreviousChapter
-            )
+        // FIX: NO swipeChapter here anymore. Was covering whole screen = lag.
     ) {
         val isWide = maxWidth > 600.dp
         val horizontalPadding = if (isWide) 32.dp else 18.dp
 
-        key(displayBook, displayChapter) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // FIX: Swipe ONLY on this header. Verses scroll freely below.
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .align(Alignment.TopCenter)
-                    .widthIn(max = 720.dp)
+                    .fillMaxWidth()
+                    .swipeChapter(
+                        onNextChapter = onNextChapter,
+                        onPreviousChapter = onPreviousChapter
+                    )
+                    .padding(start = horizontalPadding, end = horizontalPadding, top = 8.dp, bottom = 8.dp)
             ) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize().padding(horizontal = horizontalPadding),
-                    contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp)
+                Text(
+                    text = "$displayBookName $displayChapter",
+                    color = textColor,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp
+                )
+            }
+
+            key(displayBook, displayChapter) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .align(Alignment.CenterHorizontally)
+                        .widthIn(max = 720.dp)
                 ) {
-                    if (showSummary) {
-                        item(key = "summary-$displayBook-$displayChapter", contentType = "summary") {
-                            Card(
-                                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                                colors = CardDefaults.cardColors(containerColor = panel),
-                            ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(summaryToShow!!.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    Text(summaryToShow.whatHappened ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    Text(summaryToShow.application ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize().padding(horizontal = horizontalPadding),
+                        contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp)
+                    ) {
+                        if (showSummary) {
+                            item(key = "summary-$displayBook-$displayChapter", contentType = "summary") {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = panel),
+                                ) {
+                                    Column(modifier = Modifier.padding(16.dp)) {
+                                        Text("Summary", color = gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(summaryToShow!!.summary, color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("What happened", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Text(summaryToShow.whatHappened ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("Application", color = gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Text(summaryToShow.application ?: "", color = textColor, fontSize = fontSizeSp, lineHeight = lineHeight)
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    items(
-                        items = versesToShow,
-                        key = { it.verse },
-                        contentType = { "verse" }
-                    ) { verse ->
-                        VerseRow(
-                            verse = verse,
-                            highlight = highlightsToShow[verse.verse] ?: Color.Transparent,
-                            fontSizeSp = fontSizeSp,
-                            lineHeight = lineHeight,
-                            gold = gold,
-                            textColor = textColor,
-                            onVerseClick = onVerseClick,
-                            onVerseLongClick = onVerseLongClick
-                        )
+                        items(
+                            items = versesToShow,
+                            key = { it.verse },
+                            contentType = { "verse" }
+                        ) { verse ->
+                            VerseRow(
+                                verse = verse,
+                                highlight = highlightsToShow[verse.verse] ?: Color.Transparent,
+                                fontSizeSp = fontSizeSp,
+                                lineHeight = lineHeight,
+                                gold = gold,
+                                textColor = textColor,
+                                onVerseClick = onVerseClick,
+                                onVerseLongClick = onVerseLongClick
+                            )
+                        }
                     }
                 }
             }
