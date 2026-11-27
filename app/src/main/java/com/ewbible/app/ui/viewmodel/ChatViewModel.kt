@@ -100,9 +100,6 @@ class ChatViewModel(
         sendJob?.cancel()
         sendJob = null
         viewModelScope.launch {
-            // FIX: NEVER force type=bible from currentRef.
-            // Type stays general. currentRef is only stored as fallback.
-            // AiRepository decides: explicit verse > news > general > currentRef
             val ref = context.ifBlank { currentRef }
             val safeType = "general"
             val id = withContext(Dispatchers.IO) {
@@ -137,8 +134,6 @@ class ChatViewModel(
     }
 
     fun startNewChat(currentRef: String) {
-        // FIX: Was type = if blank general else bible -> forced Bible for all.
-        // Now ALWAYS general, currentRef only as fallback.
         startNewChat(title = "New Chat", type = "general", context = currentRef, currentRef = currentRef)
     }
 
@@ -154,8 +149,6 @@ class ChatViewModel(
             val local = withContext(Dispatchers.IO) {
                 _state.value.chats.find { it.id == chatId } ?: bibleDao.getChatById(chatId)
             }
-            // FIX: Don't infer bible type from ref. Old chats with ref were forced bible before.
-            // New chats are always general. Keep stored type if present, else general.
             val type = chatTypes[chatId] ?: "general"
             if (messages.isNotEmpty()) {
                 _state.update {
@@ -292,10 +285,6 @@ class ChatViewModel(
             }
         }
 
-        // FIX: Don't gate on chatType == bible. That was the forcing.
-        // Build bibleContext from currentRef / explicit verse, let AiRepository decide
-        // to use it or ignore it. AiRepository.buildPrompt() only uses bibleContext
-        // when its own decision is BIBLE / BREAKDOWN.
         val bibleContext = withContext(Dispatchers.IO) {
             buildBibleContext(question, currentRef.ifBlank { chatContext })
         }
@@ -406,8 +395,10 @@ class ChatViewModel(
         }
     }
 
+    // FIXED: Stronger Bible RAG
     private suspend fun buildBibleContext(question: String, currentRef: String): String {
         return try {
+            // A. EXPLICIT VERSE: John 3:16 -> 5 verses + commentary + summary
             val match = VERSE_REGEX.find(question)
             if (match != null) {
                 val bookName = match.groupValues[1].trim()
@@ -415,13 +406,33 @@ class ChatViewModel(
                 val verse = match.groupValues[3].toIntOrNull() ?: 1
                 val cacheKey = "v:$bookName-$chapter:$verse"
                 contextCache[cacheKey]?.let { return it }
+
                 val bookId = BookCatalog.id(bookName)
-                val text = bibleDao.getVerse(bookId, chapter, verse)?.text ?: ""
+                val from = (verse - 2).coerceAtLeast(1)
+                val to = verse + 2
+                val verses = bibleDao.getVerseRange(bookId, chapter, from, to)
+                    .joinToString("\n") { "${it.verse}. ${it.text}" }
+                val targetText = bibleDao.getVerse(bookId, chapter, verse)?.text ?: ""
                 val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
-                val result = "USER ASKED ABOUT $bookName $chapter:$verse\nNKJV TEXT: $text\nSUMMARY: $summary\n"
+                val commentary = runCatching {
+                    bibleDao.getCommentaryCompressed(bookId, chapter)?.let {
+                        CommentaryHelper.decompress(it)
+                    } ?: ""
+                }.getOrDefault("").take(2500)
+
+                val result = """
+                    USER ASKED ABOUT $bookName $chapter:$verse
+                    TARGET VERSE ($verse): $targetText
+                    CONTEXT ($from-$to):
+                    $verses
+                    CHAPTER SUMMARY: $summary
+                    COMMENTARY: $commentary
+                """.trimIndent()
                 contextCache[cacheKey] = result
                 return result
             }
+
+            // B. CURRENT REF: John 1 -> FULL chapter 1-60, not just 1-30
             if (currentRef.isBlank()) return ""
             val cacheKey = "c:$currentRef"
             contextCache[cacheKey]?.let { return it }
@@ -430,14 +441,23 @@ class ChatViewModel(
             val bookName = parts.dropLast(1).joinToString(" ")
             if (bookName.isBlank()) return ""
             val bookId = BookCatalog.id(bookName)
-            val chapterText = bibleDao.getVerseRange(bookId, chapter, 1, 30)
+
+            val chapterText = bibleDao.getVerseRange(bookId, chapter, 1, 60)
                 .joinToString("\n") { "${it.verse}. ${it.text}" }
             val summary = bibleDao.getSummary(bookId, chapter)?.summary ?: ""
-            val compressed = bibleDao.getCommentaryCompressed(bookId, chapter)
             val commentary = runCatching {
-                compressed?.let { CommentaryHelper.decompress(it) } ?: ""
-            }.getOrDefault("").take(3000)
-            val result = "USER IS READING $bookName $chapter (NKJV):\n$chapterText\n\nSUMMARY: $summary\nCOMMENTARY: $commentary\n"
+                bibleDao.getCommentaryCompressed(bookId, chapter)?.let {
+                    CommentaryHelper.decompress(it)
+                } ?: ""
+            }.getOrDefault("").take(2500)
+
+            val result = """
+                USER IS READING $bookName $chapter (NKJV):
+                $chapterText
+
+                CHAPTER SUMMARY: $summary
+                COMMENTARY: $commentary
+            """.trimIndent()
             contextCache[cacheKey] = result
             result
         } catch (e: Exception) {
