@@ -296,7 +296,6 @@ class AiRepository {
         if (isWorldNewsQuery(q)) return true
         val decision = decide(question, currentRef, history)
         if (decision.type == ContextType.BIBLE || decision.type == ContextType.BREAKDOWN) return false
-        // UNLOCKED: for NEWS, MIXED and GENERAL, always try web
         return true
     }
 
@@ -322,8 +321,6 @@ class AiRepository {
             val searchUrl = URL(PROXY_BASE + "search")
             conn = (searchUrl.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
-                // BROWSER HEADERS - proven in Pydroid, STATUS 200
-                // DO NOT add Accept-Encoding - it returns gzip/br garbage
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Accept", "application/json, text/plain, */*")
                 setRequestProperty("Accept-Language", "en-US,en;q=0.9")
@@ -367,7 +364,6 @@ class AiRepository {
             val safeDepth = if (depthPicked == "advanced") "advanced" else "basic"
             val headerLine = "[SEARCH: depth=$safeDepth | provider=$providerUsed]"
             Log.d("EW_SEARCH", "$headerLine query=$query len=${text.length}")
-            // Worker returns rag_context like in Pydroid test: "Use the following... [1] Title: ... URL: ..."
             val rag = json.optString("rag_context")
             if (rag.isNotBlank()) {
                 val out = "$headerLine\n${rag.take(3500)}"
@@ -376,7 +372,6 @@ class AiRepository {
                 cachedAt = System.currentTimeMillis()
                 return out
             }
-            // Fallback: only results[] without rag_context
             val sb = StringBuilder()
             sb.append("$headerLine\n")
             val answer = json.optString("answer")
@@ -565,9 +560,9 @@ class AiRepository {
         val contextRule = when (context) {
             ContextType.BIBLE -> "This looks like a Bible question. Answer from Scripture, quote $translation where helpful, and end with a practical application if natural. Do not force news or a Sources section."
             ContextType.BREAKDOWN -> "This looks like a Bible breakdown request. Go verse by verse / section by section in a natural way."
-            ContextType.NEWS -> "This looks like a factual / news question. Use the WEB SEARCH RESULTS below if they are provided. If no results are provided, still answer helpfully from your general knowledge and say this may have changed, check for latest update. Do not refuse. If results are provided, end with EXACTLY this format, max 3, short titles only:\n**Sources**\n- [Short Title](URL)\n- [Short Title](URL)\nDo NOT number them. Do NOT write Source 1, Source 2, 1. or 1). Never invent a URL, title or date. Use ONLY titles and URLs from the results."
-            ContextType.GENERAL -> "This looks like a general question. Answer helpfully and directly. If WEB SEARCH RESULTS are provided below, use them for facts. Do not force Bible verses. If results were provided, end with EXACTLY this format, max 3, short titles only:\n**Sources**\n- [Short Title](URL)\n- [Short Title](URL)\nIf no results were provided, do NOT add Sources. Do NOT number them. Never invent a URL. Use ONLY titles and URLs from the results."
-            ContextType.MIXED -> "This question has MULTIPLE different parts. Answer EACH part separately under its own heading, e.g. **Part 1**, **Part 2**. For the Bible part, use Scripture. For the news/factual part, use ONLY WEB SEARCH RESULTS if provided, otherwise answer from general knowledge and note it may have changed. At the very end, if web results were used, add EXACTLY:\n**Sources**\n- [Short Title](URL)\nMax 3. Do not force Bible verses into the non-Bible parts, and do not force Sources into the Bible part."
+            ContextType.NEWS -> "This looks like a factual / news question. Use the WEB SEARCH RESULTS below if they are provided. If no results are provided, still answer helpfully from your general knowledge and say this may have changed, check for latest update. Do not refuse. Do NOT add a Sources section unless the user explicitly asks for links or sources. Never invent a URL, title or date. Use ONLY titles and URLs from the results if user asks for them."
+            ContextType.GENERAL -> "This looks like a general question. Answer helpfully and directly. If WEB SEARCH RESULTS are provided below, use them for facts. Do not force Bible verses. Do NOT add a Sources section unless the user explicitly asks for links or sources. Never invent a URL. Use ONLY titles and URLs from the results if user asks for them."
+            ContextType.MIXED -> "This question has MULTIPLE different parts. Answer EACH part separately under its own heading, e.g. **Part 1**, **Part 2**. For the Bible part, use Scripture. For the news/factual part, use ONLY WEB SEARCH RESULTS if provided, otherwise answer from general knowledge and note it may have changed. Do NOT add a Sources section unless the user explicitly asks for links or sources. Do not force Bible verses into the non-Bible parts."
         }
         val actionRule = when (action) {
             ActionType.RECOMMEND -> "ACTION: RECOMMEND. Recommend the user on some ideas to get things right and solved. Give 3 to 5 practical ideas, explain briefly why each one works, then end with 1 clear best pick and the first step to take. Keep it practical, not theoretical."
