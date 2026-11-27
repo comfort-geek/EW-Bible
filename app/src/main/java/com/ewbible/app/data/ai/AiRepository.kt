@@ -41,7 +41,49 @@ class AiRepository {
     private var remoteCloudflare = FALLBACK_CLOUDFLARE
     private var remoteVersion = 3
 
-    private val STREAM_TIMEOUT_MS = 30000L
+    // --- AI MODELS MEMORY ---
+    // Remembers last working model per provider so next chat starts with the one that worked.
+    private var lastWorkingGemini: String? = null
+    private var lastWorkingGroq: String? = null
+    private var lastWorkingCloudflare: String? = null
+    private var lastWorkingLoaded = false
+
+    private fun orderedModels(models: List<String>, lastWorking: String?): List<String> {
+        if (lastWorking == null || !models.contains(lastWorking)) return models
+        return listOf(lastWorking) + models.filter { it != lastWorking }
+    }
+
+    private fun rememberWorkingModel(provider: String, model: String) {
+        when (provider) {
+            "Gemini" -> if (lastWorkingGemini != model) lastWorkingGemini = model
+            "Groq" -> if (lastWorkingGroq != model) lastWorkingGroq = model
+            "Cloudflare" -> if (lastWorkingCloudflare != model) lastWorkingCloudflare = model
+        }
+    }
+
+    private fun loadModelsMemory(prefs: android.content.SharedPreferences) {
+        if (lastWorkingLoaded) return
+        lastWorkingLoaded = true
+        try {
+            lastWorkingGemini = prefs.getString("last_working_gemini", null)
+            lastWorkingGroq = prefs.getString("last_working_groq", null)
+            lastWorkingCloudflare = prefs.getString("last_working_cloudflare", null)
+        } catch (_: Exception) { }
+    }
+
+    private fun saveModelsMemory(context: Context) {
+        try {
+            val prefs = context.getSharedPreferences("ew_models", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("last_working_gemini", lastWorkingGemini)
+                .putString("last_working_groq", lastWorkingGroq)
+                .putString("last_working_cloudflare", lastWorkingCloudflare)
+                .apply()
+        } catch (_: Exception) { }
+    }
+
+    // FIX: was 30000 - cut answers mid-sentence
+    private val STREAM_TIMEOUT_MS = 90000L
     private val MAX_TOKENS = 4096
     private val SEARCH_TIMEOUT_MS = 7500L
 
@@ -110,6 +152,7 @@ class AiRepository {
 
     suspend fun refreshModels(context: Context) {
         val prefs = context.getSharedPreferences("ew_models", Context.MODE_PRIVATE)
+        loadModelsMemory(prefs)
         try {
             val savedVersion = prefs.getInt("version", 3)
             val savedGemini = prefs.getString("gemini", null)
@@ -462,6 +505,11 @@ class AiRepository {
         val basePrompt = buildPrompt(question, currentRef, history, bibleContext, translation, webContext, isBreakdown, context, decision.action)
         val errors = mutableListOf<String>()
 
+        // Models memory: last working model goes first, so we don't retry dead models every time
+        val groqModels = orderedModels(remoteGroq, lastWorkingGroq)
+        val cfModels = orderedModels(remoteCloudflare, lastWorkingCloudflare)
+        val geminiModels = orderedModels(remoteGemini, lastWorkingGemini)
+
         suspend fun tryOne(provider: String, model: String, stream: Flow<String>): Boolean {
             var gotAnything = false
             try {
@@ -471,11 +519,17 @@ class AiRepository {
                     }
                     true
                 } ?: false
-                if (gotAnything) return true
+                if (gotAnything) {
+                    rememberWorkingModel(provider, model)
+                    return true
+                }
                 return false
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                if (gotAnything) return true
+                if (gotAnything) {
+                    rememberWorkingModel(provider, model)
+                    return true
+                }
                 errors.add("$provider $model: ${e.message}")
                 if (provider == "Gemini") CrashReporter.geminiLog("Gemini $model failed: ${e.message}")
                 else CrashReporter.groqLog("$provider $model failed: ${e.message}")
@@ -484,20 +538,20 @@ class AiRepository {
         }
 
         if (image != null) {
-            for (model in remoteGemini) {
-                if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, image))) return@flow
+            for (model in geminiModels) {
+                if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, image, question, isBreakdown))) return@flow
             }
             emit("Could not read the image. Please try again.")
             return@flow
         }
-        for (model in remoteGroq) {
+        for (model in groqModels) {
             if (tryOne("Groq", model, tryGroqStreaming(model, basePrompt, isBreakdown, question))) return@flow
         }
-        for (model in remoteCloudflare) {
+        for (model in cfModels) {
             if (tryOne("Cloudflare", model, tryCloudflareStreaming(model, basePrompt, isBreakdown, question))) return@flow
         }
-        for (model in remoteGemini) {
-            if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, null, question))) return@flow
+        for (model in geminiModels) {
+            if (tryOne("Gemini", model, tryGeminiStreaming(model, basePrompt, null, question, isBreakdown))) return@flow
         }
         if (errors.isNotEmpty() && errors.all { it.contains("429") }) {
             emit("Free daily limit reached for today. Please try again tomorrow.")
@@ -513,55 +567,60 @@ class AiRepository {
         val isBreakdown = context == ContextType.BREAKDOWN
         val fullPrompt = buildPrompt(prompt, "", emptyList(), "", "NKJV", webContext, isBreakdown, context, decision.action)
         val sb = StringBuilder()
+
+        val groqModels = orderedModels(remoteGroq, lastWorkingGroq)
+        val cfModels = orderedModels(remoteCloudflare, lastWorkingCloudflare)
+        val geminiModels = orderedModels(remoteGemini, lastWorkingGemini)
+
         return try {
             var lastErr: Exception? = null
             if (image != null) {
-                for (model in remoteGemini) {
+                for (model in geminiModels) {
                     try {
                         sb.clear()
                         val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                            tryGeminiStreaming(model, fullPrompt, image, prompt).collect { sb.append(it) }
+                            tryGeminiStreaming(model, fullPrompt, image, prompt, isBreakdown).collect { sb.append(it) }
                             true
                         } ?: false
-                        if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                        if (sb.isNotBlank() && completed) { rememberWorkingModel("Gemini", model); return Result.success(cleanMarkdown(sb.toString()).trim()) }
                         if (sb.isNotBlank() && !completed) continue
                     } catch (e: CancellationException) { throw e }
                     catch (e: Exception) { lastErr = e; sb.clear() }
                 }
                 return Result.failure(Exception("Could not read the image. Please try again."))
             }
-            for (model in remoteGroq) {
+            for (model in groqModels) {
                 try {
                     sb.clear()
                     val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                         tryGroqStreaming(model, fullPrompt, isBreakdown, prompt).collect { sb.append(it) }
                         true
                     } ?: false
-                    if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                    if (sb.isNotBlank() && completed) { rememberWorkingModel("Groq", model); return Result.success(cleanMarkdown(sb.toString()).trim()) }
                     if (sb.isNotBlank() && !completed) continue
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { lastErr = e; sb.clear() }
             }
-            for (model in remoteCloudflare) {
+            for (model in cfModels) {
                 try {
                     sb.clear()
                     val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
                         tryCloudflareStreaming(model, fullPrompt, isBreakdown, prompt).collect { sb.append(it) }
                         true
                     } ?: false
-                    if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                    if (sb.isNotBlank() && completed) { rememberWorkingModel("Cloudflare", model); return Result.success(cleanMarkdown(sb.toString()).trim()) }
                     if (sb.isNotBlank() && !completed) continue
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { lastErr = e; sb.clear() }
             }
-            for (model in remoteGemini) {
+            for (model in geminiModels) {
                 try {
                     sb.clear()
                     val completed = withTimeoutOrNull(STREAM_TIMEOUT_MS) {
-                        tryGeminiStreaming(model, fullPrompt, null, prompt).collect { sb.append(it) }
+                        tryGeminiStreaming(model, fullPrompt, null, prompt, isBreakdown).collect { sb.append(it) }
                         true
                     } ?: false
-                    if (sb.isNotBlank() && completed) return Result.success(cleanMarkdown(sb.toString()).trim())
+                    if (sb.isNotBlank() && completed) { rememberWorkingModel("Gemini", model); return Result.success(cleanMarkdown(sb.toString()).trim()) }
                     if (sb.isNotBlank() && !completed) continue
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { lastErr = e; sb.clear() }
@@ -570,12 +629,17 @@ class AiRepository {
         } catch (e: CancellationException) { throw e }
     }
 
+    // Call this from ViewModel onStop / after a successful chat to persist memory to disk
+    fun persistModelsMemory(context: Context) {
+        saveModelsMemory(context)
+    }
+
     private fun maxTokensFor(question: String, isBreakdown: Boolean): Int {
         if (isBreakdown) return MAX_TOKENS
         return when {
-            question.length < 20 -> 512
-            question.length < 60 -> 1024
-            question.length < 150 -> 2048
+            question.length < 20 -> 2048
+            question.length < 60 -> 2048
+            question.length < 150 -> 3072
             else -> MAX_TOKENS
         }
     }
@@ -642,6 +706,8 @@ class AiRepository {
 
     private fun cleanMarkdown(text: String): String {
         var cleaned = text
+            .replace(Regex("(?m)^\\s*>\\s*"), "")
+            .replace(">", "")
             .replace("|", "")
             .replace("---", "")
             .replace("**Bold Title:**", "")
@@ -659,6 +725,8 @@ class AiRepository {
 
     private fun cleanStreamingChunk(text: String): String {
         return text
+            .replace(Regex("(?m)^\\s*>\\s*"), "")
+            .replace(">", "")
             .replace("|", "")
             .replace("---", "")
             .replace("**Bold Title:**", "")
@@ -685,7 +753,7 @@ class AiRepository {
         } catch (_: Exception) { null }
     }
 
-    private fun tryGeminiStreaming(model: String, prompt: String, image: Bitmap?, question: String = ""): Flow<String> = flow {
+    private fun tryGeminiStreaming(model: String, prompt: String, image: Bitmap?, question: String = "", isBreakdown: Boolean = false): Flow<String> = flow {
         var conn: HttpURLConnection? = null
         try {
             val url = URL(PROXY_BASE + "gemini?model=$model")
@@ -695,7 +763,7 @@ class AiRepository {
                 setRequestProperty(PROXY_HEADER, PROXY_VALUE)
                 setRequestProperty("User-Agent", USER_AGENT)
                 connectTimeout = 2000
-                readTimeout = 30000
+                readTimeout = 90000
                 doOutput = true
             }
             val parts = JSONArray().put(JSONObject().put("text", prompt))
@@ -705,7 +773,7 @@ class AiRepository {
             }
             val body = JSONObject()
                 .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
-                .put("generationConfig", JSONObject().put("maxOutputTokens", maxTokensFor(question, false)).put("temperature", 0.7))
+                .put("generationConfig", JSONObject().put("maxOutputTokens", maxTokensFor(question, isBreakdown)).put("temperature", 0.7))
                 .toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             if (conn.responseCode !in 200..299) throw Exception("Gemini ${conn.responseCode}")
@@ -743,7 +811,7 @@ class AiRepository {
                 setRequestProperty(PROXY_HEADER, PROXY_VALUE)
                 setRequestProperty("User-Agent", USER_AGENT)
                 connectTimeout = 2000
-                readTimeout = 30000
+                readTimeout = 90000
                 doOutput = true
             }
             val messages = JSONArray()
@@ -789,7 +857,7 @@ class AiRepository {
                 setRequestProperty(PROXY_HEADER, PROXY_VALUE)
                 setRequestProperty("User-Agent", USER_AGENT)
                 connectTimeout = 2000
-                readTimeout = 30000
+                readTimeout = 90000
                 doOutput = true
             }
             val messages = JSONArray()
