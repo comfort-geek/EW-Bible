@@ -75,6 +75,36 @@ private fun cleanForCopy(text: String): String {
         .replace("*", "")
 }
 
+// --- SOURCES: parse + organize ---
+private data class SourceItem(val title: String, val url: String)
+
+private fun splitSources(text: String): Pair<String, List<SourceItem>> {
+    // Find "Sources" heading in any form: **Sources**, ## Sources, Sources:, Sources
+    val regexHeading = Regex("(?m)^\\s*(?:#{1,6}\\s*)?\\*\\*Sources\\*\\*\\s*:?\\s*$|^\\s*Sources\\s*:?\\s*$")
+    val match = regexHeading.find(text) ?: return text to emptyList()
+
+    val main = text.substring(0, match.range.first).trim()
+    val raw = text.substring(match.range.last + 1).trim()
+
+    val sources = mutableListOf<SourceItem>()
+    val regex = Regex("""\[([^\]]+)\]\((https?://[^)]+)\)|(https?://[^\s)]+)""")
+    regex.findAll(raw).forEach { m ->
+        val title = m.groups[1]?.value?.trim()
+        val url = m.groups[2]?.value ?: m.groups[3]?.value ?: return@forEach
+        val cleanTitle = if (!title.isNullOrBlank()) title else url
+            .removePrefix("https://").removePrefix("www.")
+            .substringBefore("/").take(30)
+        val shortTitle = if (cleanTitle.length > 65) cleanTitle.take(62) + "..." else cleanTitle
+        sources.add(SourceItem(shortTitle, url))
+    }
+    return main to sources.distinctBy { it.url }.take(3)
+}
+
+private fun domainOf(url: String): String {
+    return url.removePrefix("https://").removePrefix("http://")
+        .removePrefix("www.").substringBefore("/").substringBefore("?")
+}
+
 @Composable
 private fun LinkText(
     text: String,
@@ -159,7 +189,13 @@ private fun MessageBubble(
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
     val cleanTextForCopy = remember(text) { cleanForCopy(text) }
+
+    val (mainText, sources) = remember(text, isUser) {
+        if (isUser) text to emptyList() else splitSources(text)
+    }
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
@@ -168,14 +204,67 @@ private fun MessageBubble(
             modifier = Modifier
                 .fillMaxWidth(0.85f)
                 .background(if (isUser) gold else panel, RoundedCornerShape(12.dp))
-                .padding(10.dp)
+                .padding(12.dp)
         ) {
-            LinkText(
-                text = text,
-                color = if (isUser) Color.White else textColor,
-                modifier = Modifier.fillMaxWidth(),
-                isUser = isUser
-            )
+            Column {
+                LinkText(
+                    text = mainText,
+                    color = if (isUser) Color.White else textColor,
+                    modifier = Modifier.fillMaxWidth(),
+                    isUser = isUser
+                )
+
+                if (sources.isNotEmpty()) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
+                        color = Color(0xFFE0E0E0)
+                    )
+                    Text(
+                        text = "Sources",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Gray
+                    )
+                    sources.forEach { s ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { uriHandler.openUri(s.url) }
+                                .padding(vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "• ",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = s.title,
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp,
+                                    color = Color(0xFF333333),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = domainOf(s.url),
+                                    fontSize = 10.sp,
+                                    color = Color.Gray,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.OpenInNew,
+                                contentDescription = null,
+                                tint = Color.Gray,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                    }
+                }
+            }
         }
         if (!isUser) {
             IconButton(
@@ -212,7 +301,6 @@ fun AiChatScreen(
     var selectedImage by remember { mutableStateOf<Bitmap?>(null) }
     var showHistory by remember { mutableStateOf(false) }
     var selectedTranslation by remember { mutableStateOf("NKJV") }
-    // CSB kept last so it sits at far right, same row as the rest
     val translations = remember { listOf("NKJV", "KJV", "NIV", "ESV", "CSB") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -327,7 +415,6 @@ fun AiChatScreen(
                     )
                     IconButton(onClick = { viewModel.startNewChat(currentRef) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
                 }
-                // Translation row - all 5 in ONE row, same height, CSB at far right
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
