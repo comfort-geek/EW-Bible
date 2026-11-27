@@ -112,10 +112,6 @@ class AiRepository {
         val BIBLE_REF_REGEX = Regex("\\b(${BIBLE_BOOKS.joinToString("|")})s?\\s+\\d+")
         val NUMBERED_BOOK_REGEX = Regex("\\b[12]\\s+(samuel|kings|chronicles|corinthians|thessalonians|timothy|peter|john)\\s+\\d+")
 
-        // FIXED: Only time-sensitive / real-world-changeable things are NEWS.
-        // REMOVED: "who is", "what is", "what are", "who are", "tell me about",
-        // "biography", "history of", "facts about", "define", "definition"
-        // Those are GENERAL - "What is faith?" / "Tell me about David" must NOT become NEWS.
         val FACTUAL_INTENT = listOf(
             "who won", "who became", "who appointed",
             "what happened", "what is happening", "latest", "recent", "current",
@@ -275,37 +271,23 @@ class AiRepository {
         val hasBibleRef = BIBLE_REF_REGEX.containsMatchIn(q) || NUMBERED_BOOK_REGEX.containsMatchIn(q)
         val hasBreakdown = BREAKDOWN_PHRASES.any { q.contains(it) }
 
-        // Priority 1: Explicit Bible reference = Bible / Breakdown
         if (hasBibleRef && hasBreakdown) return Decision(ContextType.BREAKDOWN, listOf(ContextType.BREAKDOWN), action)
         if (hasBibleRef) return Decision(ContextType.BIBLE, listOf(ContextType.BIBLE), action)
-
-        // Priority 2: World news - wins over currentRef
         if (isWorldNewsQuery(q)) return Decision(ContextType.NEWS, listOf(ContextType.NEWS), action)
-
-        // Priority 3: Bible only if user explicitly says bible / scripture / verse / psalm
         if (q.contains("bible") || q.contains("scripture") || q.contains("verse") || q.contains("psalm") || q.contains("in the bible") || q.contains("bible says"))
             return Decision(ContextType.BIBLE, listOf(ContextType.BIBLE), action)
-
-        // Priority 4: Factual / time-sensitive = News - BUT NOT if user is referring to currentRef
-        // FIXED: FACTUAL_INTENT no longer contains bare "what is" / "who is" / "tell me about"
-        // so "What is faith?" stays GENERAL, "Who won election today?" still goes NEWS
         if (!shouldUseCurrentRef(question, currentRef) && FACTUAL_INTENT.any { q.contains(it) })
             return Decision(ContextType.NEWS, listOf(ContextType.NEWS), action)
-
-        // Priority 5: LOWEST - currentRef, only when referred to.
         if (shouldUseCurrentRef(question, currentRef)) {
             return if (hasBreakdown) Decision(ContextType.BREAKDOWN, listOf(ContextType.BREAKDOWN), action)
             else Decision(ContextType.BIBLE, listOf(ContextType.BIBLE), action)
         }
-
-        // Priority 6: Mixed - Bible + News in one message
         val parts = q.split(Regex("\\s+and\\s+|\\s+also\\s+|\\s+plus\\s+"))
             .map { it.trim() }.filter { it.length > 3 }
         if (parts.size > 1) {
             val types = parts.map { decideWithoutAction(it, "", emptyList()).type }.distinct()
             if (types.size > 1) return Decision(ContextType.MIXED, types, action)
         }
-
         return Decision(ContextType.GENERAL, listOf(ContextType.GENERAL), action)
     }
 
@@ -582,7 +564,7 @@ class AiRepository {
         sb.append("$contextRule\n$lengthRule\n")
         if (actionRule.isNotBlank()) sb.append("$actionRule\n")
         sb.append("\n")
-        if (bibleContext.isNotBlank() && (context == ContextType.BIBLE || context == ContextType.BREAKDOWN)) sb.append("BIBLE CONTEXT:\n${bibleContext.take(1000)}\n\n")
+        if (bibleContext.isNotBlank() && (context == ContextType.BIBLE || context == ContextType.BREAKDOWN)) sb.append("BIBLE CONTEXT:\n${bibleContext.take(4000)}\n\n")
         if (webContext.isNotBlank()) {
             sb.append("WEB SEARCH RESULTS (true facts as of $today):\n${webContext.take(2000)}\n\n")
         } else if (context == ContextType.NEWS) {
