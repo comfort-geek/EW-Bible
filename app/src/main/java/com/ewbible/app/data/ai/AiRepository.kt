@@ -2,6 +2,7 @@ package com.ewbible.app.data.ai
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
 import com.ewbible.app.CrashReporter
 import com.ewbible.app.data.database.MessageEntity
 import kotlinx.coroutines.CancellationException
@@ -41,6 +42,7 @@ class AiRepository {
 
     private val STREAM_TIMEOUT_MS = 30000L
     private val MAX_TOKENS = 4096
+    private val SEARCH_TIMEOUT_MS = 7500L
 
     private var cachedQuery = ""
     private var cachedWeb = ""
@@ -347,6 +349,7 @@ class AiRepository {
     }
 
     // FAST: GENERAL only searches web if it really needs facts. RECOMMEND + business/money also searches.
+    // NOT forced on one side: NEWS / MIXED / factual GENERAL all can search. Pure BIBLE / BREAKDOWN / greetings do not.
     private fun needsWebSearch(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): Boolean {
         val decision = decide(question, currentRef, history)
         if (decision.type == ContextType.NEWS || decision.type == ContextType.MIXED) return true
@@ -354,8 +357,6 @@ class AiRepository {
             val q = question.lowercase().trim()
             if (q in listOf("hi", "hello", "hey", "amen", "ok", "okay", "thanks", "thank you")) return false
             if (q.length < 10) return false
-
-            // RECOMMEND that needs real-world facts -> search
             if (decision.action == ActionType.RECOMMEND) {
                 val needsFresh = FACTUAL_INTENT.any { q.contains(it) }
                     || q.contains("malawi")
@@ -368,31 +369,27 @@ class AiRepository {
                     || q.contains("salary")
                 return needsFresh
             }
-
-            // Other GENERAL: only search if factual
             return FACTUAL_INTENT.any { q.contains(it) } || q.contains("malawi")
         }
         return false
     }
 
+    // CHANGED: Do NOT force basic vs advanced in the app.
+    // Always send "auto" and let Worker / RAG choose.
+    // Worker rule: default = basic, advanced only if needed.
     private fun chooseSearchDepth(question: String): String {
-        val q = question.lowercase().trim()
-        val needsAdvanced = q.contains("compare") || q.contains("difference between")
-            || q.contains("versus") || q.contains("vs ")
-            || q.contains("deep") || q.contains("in detail")
-            || q.contains("history of") || q.contains("research")
-            || q.contains("explain in detail") || q.contains("teach me")
-        return if (needsAdvanced) "advanced" else "basic"
+        return "auto"
     }
 
     // PATCHED: RAG via Worker - TinyFish -> LangSearch -> Tavily, returns rag_context
+    // 7.5 sec total cap. RAG in Worker chooses basic vs advanced.
     private suspend fun getWebContext(question: String, currentRef: String = "", history: List<MessageEntity> = emptyList()): String {
         if (!needsWebSearch(question, currentRef, history)) return ""
         val key = question.trim().lowercase()
         if (key == cachedQuery && System.currentTimeMillis() - cachedAt < WEB_CACHE_MS && cachedWeb.isNotBlank()) return cachedWeb
         val lastUser = history.lastOrNull { it.isUser }?.text ?: ""
         val lastTopic = currentRef.ifBlank { lastUser }
-        return withTimeoutOrNull(8000L) { searchWorker(question, lastTopic, lastUser) } ?: ""
+        return withTimeoutOrNull(SEARCH_TIMEOUT_MS) { searchWorker(question, lastTopic, lastUser) } ?: ""
     }
 
     private suspend fun searchWorker(query: String, context: String = "", lastQuestion: String = ""): String {
@@ -404,30 +401,43 @@ class AiRepository {
                     requestMethod = "POST"
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty(PROXY_HEADER, PROXY_VALUE)
-                    connectTimeout = 3000
-                    readTimeout = 8000
+                    connectTimeout = 2500
+                    readTimeout = SEARCH_TIMEOUT_MS.toInt()
                     doOutput = true
                 }
                 val body = JSONObject()
                     .put("query", query)
                     .put("context", context)
                     .put("last_question", lastQuestion)
+                    .put("search_depth", chooseSearchDepth(query))
+                    .put("let_rag_choose_depth", true)
+                    .put("depth", "auto")
+                    .put("default_depth", "basic")
                     .toString()
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
                 if (conn.responseCode !in 200..299) return ""
                 val text = conn.inputStream.bufferedReader().readText()
                 val json = JSONObject(text)
+                // Worker tells app what RAG picked. Default to basic if Worker doesn't send it.
+                val depthPicked = json.optString("search_depth", "").ifBlank { json.optString("depth", "basic") }.ifBlank { "basic" }.lowercase()
+                val providerUsed = json.optString("provider", "").ifBlank { json.optString("search_provider", "unknown") }.ifBlank { "unknown" }.lowercase()
+                val safeDepth = if (depthPicked == "advanced") "advanced" else "basic"
+                // Let it know IN THE LINES: this header goes into the prompt so Groq / Cloudflare / Gemini know how deep the results are.
+                val headerLine = "[SEARCH: depth=$safeDepth | provider=$providerUsed]"
+                Log.d("EW_SEARCH", "$headerLine query=$query")
                 // Use rag_context directly - already formatted for Groq / Cloudflare / Gemini
+                // Worker order: TinyFish -> LangSearch -> Tavily, RAG picks basic vs advanced
                 val rag = json.optString("rag_context")
                 if (rag.isNotBlank()) {
-                    val out = rag.take(2000)
+                    val out = "$headerLine\n${rag.take(2000)}"
                     cachedQuery = query.trim().lowercase()
                     cachedWeb = out
                     cachedAt = System.currentTimeMillis()
                     return out
                 }
-                // Fallback: old manual parsing
+                // Fallback: old manual parsing - still include the header line
                 val sb = StringBuilder()
+                sb.append("$headerLine\n")
                 val answer = json.optString("answer")
                 if (answer.isNotBlank()) sb.append("TAVILY ANSWER: $answer\n\n")
                 val results = json.optJSONArray("results")
@@ -442,7 +452,7 @@ class AiRepository {
                     }
                 }
                 val out = sb.toString().take(2000)
-                if (out.isNotBlank()) {
+                if (out.isNotBlank() && out != "$headerLine\n") {
                     cachedQuery = query.trim().lowercase()
                     cachedWeb = out
                     cachedAt = System.currentTimeMillis()
