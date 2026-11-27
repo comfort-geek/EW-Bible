@@ -26,6 +26,7 @@ class AiRepository {
     private val PROXY_BASE = "https://ewbible.comfortcha34.workers.dev/"
     private val PROXY_HEADER = "X-EW-App"
     private val PROXY_VALUE = "ew-bible-v1"
+    private val USER_AGENT = "Mozilla/5.0 (Linux; Android 13; EW-Bible) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36 EW-Bible/1.0"
 
     private val REMOTE_MODELS_URL =
         "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
@@ -134,6 +135,7 @@ class AiRepository {
             conn.connectTimeout = 2000
             conn.readTimeout = 2000
             conn.requestMethod = "GET"
+            conn.setRequestProperty("User-Agent", USER_AGENT)
             if (conn.responseCode == 200) {
                 val text = conn.inputStream.bufferedReader().readText()
                 val json = JSONObject(text)
@@ -401,6 +403,7 @@ class AiRepository {
                     requestMethod = "POST"
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty(PROXY_HEADER, PROXY_VALUE)
+                    setRequestProperty("User-Agent", USER_AGENT)
                     connectTimeout = 2500
                     readTimeout = SEARCH_TIMEOUT_MS.toInt()
                     doOutput = true
@@ -713,6 +716,7 @@ class AiRepository {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty(PROXY_HEADER, PROXY_VALUE)
+                setRequestProperty("User-Agent", USER_AGENT)
                 connectTimeout = 2000
                 readTimeout = 30000
                 doOutput = true
@@ -760,6 +764,7 @@ class AiRepository {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty(PROXY_HEADER, PROXY_VALUE)
+                setRequestProperty("User-Agent", USER_AGENT)
                 connectTimeout = 2000
                 readTimeout = 30000
                 doOutput = true
@@ -805,6 +810,7 @@ class AiRepository {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty(PROXY_HEADER, PROXY_VALUE)
+                setRequestProperty("User-Agent", USER_AGENT)
                 connectTimeout = 2000
                 readTimeout = 30000
                 doOutput = true
