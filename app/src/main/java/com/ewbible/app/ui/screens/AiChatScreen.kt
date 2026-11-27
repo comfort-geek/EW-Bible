@@ -310,7 +310,8 @@ fun AiChatScreen(
         if (state.chats.isNotEmpty()) {
             viewModel.openChat(state.chats.first().id)
         } else {
-            viewModel.startNewChat(currentRef)
+            // FIX: AI is separate - do NOT create new chat with Bible home ref
+            viewModel.startNewChat("")
         }
     }
 
@@ -391,7 +392,8 @@ fun AiChatScreen(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    IconButton(onClick = { viewModel.startNewChat(currentRef) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
+                    // FIX: New chat must NOT use Bible home ref
+                    IconButton(onClick = { viewModel.startNewChat("") }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Add, null, tint = gold) }
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
@@ -494,7 +496,8 @@ fun AiChatScreen(
                     onClick = {
                         val q = input.trim()
                         if (q.isBlank()) return@IconButton
-                        viewModel.send(q, currentRef, selectedImage, selectedTranslation)
+                        // FIX: AI is separate - send "" not Bible home currentRef
+                        viewModel.send(q, "", selectedImage, selectedTranslation)
                         input = ""
                         selectedImage = null
                     },
