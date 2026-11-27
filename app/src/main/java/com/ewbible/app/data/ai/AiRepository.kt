@@ -26,7 +26,7 @@ class AiRepository {
     private val PROXY_BASE = "https://ewbible.comfortcha34.workers.dev/"
     private val PROXY_HEADER = "X-EW-App"
     private val PROXY_VALUE = "ew-bible-v1"
-    private val USER_AGENT = "Mozilla/5.0 (Linux; Android 13; EW-Bible) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36 EW-Bible/1.0"
+    private val USER_AGENT = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
 
     private val REMOTE_MODELS_URL =
         "https://raw.githubusercontent.com/comfort-geek/EW-Bible/main/models.json"
@@ -84,7 +84,7 @@ class AiRepository {
 
     private val STREAM_TIMEOUT_MS = 90000L
     private val MAX_TOKENS = 4096
-    private val SEARCH_TIMEOUT_MS = 7500L
+    private val SEARCH_TIMEOUT_MS = 8000L
 
     private var cachedQuery = ""
     private var cachedWeb = ""
@@ -173,6 +173,8 @@ class AiRepository {
             conn.readTimeout = 2000
             conn.requestMethod = "GET"
             conn.setRequestProperty("User-Agent", USER_AGENT)
+            conn.setRequestProperty("Accept", "application/json, text/plain, */*")
+            conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9")
             if (conn.responseCode == 200) {
                 val text = conn.inputStream.bufferedReader().readText()
                 val json = JSONObject(text)
@@ -328,11 +330,24 @@ class AiRepository {
                 conn = (searchUrl.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Accept", "application/json, text/plain, */*")
+                    setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+                    setRequestProperty("Accept-Encoding", "gzip, deflate, br")
+                    setRequestProperty("Origin", "https://ewbible.comfortcha34.workers.dev")
+                    setRequestProperty("Referer", "https://ewbible.comfortcha34.workers.dev/")
+                    setRequestProperty("Sec-Fetch-Dest", "empty")
+                    setRequestProperty("Sec-Fetch-Mode", "cors")
+                    setRequestProperty("Sec-Fetch-Site", "same-origin")
+                    setRequestProperty("Sec-Ch-Ua", "\"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\", \"Not-A.Brand\";v=\"99\"")
+                    setRequestProperty("Sec-Ch-Ua-Mobile", "?1")
+                    setRequestProperty("Sec-Ch-Ua-Platform", "\"Android\"")
                     setRequestProperty(PROXY_HEADER, PROXY_VALUE)
                     setRequestProperty("User-Agent", USER_AGENT)
                     connectTimeout = 2500
                     readTimeout = SEARCH_TIMEOUT_MS.toInt()
                     doOutput = true
+                    instanceFollowRedirects = true
+                    useCaches = false
                 }
                 val body = JSONObject()
                     .put("query", query)
@@ -637,6 +652,11 @@ class AiRepository {
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json, text/event-stream, */*")
+                setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+                setRequestProperty("Origin", "https://ewbible.comfortcha34.workers.dev")
+                setRequestProperty("Referer", "https://ewbible.comfortcha34.workers.dev/")
+                setRequestProperty("Sec-Fetch-Mode", "cors")
                 setRequestProperty(PROXY_HEADER, PROXY_VALUE)
                 setRequestProperty("User-Agent", USER_AGENT)
                 connectTimeout = 2000
@@ -685,6 +705,11 @@ class AiRepository {
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json, text/event-stream, */*")
+                setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+                setRequestProperty("Origin", "https://ewbible.comfortcha34.workers.dev")
+                setRequestProperty("Referer", "https://ewbible.comfortcha34.workers.dev/")
+                setRequestProperty("Sec-Fetch-Mode", "cors")
                 setRequestProperty(PROXY_HEADER, PROXY_VALUE)
                 setRequestProperty("User-Agent", USER_AGENT)
                 connectTimeout = 2000
@@ -731,6 +756,11 @@ class AiRepository {
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json, text/event-stream, */*")
+                setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+                setRequestProperty("Origin", "https://ewbible.comfortcha34.workers.dev")
+                setRequestProperty("Referer", "https://ewbible.comfortcha34.workers.dev/")
+                setRequestProperty("Sec-Fetch-Mode", "cors")
                 setRequestProperty(PROXY_HEADER, PROXY_VALUE)
                 setRequestProperty("User-Agent", USER_AGENT)
                 connectTimeout = 2000
