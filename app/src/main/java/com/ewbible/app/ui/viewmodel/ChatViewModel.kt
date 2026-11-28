@@ -37,8 +37,6 @@ data class ChatState(
     val availableModels: List<String> = emptyList()
 )
 
-// Matches ChatViewModelFactory exactly: bibleDao, geminiRepository, syncManager
-// No @HiltViewModel - created manually via Factory
 class ChatViewModel(
     private val bibleDao: BibleDao,
     private val geminiRepository: AiRepository,
@@ -81,7 +79,6 @@ class ChatViewModel(
         }
     }
 
-    // FIXED: AiRepository has refreshModels(context), NOT getAvailableModels()
     fun refreshModels(context: Context) {
         viewModelScope.launch {
             runCatching { geminiRepository.refreshModels(context) }
@@ -171,31 +168,20 @@ class ChatViewModel(
                 bibleDao.insertMessage(MessageEntity(chatId = finalChatId, text = q, isUser = true, timestamp = System.currentTimeMillis()))
             }
 
-            // History for AiRepository - must be MessageEntity list
             val history = runCatching { bibleDao.getMessagesForChatSync(finalChatId) }.getOrDefault(emptyList())
 
-            // FIX: No more isBibleQuestion() keyword gate.
-            // Questions change - "why did he say that?", "what's the lesson here?",
-            // "summarize it", "verse 5?" would all fail the keyword list and make AI blind.
-            // Now: if we have a ref, ALWAYS pass bibleContext.
-            // buildBibleContext() itself tells the model when to use it vs ignore it.
-            // So Bible questions work with ANY phrasing, and news/general questions
-            // still work because the model is told to ignore the passage context.
             val wantsWebSources = userAskedForWebSources(q)
 
             val bibleContext = if (useRef.isNotBlank()) {
                 buildBibleContext(useRef, q, useTranslation, wantsWebSources)
             } else if (wantsWebSources) {
-                // General question, no Bible ref, but user wants sources
                 "User asked for web sources. You may include a Sources section with real links at the end."
             } else {
-                // General question, no Bible ref, no sources asked
                 "Do NOT include any Sources, links, or web references. Answer directly."
             }
 
             var aiText = ""
             try {
-                // FIXED: real method is askStreaming(question, currentRef, history, image, bibleContext, translation)
                 geminiRepository.askStreaming(
                     question = q,
                     currentRef = useRef,
@@ -228,10 +214,7 @@ class ChatViewModel(
         }
     }
 
-    // DELETED: isBibleQuestion() - keyword list can never cover all question phrasings.
-    // Replaced by always-send-context + relevance rule inside buildBibleContext().
-
-    // NEW: Web sources / links only if user explicitly asks for them.
+    // Web sources / links only if user explicitly asks for them.
     // Bible is from local DB, never a web link.
     private fun userAskedForWebSources(question: String): Boolean {
         val t = question.lowercase()
@@ -244,28 +227,52 @@ class ChatViewModel(
     }
 
     private suspend fun buildBibleContext(ref: String, question: String, requestedTranslation: String, wantsWebSources: Boolean = false): String {
-        val targetRef = extractVerseRef(question) ?: ref.ifBlank { bibleRef }
-        if (targetRef.isBlank()) return ""
-        val parsed = parseRef(targetRef) ?: return ""
+        // SCREEN REF ALWAYS WINS. Question ref only wins if it names a DIFFERENT book.
+        // Screen = Genesis 3, Question = "what does this mean?" -> Genesis 3
+        // Screen = Genesis 3, Question = "what about Exodus 20?" -> Exodus 20
+        val screenRef = ref.ifBlank { bibleRef }
+        if (screenRef.isBlank()) return ""
+        val parsedScreen = parseRef(screenRef) ?: return ""
+
+        val questionRefRaw = extractVerseRef(question)
+        val parsedQuestion = questionRefRaw?.let { parseRef(it) }
+        val parsed = if (parsedQuestion != null && parsedQuestion.bookId != parsedScreen.bookId) {
+            parsedQuestion
+        } else {
+            parsedScreen
+        }
+
         val (bookId, bookName, chapter, verseFrom, verseTo) = parsed
 
         return runCatching {
-            val verses = if (verseFrom != null) {
+            // --- 9000 CHAR BUDGET FROM DB ---
+            // Commentary: 4500 | Bible Verses: 3500 | Summary: 1000 = 9000 total
+
+            // 1. BIBLE VERSES - 3500
+            val versesRaw = if (verseFrom != null) {
                 bibleDao.getVerseRange(bookId, chapter, verseFrom, verseTo ?: verseFrom)
             } else {
                 bibleDao.getVerseRange(bookId, chapter, 1, 200)
             }.joinToString("\n") { "${it.verse}: ${it.text}" }
+                .take(3500)
 
-            val summary = runCatching { bibleDao.getSummary(bookId, chapter) }.getOrNull()
-            val summaryText = if (summary != null) {
-                "Summary: ${summary.summary}\nWhat happened: ${summary.whatHappened}\nApplication: ${summary.application}"
+            // 2. SUMMARY - 1000
+            val summaryRaw = runCatching { bibleDao.getSummary(bookId, chapter) }.getOrNull()
+            val summaryText = if (summaryRaw != null) {
+                "Summary: ${summaryRaw.summary}\nWhat happened: ${summaryRaw.whatHappened}\nApplication: ${summaryRaw.application}"
             } else ""
+            val summaryCapped = summaryText.take(1000)
+
+            // 3. COMMENTARY - 4500
+            // Dynamic: if Verses + Summary didn't use full budget, give leftover to Commentary
+            val used = versesRaw.length + summaryCapped.length
+            val commentaryBudget = (9000 - used).coerceAtLeast(0).coerceAtMost(5500)
 
             val compressed = runCatching { bibleDao.getCommentaryCompressed(bookId, chapter) }.getOrNull()
             val commentaryHtml = if (compressed != null) {
                 CommentaryHelper.getHtmlCommentary(bookId, chapter, compressed)
             } else ""
-            val commentaryPlain = stripHtml(commentaryHtml).take(2500)
+            val commentaryPlain = stripHtml(commentaryHtml).take(commentaryBudget)
 
             val translationInstruction = if (requestedTranslation == "NKJV") {
                 "Translation: NKJV. Quote verses exactly from text below."
@@ -293,20 +300,23 @@ class ChatViewModel(
             - NEVER present Bible verses as web links. NEVER invent a biblegateway.com / biblehub.com / gotquestions.org link for a Bible verse.
             - If no web sources were asked for, just answer using the DB text below. No links needed.
 
-            CURRENT SCREEN CONTEXT:
-            User is currently reading: $bookName $chapter${if (verseFrom != null) ":$verseFrom${if (verseTo != null && verseTo != verseFrom) "-$verseTo" else ""}" else ""} ($requestedTranslation)
+            *** YOU ARE NOT BLIND - READ THIS ***
+            User is RIGHT NOW reading this on screen, shown at the top of AiChatScreen:
+            CURRENT PASSAGE: $bookName $chapter${if (verseFrom != null) ":$verseFrom${if (verseTo != null && verseTo != verseFrom) "-$verseTo" else ""}" else ""} ($requestedTranslation)
 
-            RELEVANCE RULE - READ THIS FIRST:
-            - If the user's question is about this passage / Bible / verse / meaning / explanation / lesson / summary - even if phrased vaguely like "what does this mean?", "why did he say that?", "what's the lesson here?", "summarize it", "verse 5?" - it refers to THIS passage. Answer about THIS passage using the verses below.
-            - Do NOT ask "which passage?" - you already know it: it is the CURRENT SCREEN passage above.
-            - If the question is unrelated (news, weather, programming, general knowledge, sports, etc.) - IGNORE this passage context completely and answer normally. Do NOT force a Bible answer.
+            - If user says "this", "this passage", "this chapter", "verse 5", "what does it mean", "summarize it", "why did he say that" - they mean THIS CURRENT PASSAGE above. Do NOT ask "which passage?".
+            - Do NOT say "I don't know what you're reading". You DO know - it is $bookName $chapter.
+            - Only if user names a DIFFERENT book (e.g. "what about Exodus 20?") should you switch.
+            - If question is unrelated (news, weather, coding, sports) - IGNORE this passage and answer normally.
 
             PASSAGE: $bookName $chapter${if (verseFrom != null) ":$verseFrom${if (verseTo != null && verseTo != verseFrom) "-$verseTo" else ""}" else ""}
-            VERSES (NKJV, from local DB):
-            $verses
+            VERSES (NKJV, from local DB, max 3500 chars):
+            $versesRaw
 
-            $summaryText
-            COMMENTARY (plain text, from zlib compressed DB):
+            SUMMARY (from local DB, max 1000 chars):
+            $summaryCapped
+
+            COMMENTARY (plain text, from zlib compressed DB, max 4500 chars - total DB context = 9000 chars):
             $commentaryPlain
             """.trimIndent()
         }.getOrDefault("")
