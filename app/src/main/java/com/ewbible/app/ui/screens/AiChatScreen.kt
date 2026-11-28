@@ -98,7 +98,8 @@ private fun userAskedForSources(query: String): Boolean {
         "source", "sources", "link", "links", "reference", "references",
         "citation", "citations", "cite", "where did you get",
         "where is this from", "provide link", "give me link", "send link",
-        "show me the source", "share link", "url", "website"
+        "show me the source", "share link", "url", "website",
+        "web", "online", "google", "search"
     ).any { q.contains(it) }
 }
 
@@ -106,6 +107,14 @@ private fun stripSourcesSection(text: String): String {
     val regexHeading = Regex("(?m)^\\s*(?:#{1,6}\\s*)?\\*\\*Sources\\*\\*\\s*:?\\s*$|^\\s*Sources\\s*:?\\s*$")
     val match = regexHeading.find(text) ?: return text
     return text.substring(0, match.range.first).trim()
+}
+
+// NEW FIX: Strip inline links when user did NOT ask for sources
+// [BibleGateway](https://...) -> BibleGateway  |  https://... -> removed
+private fun stripInlineLinks(text: String): String {
+    var t = text.replace(Regex("""\[([^\]]+)\]\((https?://[^)]+)\)"""), "$1")
+    t = t.replace(Regex("""https?://[^\s)]+"""), "")
+    return t
 }
 
 private fun splitSources(text: String): Pair<String, List<SourceItem>> {
@@ -205,9 +214,9 @@ private fun MessageBubble(
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
-    // If user didn't ask for sources, strip Sources section before copy too
+    // If user didn't ask for sources, strip Sources section + inline links before display AND copy
     val textForDisplay = remember(text, isUser, showSources) {
-        if (isUser || showSources) text else stripSourcesSection(text)
+        if (isUser || showSources) text else stripInlineLinks(stripSourcesSection(text))
     }
     val cleanTextForCopy = remember(textForDisplay) { cleanForCopy(textForDisplay) }
     val (mainText, sources) = remember(textForDisplay, isUser, showSources) {
@@ -418,7 +427,7 @@ fun AiChatScreen(
                                     // Streaming: check last user message too
                                     val lastUser = state.messages.lastOrNull { it.isUser }
                                     val showStreamingSources = lastUser?.let { userAskedForSources(it.text) } ?: false
-                                    val displayStreaming = if (showStreamingSources) state.streamingText else stripSourcesSection(state.streamingText)
+                                    val displayStreaming = if (showStreamingSources) state.streamingText else stripInlineLinks(stripSourcesSection(state.streamingText))
                                     LinkText(text = displayStreaming, color = textColor, modifier = Modifier.fillMaxWidth())
                                 } else {
                                     Text(text = thinkingText, color = textColor, fontSize = 15.sp)
