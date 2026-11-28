@@ -181,9 +181,17 @@ class ChatViewModel(
             // buildBibleContext() itself tells the model when to use it vs ignore it.
             // So Bible questions work with ANY phrasing, and news/general questions
             // still work because the model is told to ignore the passage context.
+            val wantsWebSources = userAskedForWebSources(q)
+
             val bibleContext = if (useRef.isNotBlank()) {
-                buildBibleContext(useRef, q, useTranslation)
-            } else ""
+                buildBibleContext(useRef, q, useTranslation, wantsWebSources)
+            } else if (wantsWebSources) {
+                // General question, no Bible ref, but user wants sources
+                "User asked for web sources. You may include a Sources section with real links at the end."
+            } else {
+                // General question, no Bible ref, no sources asked
+                "Do NOT include any Sources, links, or web references. Answer directly."
+            }
 
             var aiText = ""
             try {
@@ -223,7 +231,19 @@ class ChatViewModel(
     // DELETED: isBibleQuestion() - keyword list can never cover all question phrasings.
     // Replaced by always-send-context + relevance rule inside buildBibleContext().
 
-    private suspend fun buildBibleContext(ref: String, question: String, requestedTranslation: String): String {
+    // NEW: Web sources / links only if user explicitly asks for them.
+    // Bible is from local DB, never a web link.
+    private fun userAskedForWebSources(question: String): Boolean {
+        val t = question.lowercase()
+        return listOf(
+            "source", "sources", "link", "links", "reference", "references",
+            "cite", "citation", "where did you get", "where is this from",
+            "give me the link", "send link", "show me the source",
+            "web", "online", "google", "search"
+        ).any { t.contains(it) }
+    }
+
+    private suspend fun buildBibleContext(ref: String, question: String, requestedTranslation: String, wantsWebSources: Boolean = false): String {
         val targetRef = extractVerseRef(question) ?: ref.ifBlank { bibleRef }
         if (targetRef.isBlank()) return ""
         val parsed = parseRef(targetRef) ?: return ""
@@ -256,8 +276,22 @@ class ChatViewModel(
                 "Answer/quote in $requestedTranslation, but do NOT claim NKJV text below is $requestedTranslation."
             }
 
+            val sourceRule = if (wantsWebSources) {
+                "User explicitly asked for web sources / links. You MAY add a 'Sources' section at the very end with up to 3 real web links."
+            } else {
+                "User did NOT ask for web sources / links. Do NOT add any Sources section, do NOT add any links, do NOT add any URLs, do NOT add any web references."
+            }
+
             """
             $translationInstruction
+
+            SOURCE RULE - VERY IMPORTANT:
+            $sourceRule
+
+            BIBLE SOURCE RULE:
+            - The verses / summary / commentary below come from the LOCAL DATABASE (NKJV DB on the device). They are NOT from the web.
+            - NEVER present Bible verses as web links. NEVER invent a biblegateway.com / biblehub.com / gotquestions.org link for a Bible verse.
+            - If no web sources were asked for, just answer using the DB text below. No links needed.
 
             CURRENT SCREEN CONTEXT:
             User is currently reading: $bookName $chapter${if (verseFrom != null) ":$verseFrom${if (verseTo != null && verseTo != verseFrom) "-$verseTo" else ""}" else ""} ($requestedTranslation)
