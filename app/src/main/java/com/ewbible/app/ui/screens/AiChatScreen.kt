@@ -91,6 +91,23 @@ private fun cleanForCopy(text: String): String {
 
 private data class SourceItem(val title: String, val url: String)
 
+// FIX: Only show sources if user asked for them
+private fun userAskedForSources(query: String): Boolean {
+    val q = query.lowercase()
+    return listOf(
+        "source", "sources", "link", "links", "reference", "references",
+        "citation", "citations", "cite", "where did you get",
+        "where is this from", "provide link", "give me link", "send link",
+        "show me the source", "share link", "url", "website"
+    ).any { q.contains(it) }
+}
+
+private fun stripSourcesSection(text: String): String {
+    val regexHeading = Regex("(?m)^\\s*(?:#{1,6}\\s*)?\\*\\*Sources\\*\\*\\s*:?\\s*$|^\\s*Sources\\s*:?\\s*$")
+    val match = regexHeading.find(text) ?: return text
+    return text.substring(0, match.range.first).trim()
+}
+
 private fun splitSources(text: String): Pair<String, List<SourceItem>> {
     val regexHeading = Regex("(?m)^\\s*(?:#{1,6}\\s*)?\\*\\*Sources\\*\\*\\s*:?\\s*$|^\\s*Sources\\s*:?\\s*$")
     val match = regexHeading.find(text) ?: return text to emptyList()
@@ -103,7 +120,7 @@ private fun splitSources(text: String): Pair<String, List<SourceItem>> {
         val domain = domainOf(url)
         sources.add(SourceItem(domain, url))
     }
-    return main to sources.distinctBy { domainOf(it.url) }.take(3)
+    return main to sources.distinctBy { it.url }.take(3)
 }
 
 private fun domainOf(url: String): String {
@@ -183,13 +200,18 @@ private fun MessageBubble(
     textColor: Color,
     gold: Color,
     panel: Color,
+    showSources: Boolean = false,
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
-    val cleanTextForCopy = remember(text) { cleanForCopy(text) }
-    val (mainText, sources) = remember(text, isUser) {
-        if (isUser) text to emptyList() else splitSources(text)
+    // If user didn't ask for sources, strip Sources section before copy too
+    val textForDisplay = remember(text, isUser, showSources) {
+        if (isUser || showSources) text else stripSourcesSection(text)
+    }
+    val cleanTextForCopy = remember(textForDisplay) { cleanForCopy(textForDisplay) }
+    val (mainText, sources) = remember(textForDisplay, isUser, showSources) {
+        if (isUser || !showSources) textForDisplay to emptyList() else splitSources(textForDisplay)
     }
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -270,8 +292,6 @@ fun AiChatScreen(
         }
     }
 
-    // FIX 1: Always sync screen ref -> ViewModel, with translation.
-    // Old: setBibleRef(currentRef) only. New: setScreenContext so translation also stays in sync.
     LaunchedEffect(currentRef) {
         if (currentRef.isNotBlank()) {
             viewModel.setScreenContext(currentRef, selectedTranslation)
@@ -289,10 +309,6 @@ fun AiChatScreen(
         viewModel.loadChats()
     }
 
-    // FIX 2: If user opens AI from a NEW passage while an old chat is open,
-    // old code did `if (currentChatId != null) return` and never switched.
-    // Top bar showed new passage, ViewModel still held old passage.
-    // New: if currentRef changed vs current chat's ref, start a new chat for the new ref.
     var lastHandledRef by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(state.chatsLoaded, currentRef) {
         if (!state.chatsLoaded) return@LaunchedEffect
@@ -303,9 +319,9 @@ fun AiChatScreen(
             }
             return@LaunchedEffect
         }
-        if (lastHandledRef == currentRef && state.currentChatId != null) return@LaunchedEffect
+        // FIX: also require current chat ref to match, so History switch works
+        if (lastHandledRef == currentRef && state.currentChatId != null && state.currentBibleRef == currentRef) return@LaunchedEffect
         lastHandledRef = currentRef
-        // If current chat already is for this ref, don't recreate it
         if (state.currentChatId != null && state.currentBibleRef == currentRef) return@LaunchedEffect
         viewModel.startNewChat(currentRef, selectedTranslation)
     }
@@ -386,14 +402,24 @@ fun AiChatScreen(
                 contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp)
             ) {
                 items(state.messages, key = { it.id }, contentType = { if (it.isUser) "user" else "ai" }) { msg ->
-                    MessageBubble(text = msg.text, isUser = msg.isUser, textColor = textColor, gold = gold, panel = panel)
+                    // For each AI message, check the user question right before it
+                    val showSources = if (msg.isUser) false else {
+                        val idx = state.messages.indexOfFirst { it.id == msg.id }
+                        val prevUser = state.messages.take(idx).lastOrNull { it.isUser }
+                        prevUser?.let { userAskedForSources(it.text) } ?: false
+                    }
+                    MessageBubble(text = msg.text, isUser = msg.isUser, textColor = textColor, gold = gold, panel = panel, showSources = showSources)
                 }
                 if (state.isLoading) {
                     item(key = "loading-${state.currentChatId}", contentType = "loading") {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                             Box(modifier = Modifier.fillMaxWidth(0.95f).background(panel, RoundedCornerShape(12.dp)).padding(10.dp)) {
                                 if (state.streamingText.isNotEmpty()) {
-                                    LinkText(text = state.streamingText, color = textColor, modifier = Modifier.fillMaxWidth())
+                                    // Streaming: check last user message too
+                                    val lastUser = state.messages.lastOrNull { it.isUser }
+                                    val showStreamingSources = lastUser?.let { userAskedForSources(it.text) } ?: false
+                                    val displayStreaming = if (showStreamingSources) state.streamingText else stripSourcesSection(state.streamingText)
+                                    LinkText(text = displayStreaming, color = textColor, modifier = Modifier.fillMaxWidth())
                                 } else {
                                     Text(text = thinkingText, color = textColor, fontSize = 15.sp)
                                 }
@@ -415,9 +441,6 @@ fun AiChatScreen(
                     onClick = {
                         val q = input.trim()
                         if (q.isBlank()) return@IconButton
-                        // FIX 3: Never send "". Fallback chain: ViewModel ref -> screen ref -> latestRef
-                        // Old: viewModel.send(q, latestRef, ...) could send "" if currentRef was "" at that moment.
-                        // New: prefer state.currentBibleRef (what ViewModel actually holds), then latestRef.
                         val refToSend = state.currentBibleRef.ifBlank { latestRef }
                         viewModel.send(q, refToSend, selectedImage, selectedTranslation)
                         input = ""
